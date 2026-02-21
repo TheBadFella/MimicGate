@@ -589,6 +589,7 @@ All settings are loaded from environment variables (`.env` file or `docker-compo
 | `LOG_CONSOLE`        | `true`                | Enable console log output                                |
 | `API_HOST`           | `0.0.0.0`             | FastAPI server bind address                              |
 | `API_ADVERTISE_HOST` | ``                    | Optional host/IP used only in printed startup endpoint URLs |
+| `API_ADVERTISE_PORT` | ``                    | Optional port used only in printed startup endpoint URLs |
 | `API_PORT`           | `8000`                | FastAPI server port                                      |
 | `API_TOKEN`          | `dummy123`            | Bearer token for API auth (empty = disabled)             |
 | `VNC_PASSWORD`       | `catgpt`              | Password for noVNC browser UI                            |

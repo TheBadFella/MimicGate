@@ -41,6 +41,8 @@ services:
       API_HOST: "0.0.0.0"
       # Optional: host/IP shown in startup endpoint URLs (does not change bind address)
       API_ADVERTISE_HOST: ${SERVER_IP}
+      # Optional: port shown in startup endpoint URLs (e.g. Docker host port 8650)
+      API_ADVERTISE_PORT: 8650
       API_PORT: 8000
       API_TOKEN: ${CATGPT_API_KEY}
       # VNC Authentication
