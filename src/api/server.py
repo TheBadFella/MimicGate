@@ -67,22 +67,8 @@ async def lifespan(app: FastAPI):
 
     await asyncio.sleep(3)
 
-    # ── Report session state before login check ─────────────────
+    # ── Session info ─────────────────────────────────────────────
     session = await _browser.get_session_info()
-    if session["exists"]:
-        expires = session.get("expires")
-        if expires:
-            local_exp = expires.astimezone()
-            log.info(
-                f"Session detected — {session['cookie_count']} session cookie(s) found. "
-                f"Expires: {local_exp.strftime('%Y-%m-%d %H:%M %Z')}"
-            )
-        else:
-            log.info(
-                f"Session detected — {session['cookie_count']} session cookie(s) found (no expiry set)."
-            )
-    else:
-        log.info("No existing session found — first-time login will be required.")
 
     if not await _browser.is_logged_in():
         log.info("Not logged in — starting auto-login flow...")
@@ -90,11 +76,74 @@ async def lifespan(app: FastAPI):
         if not logged_in:
             log.error("Login failed after auto-login attempt")
             raise RuntimeError("Could not log in to ChatGPT")
+        # Refresh session info after login
+        session = await _browser.get_session_info()
 
     _client = ChatGPTClient(page)
     set_client(_client, _browser)
     set_openai_client(_client)
-    log.info("API server ready — browser launched, logged in")
+
+    # ── Startup banner ───────────────────────────────────────────
+    W = 60
+    sep = "=" * W
+
+    # Session details
+    if session["exists"]:
+        expires = session.get("expires")
+        exp_str = expires.astimezone().strftime("%Y-%m-%d %H:%M %Z") if expires else "no expiry"
+        email_str = session.get("email") or "unknown"
+        session_line = f"  Account  : {email_str}"
+        expiry_line  = f"  Expires  : {exp_str}"
+        session_status = "ACTIVE SESSION"
+    else:
+        session_line = "  Account  : (no session)"
+        expiry_line  = "  Expires  : —"
+        session_status = "NO SESSION"
+
+    # Runtime flags
+    token_masked = ("*" * len(Config.API_TOKEN)) if Config.API_TOKEN else "(disabled)"
+    flags = [
+        f"  API token    : {token_masked}",
+        f"  Headless     : {Config.HEADLESS}",
+        f"  Log level    : {Config.LOG_LEVEL}",
+        f"  Chatgpt URL  : {Config.CHATGPT_URL}",
+        f"  Resp timeout : {Config.RESPONSE_TIMEOUT} ms",
+    ]
+
+    # Endpoints
+    host = f"http://{Config.API_HOST}:{Config.API_PORT}"
+    endpoints = [
+        ("POST", f"{host}/v1/chat/completions", "Chat completions"),
+        ("POST", f"{host}/v1/images/generations", "Image generation"),
+        ("GET ", f"{host}/v1/models", "List models"),
+        ("POST", f"{host}/chat", "Native chat"),
+        ("POST", f"{host}/thread/new", "New thread"),
+        ("GET ", f"{host}/threads", "List threads"),
+        ("GET ", f"{host}/status", "Status"),
+        ("GET ", f"{host}/healthz", "Health check (no auth)"),
+        ("GET ", f"{host}/docs", "API docs (no auth)"),
+    ]
+
+    lines = [
+        sep,
+        "  CatGPT — READY".center(W),
+        sep,
+        f"  {session_status}",
+        session_line,
+        expiry_line,
+        f"  Data dir : {Config.BROWSER_DATA_DIR}",
+        "",
+        "  RUNTIME FLAGS",
+        *flags,
+        "",
+        "  ENDPOINTS",
+        *[f"  {m}  {path:<42}  {desc}" for m, path, desc in endpoints],
+        sep,
+    ]
+
+    for line in lines:
+        log.info(line)
+
 
     yield  # Server is running
 

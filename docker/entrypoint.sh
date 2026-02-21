@@ -98,14 +98,23 @@ echo ""
 echo "============================================================"
 echo "  SERVICES:"
 echo "  • API Server:  http://localhost:${API_PORT}/v1/models"
-echo "  • noVNC (login): http://localhost:6080/vnc.html"
+echo "  • noVNC:       http://localhost:6080/vnc.html"
 echo ""
-echo "  FIRST-TIME LOGIN:"
-echo "  1. Open http://localhost:6080/vnc.html in your browser"
-echo "  2. You'll see the Chrome window inside Docker"
-echo "  3. Sign in to ChatGPT manually"
-echo "  4. The session will be saved automatically"
-echo ""
+
+# Only show first-time login instructions if no browser session exists.
+# The Chromium Cookies file is the most reliable indicator of a saved session.
+if [ ! -f "/app/browser_data/Default/Cookies" ]; then
+  echo "  FIRST-TIME LOGIN:"
+  echo "  1. Open http://localhost:6080/vnc.html in your browser"
+  echo "  2. You'll see the Chrome window inside Docker"
+  echo "  3. Sign in to ChatGPT manually"
+  echo "  4. The session will be saved automatically"
+  echo ""
+else
+  echo "  Session found — skipping first-time login instructions."
+  echo ""
+fi
+
 echo "  LOGS: docker compose logs -f catgpt"
 echo "============================================================"
 echo ""

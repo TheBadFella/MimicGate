@@ -236,25 +236,26 @@ class BrowserManager:
         Read ChatGPT session cookies from the browser context.
 
         Returns a dict with:
-          exists   (bool)           — True if a session cookie was found
-          expires  (datetime | None) — expiry of the most important cookie
-          username (str | None)      — best-guess username from cookie domain
+          exists       (bool)            — True if a session cookie was found
+          expires      (datetime | None) — expiry of the most important cookie
+          cookie_count (int)             — number of session cookies found
+          email        (str | None)      — masked account email (from JWT)
         """
         if self._context is None:
-            return {"exists": False, "expires": None, "username": None}
+            return {"exists": False, "expires": None, "cookie_count": 0, "email": None}
 
         try:
             cookies = await self._context.cookies("https://chatgpt.com")
         except Exception as e:
             log.debug(f"Could not read session cookies: {e}")
-            return {"exists": False, "expires": None, "username": None}
+            return {"exists": False, "expires": None, "cookie_count": 0, "email": None}
 
         # Key session cookies OpenAI uses
         session_cookie_names = {"__Secure-next-auth.session-token", "__cf_bm", "cf_clearance", "oai-did"}
         found = [c for c in cookies if c.get("name") in session_cookie_names]
 
         if not found:
-            return {"exists": False, "expires": None, "username": None}
+            return {"exists": False, "expires": None, "cookie_count": 0, "email": None}
 
         # Find the latest expiry among session cookies (most meaningful)
         latest_expiry: datetime.datetime | None = None
@@ -265,7 +266,31 @@ class BrowserManager:
                 if latest_expiry is None or dt > latest_expiry:
                     latest_expiry = dt
 
-        return {"exists": True, "expires": latest_expiry, "cookie_count": len(found)}
+        # Try to extract email from the next-auth session JWT
+        email: str | None = None
+        try:
+            import base64, json as _json
+            session_cookie = next(
+                (c for c in cookies if c.get("name") == "__Secure-next-auth.session-token"), None
+            )
+            if session_cookie:
+                token = session_cookie.get("value", "")
+                parts = token.split(".")
+                if len(parts) >= 2:
+                    payload_b64 = parts[1]
+                    # Fix padding
+                    payload_b64 += "=" * (4 - len(payload_b64) % 4)
+                    payload = _json.loads(base64.urlsafe_b64decode(payload_b64))
+                    raw_email = payload.get("email") or payload.get("user", {}).get("email")
+                    if raw_email and "@" in raw_email:
+                        local, domain = raw_email.split("@", 1)
+                        masked_local = local[0] + "***" if len(local) > 1 else "***"
+                        email = f"{masked_local}@{domain}"
+        except Exception as e:
+            log.debug(f"Could not decode session JWT for email: {e}")
+
+        return {"exists": True, "expires": latest_expiry, "cookie_count": len(found), "email": email}
+
 
     async def is_logged_in(self) -> bool:
         """
