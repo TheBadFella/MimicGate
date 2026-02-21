@@ -2,8 +2,8 @@
 OpenAI-compatible API routes.
 
 Provides:
-  POST /v1/chat/completions   â€” chat completions (with tool/function calling)
-  GET  /v1/models             â€” list available models
+  POST /v1/chat/completions   - chat completions (with tool/function calling)
+  GET  /v1/models             - list available models
 
 All requests are serialized through an asyncio.Lock because the underlying
 Playwright browser page is single-threaded.
@@ -47,10 +47,10 @@ log = setup_logging("openai_routes")
 
 openai_router = APIRouter()
 
-# Global reference â€” set by server.py at startup
+# Global reference - set by server.py at startup
 _client: ChatGPTClient | None = None
 
-# Serialize all requests â€” single browser page, not thread-safe
+# Serialize all requests - single browser page, not thread-safe
 _lock = asyncio.Lock()
 _jobs_lock = asyncio.Lock()
 _jobs: dict[str, ChatCompletionJobResponse] = {}
@@ -80,7 +80,7 @@ def _get_client() -> ChatGPTClient:
     return _client
 
 
-# â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# -- Helpers -----------------------------------------------------
 
 
 def _estimate_tokens(text: str) -> int:
@@ -324,7 +324,7 @@ async def _download_file(url_or_data: str | dict, download_dir: str = "/tmp/catg
 
     os.makedirs(download_dir, exist_ok=True)
 
-    # â”€â”€ Dict form (from _extract_file_attachments) â”€â”€
+    # -- Dict form (from _extract_file_attachments) --
     if isinstance(url_or_data, dict):
         try:
             filename = url_or_data.get("filename", "file")
@@ -341,7 +341,7 @@ async def _download_file(url_or_data: str | dict, download_dir: str = "/tmp/catg
             log.error(f"Failed to decode file attachment: {e}")
             return None
 
-    # â”€â”€ String forms â”€â”€
+    # -- String forms --
     url = str(url_or_data)
 
     if url.startswith("data:"):
@@ -372,7 +372,7 @@ async def _download_file(url_or_data: str | dict, download_dir: str = "/tmp/catg
             log.error(f"Failed to decode base64 data URL: {e}")
             return None
     elif url.startswith(("http://", "https://")):
-        # HTTP URL â€” download it
+        # HTTP URL - download it
         try:
             import urllib.request
             ext = "bin"
@@ -433,10 +433,10 @@ def _build_prompt(messages: list[ChatMessage]) -> str:
     for msg in messages:
         role = msg.role.capitalize()
         if msg.role == "tool":
-            # Tool result â€” include the tool_call_id for context
+            # Tool result - include the tool_call_id for context
             parts.append(f"[Tool result for {msg.tool_call_id or 'unknown'}]: {_extract_content_text(msg.content)}")
         elif msg.role == "assistant" and msg.tool_calls:
-            # Assistant requested tool calls â€” show what was called
+            # Assistant requested tool calls - show what was called
             calls_desc = []
             for tc in msg.tool_calls:
                 calls_desc.append(
@@ -701,6 +701,108 @@ def _coerce_to_response_schema(payload: Any, response_format: Any) -> Any:
     return _coerce_payload_to_schema(payload, schema)
 
 
+def _is_effectively_empty_value(value: Any) -> bool:
+    """Return True when a value is effectively empty for header-row detection."""
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() == ""
+    return False
+
+
+def _pick_note_field_name(item: dict[str, Any]) -> str | None:
+    """Pick the best note/context field key in an item dict."""
+    preferred = ("note", "notes", "context", "header", "section", "group")
+    for key in preferred:
+        if key in item:
+            return key
+    return None
+
+
+def _header_text_from_row(item: Any) -> str | None:
+    """
+    Detect a header-only row, e.g. {"food": null, "quantity": null, "note": "TO SERVE"}.
+    Returns header text if matched, else None.
+    """
+    if not isinstance(item, dict) or not item:
+        return None
+
+    note_key = _pick_note_field_name(item)
+    if not note_key:
+        return None
+
+    note_val = item.get(note_key)
+    if not isinstance(note_val, str) or not note_val.strip():
+        return None
+
+    for key, value in item.items():
+        if key == note_key:
+            continue
+        if not _is_effectively_empty_value(value):
+            return None
+
+    return note_val.strip()
+
+
+def _append_note(item: dict[str, Any], text: str) -> None:
+    """Append note/context text to an item."""
+    key = _pick_note_field_name(item) or "note"
+    existing = item.get(key)
+    if isinstance(existing, str) and existing.strip():
+        item[key] = f"{text}; {existing.strip()}"
+    else:
+        item[key] = text
+
+
+def _merge_header_rows_in_array(items: list[Any]) -> list[Any]:
+    """Merge header-only rows into the next real row in an array."""
+    merged: list[Any] = []
+    pending_header: str | None = None
+
+    for raw in items:
+        header_text = _header_text_from_row(raw)
+        if header_text:
+            pending_header = f"{pending_header}; {header_text}" if pending_header else header_text
+            continue
+
+        if isinstance(raw, dict) and pending_header:
+            item = dict(raw)
+            _append_note(item, pending_header)
+            merged.append(item)
+            pending_header = None
+            continue
+
+        merged.append(raw)
+
+    if pending_header:
+        # No real row after header; preserve as standalone note row.
+        merged.append({"note": pending_header})
+
+    return merged
+
+
+def _merge_header_rows(payload: Any) -> Any:
+    """
+    Merge header-only rows into next row for structured payloads.
+
+    Supports:
+    - root array of objects
+    - root object with exactly one array field
+    """
+    if isinstance(payload, list):
+        return _merge_header_rows_in_array(payload)
+
+    if isinstance(payload, dict):
+        array_keys = [k for k, v in payload.items() if isinstance(v, list)]
+        if len(array_keys) == 1:
+            key = array_keys[0]
+            out = dict(payload)
+            out[key] = _merge_header_rows_in_array(out[key])
+            return out
+
+    return payload
+
+
 def _normalize_structured_content(response_text: str, response_format: Any) -> str:
     """Best-effort normalization to JSON string for structured output calls."""
     payload = _extract_json_payload(response_text)
@@ -708,6 +810,8 @@ def _normalize_structured_content(response_text: str, response_format: Any) -> s
         return response_text
 
     payload = _coerce_to_response_schema(payload, response_format)
+    if Config.API_HEADER_ROW_MERGE_MODE:
+        payload = _merge_header_rows(payload)
     return json.dumps(payload, ensure_ascii=False)
 
 
@@ -744,7 +848,7 @@ def _infer_expected_item_count(messages: list[ChatMessage]) -> int | None:
     # Fallback: line-oriented plain text payloads.
     count = 0
     for line in text.splitlines():
-        cleaned = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", line).strip()
+        cleaned = re.sub(r"^\s*(?:[-*]|\d+[.)])\s*", "", line).strip()
         if cleaned:
             count += 1
 
@@ -796,12 +900,12 @@ def _build_cardinality_retry_prompt(base_prompt: str, expected: int, actual: int
     )
 
 
-# â”€â”€ Routes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# -- Routes ------------------------------------------------------
 
 
 @openai_router.get("/v1/models", response_model=ModelListResponse)
 async def list_models() -> ModelListResponse:
-    """List available models â€” returns our single browser-backed model."""
+    """List available models - returns our single browser-backed model."""
     return ModelListResponse(
         data=[
             ModelObject(id=MODEL_ID, owned_by="catgpt"),
@@ -846,7 +950,7 @@ async def create_image(
         full_prompt = " ".join(prompt_parts)
 
         log.info(
-            f"POST /v1/images/generations â€” prompt='{request.prompt[:80]}', "
+            f"POST /v1/images/generations - prompt='{request.prompt[:80]}', "
             f"n={request.n}, size={request.size}, response_format={request.response_format}"
         )
 
@@ -898,7 +1002,7 @@ async def create_image(
                 else:
                     log.warning(f"Image has no local_path: {img_info.url[:80]}")
             else:
-                # response_format == "url" â†’ return local file path as URL
+                # response_format == "url" - return local file path as URL
                 image_data_list.append(
                     ImageData(
                         url=img_info.local_path or img_info.url,
@@ -931,7 +1035,7 @@ async def create_chat_completion(
     via browser automation, and returns an OpenAI-formatted response.
     Supports tool/function calling via prompt injection.
     """
-    # â”€â”€ Validate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # -- Validate --------------------------------------------
     if request.stream:
         raise HTTPException(
             status_code=400,
@@ -972,7 +1076,7 @@ async def _execute_chat_completion(request: ChatCompletionRequest) -> ChatComple
                     log.info(f"OpenAI app-thread mode: app='{app_key}' -> thread {mapped_thread}")
                     await client.navigate_to_thread(mapped_thread)
 
-        # â”€â”€ Build the prompt â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # -- Build the prompt --------------------------------
         messages = list(request.messages)
 
         # If tools are provided, inject tool definitions as a system prompt
@@ -1026,7 +1130,7 @@ async def _execute_chat_completion(request: ChatCompletionRequest) -> ChatComple
             system_previews,
         )
         log.info(
-            f"POST /v1/chat/completions â€” model={request.model}, "
+            f"POST /v1/chat/completions - model={request.model}, "
             f"{len(request.messages)} messages, prompt={len(prompt)} chars "
             f"(system={system_chars}, user={user_chars}, assistant={assistant_chars}, tool={tool_chars})"
         )
@@ -1042,7 +1146,7 @@ async def _execute_chat_completion(request: ChatCompletionRequest) -> ChatComple
                 log.info("Response cache hit: returning cached completion")
                 return _clone_cached_response(cached_entry[1])
 
-        # â”€â”€ Extract attachments from messages â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # -- Extract attachments from messages --------------
         image_paths: list[str] = []
         file_paths: list[str] = []
         for msg in request.messages:
@@ -1063,7 +1167,7 @@ async def _execute_chat_completion(request: ChatCompletionRequest) -> ChatComple
         if all_attachment_paths:
             log.info(f"Extracted {len(image_paths)} image(s) and {len(file_paths)} file(s) from request")
 
-        # â”€â”€ Send to ChatGPT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # -- Send to ChatGPT --------------------------------
         try:
             result = await client.send_message(
                 prompt,
@@ -1104,9 +1208,9 @@ async def _execute_chat_completion(request: ChatCompletionRequest) -> ChatComple
             except Exception as e:
                 log.warning(f"Full-prompt fallback after contract mode failed: {e}")
 
-        # â”€â”€ Detect echo (extraction grabbed sent prompt instead of reply) â”€â”€
+        # -- Detect echo (extraction grabbed sent prompt instead of reply) --
         if response_text and "[System instruction:" in response_text and request.tools:
-            log.warning("Response appears to echo the sent prompt â€” retrying extraction")
+            log.warning("Response appears to echo the sent prompt - retrying extraction")
             try:
                 await asyncio.sleep(3)
                 from src.chatgpt.detector import extract_last_response_via_copy
@@ -1116,7 +1220,7 @@ async def _execute_chat_completion(request: ChatCompletionRequest) -> ChatComple
                     response_text = retry_text
                     log.info(f"Retry extraction succeeded: {len(response_text)} chars")
                 else:
-                    log.warning("Retry extraction still echoed â€” stripping system prefix")
+                    log.warning("Retry extraction still echoed - stripping system prefix")
                     idx = response_text.rfind("\n\n")
                     if idx > 0:
                         tail = response_text[idx:].strip()
@@ -1125,7 +1229,7 @@ async def _execute_chat_completion(request: ChatCompletionRequest) -> ChatComple
             except Exception as e:
                 log.warning(f"Retry extraction failed: {e}")
 
-        # â”€â”€ Check for tool calls â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # -- Check for tool calls ----------------------------
         tool_calls = None
         finish_reason = "stop"
 
@@ -1168,7 +1272,7 @@ async def _execute_chat_completion(request: ChatCompletionRequest) -> ChatComple
                 finish_reason = "tool_calls"
                 response_text = None
 
-        # â”€â”€ Build response â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # -- Build response ----------------------------------
         prompt_tokens = _estimate_tokens(prompt)
         completion_tokens = _estimate_tokens(response_text or "")
 
@@ -1194,7 +1298,7 @@ async def _execute_chat_completion(request: ChatCompletionRequest) -> ChatComple
 
         log.info(
             f"Response: {elapsed_ms}ms, finish_reason={finish_reason}, "
-            f"tokensâ‰ˆ{response.usage.total_tokens}"
+            f"tokens~{response.usage.total_tokens}"
         )
 
         async with _cache_lock:
@@ -1268,6 +1372,3 @@ async def get_chat_completion_async_job(job_id: str) -> ChatCompletionJobRespons
         raise HTTPException(status_code=404, detail="Job not found")
 
     return job
-
-
-

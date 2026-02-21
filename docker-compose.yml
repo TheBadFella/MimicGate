@@ -48,8 +48,10 @@ services:
       # Optional: map request.user to dedicated chat threads for app-level isolation
       API_APP_THREAD_MODE: "true"
       API_APP_THREAD_TTL_SECONDS: 86400
+      # Optional: merge header-only rows into the next item's note/context in structured JSON outputs
+      API_HEADER_ROW_MERGE_MODE: "true"
       # VNC Authentication
-      VNC_PASSWORD: "catgpt"
+      VNC_PASSWORD: ${CATGPT_VNC_PASSWORD}
       # Logging (verbose for Docker)
       LOG_LEVEL: "DEBUG"
       VERBOSE: "true"

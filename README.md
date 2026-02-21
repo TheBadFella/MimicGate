@@ -596,6 +596,7 @@ All settings are loaded from environment variables (`.env` file or `docker-compo
 | `API_THREAD_CONTRACT_TTL_SECONDS` | `3600`    | TTL for per-thread instruction contracts in memory       |
 | `API_APP_THREAD_MODE` | `false`               | If `true`, routes requests to app-specific threads keyed by `user` |
 | `API_APP_THREAD_TTL_SECONDS` | `86400`       | TTL for app-to-thread mappings in memory                 |
+| `API_HEADER_ROW_MERGE_MODE` | `false`        | If `true`, merges header-only rows (note/context only) into the next item's note/context |
 | `VNC_PASSWORD`       | `catgpt`              | Password for noVNC browser UI                            |
 | `RATE_LIMIT_SECONDS` | `5`                   | Min seconds between API requests                         |
 
