@@ -1,0 +1,106 @@
+name: GHCR Cleanup
+
+on:
+  schedule:
+    - cron: "30 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Preview deletions without deleting"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+permissions:
+  packages: write
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Keep last 3 GHCR versions
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const packageName = "catgpt";
+            const packageType = "container";
+            const keep = 3;
+            const dryRun = String(core.getInput("dry_run") || "false").toLowerCase() === "true";
+
+            async function listVersions(scope) {
+              if (scope === "org") {
+                return github.paginate(
+                  github.rest.packages.getAllPackageVersionsForPackageOwnedByOrg,
+                  { org: owner, package_type: packageType, package_name: packageName, per_page: 100 }
+                );
+              }
+              return github.paginate(
+                github.rest.packages.getAllPackageVersionsForPackageOwnedByUser,
+                { username: owner, package_type: packageType, package_name: packageName, per_page: 100 }
+              );
+            }
+
+            async function deleteVersion(scope, id) {
+              if (scope === "org") {
+                return github.rest.packages.deletePackageVersionForOrg({
+                  org: owner,
+                  package_type: packageType,
+                  package_name: packageName,
+                  package_version_id: id,
+                });
+              }
+              return github.rest.packages.deletePackageVersionForUser({
+                username: owner,
+                package_type: packageType,
+                package_name: packageName,
+                package_version_id: id,
+              });
+            }
+
+            let scope = "org";
+            let versions = [];
+            try {
+              versions = await listVersions("org");
+            } catch (err) {
+              scope = "user";
+              versions = await listVersions("user");
+            }
+
+            if (!Array.isArray(versions) || versions.length === 0) {
+              core.info(`No versions found for ${owner}/${packageName}`);
+              return;
+            }
+
+            const sorted = [...versions].sort(
+              (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+            );
+            const keepVersions = sorted.slice(0, keep);
+            const deleteVersions = sorted.slice(keep);
+
+            core.info(`Found ${sorted.length} total versions for ${owner}/${packageName} (${scope}-scoped package).`);
+            core.info(`Keeping ${keepVersions.length} newest versions:`);
+            for (const v of keepVersions) {
+              const tags = (v.metadata && v.metadata.container && v.metadata.container.tags) || [];
+              core.info(`  keep id=${v.id} created_at=${v.created_at} tags=${tags.join(",") || "<none>"}`);
+            }
+
+            if (deleteVersions.length === 0) {
+              core.info("Nothing to delete.");
+              return;
+            }
+
+            core.info(`Deleting ${deleteVersions.length} older versions (keep=${keep}):`);
+            for (const v of deleteVersions) {
+              const tags = (v.metadata && v.metadata.container && v.metadata.container.tags) || [];
+              core.info(`  delete id=${v.id} created_at=${v.created_at} tags=${tags.join(",") || "<none>"}`);
+              if (!dryRun) {
+                await deleteVersion(scope, v.id);
+              }
+            }
+
+            core.info(dryRun ? "Dry run complete. No versions were deleted." : "Cleanup complete.");
