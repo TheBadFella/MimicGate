@@ -7,6 +7,7 @@ Session data (cookies, localStorage, IndexedDB) survives restarts.
 
 from __future__ import annotations
 
+import datetime
 import os
 import random
 import signal
@@ -229,6 +230,42 @@ class BrowserManager:
         log.info(f"Navigating to {url}")
         await self.page.goto(url, wait_until="domcontentloaded")
         log.info("Page loaded")
+
+    async def get_session_info(self) -> dict:
+        """
+        Read ChatGPT session cookies from the browser context.
+
+        Returns a dict with:
+          exists   (bool)           — True if a session cookie was found
+          expires  (datetime | None) — expiry of the most important cookie
+          username (str | None)      — best-guess username from cookie domain
+        """
+        if self._context is None:
+            return {"exists": False, "expires": None, "username": None}
+
+        try:
+            cookies = await self._context.cookies("https://chatgpt.com")
+        except Exception as e:
+            log.debug(f"Could not read session cookies: {e}")
+            return {"exists": False, "expires": None, "username": None}
+
+        # Key session cookies OpenAI uses
+        session_cookie_names = {"__Secure-next-auth.session-token", "__cf_bm", "cf_clearance", "oai-did"}
+        found = [c for c in cookies if c.get("name") in session_cookie_names]
+
+        if not found:
+            return {"exists": False, "expires": None, "username": None}
+
+        # Find the latest expiry among session cookies (most meaningful)
+        latest_expiry: datetime.datetime | None = None
+        for c in found:
+            exp = c.get("expires")
+            if exp and exp > 0:
+                dt = datetime.datetime.fromtimestamp(exp, tz=datetime.timezone.utc)
+                if latest_expiry is None or dt > latest_expiry:
+                    latest_expiry = dt
+
+        return {"exists": True, "expires": latest_expiry, "cookie_count": len(found)}
 
     async def is_logged_in(self) -> bool:
         """

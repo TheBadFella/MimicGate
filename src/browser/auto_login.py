@@ -16,13 +16,18 @@ from src.log import setup_logging
 log = setup_logging("auto_login")
 
 
-async def ensure_logged_in(browser: BrowserManager) -> bool:
+async def ensure_logged_in(browser: BrowserManager, has_session: bool = False) -> bool:
     """
     Check if the user is logged in. If not, guide them through login.
 
     This replaces the need to manually run `scripts/first_login.py`.
     Opens the browser to ChatGPT, waits for the user to sign in,
     and verifies the login before returning.
+
+    Args:
+        browser:     The active BrowserManager.
+        has_session: True if session cookies were detected (even if login check failed).
+                     Used to suppress the first-time setup banner.
 
     Returns True if logged in (or successfully logged in now).
     Raises RuntimeError if login fails after the user presses Enter.
@@ -31,11 +36,18 @@ async def ensure_logged_in(browser: BrowserManager) -> bool:
         log.info("Already logged in")
         return True
 
-    log.info("Not logged in — starting interactive login flow")
+    if has_session:
+        # Session exists but login check failed (e.g. token expired, page not ready)
+        log.warning("Session cookies found but login check failed — session may have expired.")
+        print("\n" + "=" * 60)
+        print("  ⚠️  ChatGPT Session Expired — Re-login Required")
+        print("=" * 60)
+    else:
+        log.info("No session — starting interactive first-time login flow")
+        print("\n" + "=" * 60)
+        print("  🔐 ChatGPT Login Required — First-Time Setup")
+        print("=" * 60)
 
-    print("\n" + "=" * 60)
-    print("  🔐 ChatGPT Login Required — First-Time Setup")
-    print("=" * 60)
     print(f"\n  Browser data dir: {Config.BROWSER_DATA_DIR}")
     print(f"  Target: {Config.CHATGPT_URL}")
     print("\n  A Chrome window is open. Please:")

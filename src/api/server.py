@@ -67,9 +67,26 @@ async def lifespan(app: FastAPI):
 
     await asyncio.sleep(3)
 
+    # ── Report session state before login check ─────────────────
+    session = await _browser.get_session_info()
+    if session["exists"]:
+        expires = session.get("expires")
+        if expires:
+            local_exp = expires.astimezone()
+            log.info(
+                f"Session detected — {session['cookie_count']} session cookie(s) found. "
+                f"Expires: {local_exp.strftime('%Y-%m-%d %H:%M %Z')}"
+            )
+        else:
+            log.info(
+                f"Session detected — {session['cookie_count']} session cookie(s) found (no expiry set)."
+            )
+    else:
+        log.info("No existing session found — first-time login will be required.")
+
     if not await _browser.is_logged_in():
         log.info("Not logged in — starting auto-login flow...")
-        logged_in = await ensure_logged_in(_browser)
+        logged_in = await ensure_logged_in(_browser, has_session=session["exists"])
         if not logged_in:
             log.error("Login failed after auto-login attempt")
             raise RuntimeError("Could not log in to ChatGPT")
