@@ -589,11 +589,13 @@ All settings are loaded from environment variables (`.env` file or `docker-compo
 | `LOG_LEVEL`          | `DEBUG`               | Logging level (DEBUG, INFO, WARNING, ERROR)              |
 | `LOG_CONSOLE`        | `true`                | Enable console log output                                |
 | `API_HOST`           | `0.0.0.0`             | FastAPI server bind address                              |
-| `API_ADVERTISE_HOST` | ``                    | Optional host/IP used only in printed startup endpoint URLs |
-| `API_ADVERTISE_PORT` | ``                    | Optional port used only in printed startup endpoint URLs |
 | `API_PORT`           | `8000`                | FastAPI server port                                      |
 | `API_TOKEN`          | `dummy123`            | Bearer token for API auth (empty = disabled)             |
 | `API_TOKEN_OPTIONAL` | `false`               | If `true`, requests without token are allowed even when `API_TOKEN` is set |
+| `API_THREAD_CONTRACT_MODE` | `false`         | If `true`, reuses per-thread system instruction contracts with compact follow-up prompts |
+| `API_THREAD_CONTRACT_TTL_SECONDS` | `3600`    | TTL for per-thread instruction contracts in memory       |
+| `API_APP_THREAD_MODE` | `false`               | If `true`, routes requests to app-specific threads keyed by `user` |
+| `API_APP_THREAD_TTL_SECONDS` | `86400`       | TTL for app-to-thread mappings in memory                 |
 | `VNC_PASSWORD`       | `catgpt`              | Password for noVNC browser UI                            |
 | `RATE_LIMIT_SECONDS` | `5`                   | Min seconds between API requests                         |
 

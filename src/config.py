@@ -44,12 +44,14 @@ class Config:
     # API (Phase 3)
     API_HOST: str = os.getenv("API_HOST", "0.0.0.0")
     API_PORT: int = int(os.getenv("API_PORT", "8000"))
-    # Optional host used only for printed endpoint URLs (startup banner/docs hints)
-    API_ADVERTISE_HOST: str = os.getenv("API_ADVERTISE_HOST", "").strip()
-    # Optional port used only for printed endpoint URLs (defaults to API_PORT)
-    API_ADVERTISE_PORT: int = int(os.getenv("API_ADVERTISE_PORT", str(API_PORT)))
     # If true, requests without Bearer token are allowed even when API_TOKEN is set
     API_TOKEN_OPTIONAL: bool = os.getenv("API_TOKEN_OPTIONAL", "false").lower() == "true"
+    # If true, cache large system instructions once per thread and send compact reminders after priming
+    API_THREAD_CONTRACT_MODE: bool = os.getenv("API_THREAD_CONTRACT_MODE", "false").lower() == "true"
+    API_THREAD_CONTRACT_TTL_SECONDS: int = int(os.getenv("API_THREAD_CONTRACT_TTL_SECONDS", "3600"))
+    # If true, route OpenAI requests to app-specific threads using request.user as app key
+    API_APP_THREAD_MODE: bool = os.getenv("API_APP_THREAD_MODE", "false").lower() == "true"
+    API_APP_THREAD_TTL_SECONDS: int = int(os.getenv("API_APP_THREAD_TTL_SECONDS", "86400"))
     RATE_LIMIT_SECONDS: int = int(os.getenv("RATE_LIMIT_SECONDS", "5"))
     API_TOKEN: str = os.getenv("API_TOKEN", "")  # Bearer token for API auth (empty = no auth)
 

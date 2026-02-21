@@ -83,6 +83,8 @@ class ChatCompletionRequest(BaseModel):
     stream: Optional[bool] = False
     n: Optional[int] = 1
     user: Optional[str] = None
+    # CatGPT extension: explicit thread targeting for app-level isolation.
+    thread_id: Optional[str] = None
     response_format: Optional[Any] = None
 
 
