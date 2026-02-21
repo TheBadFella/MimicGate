@@ -6,12 +6,19 @@ services:
     security_opt:
       - seccomp=unconfined
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
     networks:
       - catgpt
     ports:
       - "8650:8000" # API Port
       - "6080:6080" # noVNC web UI
     command: ["/entrypoint.sh"]
+    shm_size: "2gb"
     environment:
       # Browser (headed on virtual display)
       HEADLESS: "false"
@@ -32,8 +39,10 @@ services:
       THINKING_PAUSE_MAX: 3000
       # API
       API_HOST: "0.0.0.0"
+      # Optional: host/IP shown in startup endpoint URLs (does not change bind address)
+      API_ADVERTISE_HOST: ${SERVER_IP}
       API_PORT: 8000
-      API_TOKEN: "dummy123"
+      API_TOKEN: ${CATGPT_API_KEY}
       # VNC Authentication
       VNC_PASSWORD: "catgpt"
       # Logging (verbose for Docker)
@@ -42,10 +51,3 @@ services:
     volumes:
       - ${DOCKERDIR}/appdata/catgpt/browser:/app/browser_data
       - ${DOCKERDIR}/appdata/catgpt/logs:/app/logs
-    shm_size: "2gb"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
-      interval: 30s
-      timeout: 10s
-      start_period: 60s
-      retries: 3

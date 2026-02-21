@@ -221,6 +221,10 @@ Base URL: `http://localhost:8000/v1` — **Model ID:** `catgpt-browser`
 
 > **Structured output note:** `response_format` is supported for `/v1/chat/completions` and `/v1/chat/completions/async` (including `json_object` and `json_schema`).
 
+> **Response cache note:** `/v1/chat/completions` now includes an in-memory dedup cache for identical requests (TTL: 600s, max entries: 256). Cache hits return a fresh OpenAI-style response envelope (`id`, `created`) with cached content.
+
+> **Prompt assembly note:** single-turn requests now include all provided `system` messages (not just the first one). Tool-mode prompt instructions were compacted to reduce repeated overhead.
+
 ---
 
 ## Usage Examples
@@ -584,6 +588,7 @@ All settings are loaded from environment variables (`.env` file or `docker-compo
 | `LOG_LEVEL`          | `DEBUG`               | Logging level (DEBUG, INFO, WARNING, ERROR)              |
 | `LOG_CONSOLE`        | `true`                | Enable console log output                                |
 | `API_HOST`           | `0.0.0.0`             | FastAPI server bind address                              |
+| `API_ADVERTISE_HOST` | ``                    | Optional host/IP used only in printed startup endpoint URLs |
 | `API_PORT`           | `8000`                | FastAPI server port                                      |
 | `API_TOKEN`          | `dummy123`            | Bearer token for API auth (empty = disabled)             |
 | `VNC_PASSWORD`       | `catgpt`              | Password for noVNC browser UI                            |
@@ -974,6 +979,7 @@ Expected: all 4 services (`xvfb`, `vnc`, `novnc`, `catgpt`) showing `RUNNING`.
 - **Single concurrency:** All requests are serialized through an `asyncio.Lock` — one request at a time.
 - **Response time:** Each request takes 5–30+ seconds depending on response length.
 - **Token counts are estimated:** ~4 characters per token. Not accurate.
+- **Cache scope:** chat dedup cache is in-memory and process-local (not shared across replicas/restarts).
 - **Session expiry:** ChatGPT login sessions expire periodically — re-login required.
 - **ChatGPT UI changes:** If ChatGPT updates their HTML, selectors in `selectors.py` may need updating.
 - **No multi-user:** Single browser session = single user.
@@ -1007,3 +1013,4 @@ Expected: all 4 services (`xvfb`, `vnc`, `novnc`, `catgpt`) showing `RUNNING`.
 
 Educational proof-of-concept. Built to demonstrate browser automation capabilities.
 Use responsibly and in accordance with OpenAI's terms of service.
+

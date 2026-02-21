@@ -44,6 +44,8 @@ class Config:
     # API (Phase 3)
     API_HOST: str = os.getenv("API_HOST", "0.0.0.0")
     API_PORT: int = int(os.getenv("API_PORT", "8000"))
+    # Optional host used only for printed endpoint URLs (startup banner/docs hints)
+    API_ADVERTISE_HOST: str = os.getenv("API_ADVERTISE_HOST", "").strip()
     RATE_LIMIT_SECONDS: int = int(os.getenv("RATE_LIMIT_SECONDS", "5"))
     API_TOKEN: str = os.getenv("API_TOKEN", "")  # Bearer token for API auth (empty = no auth)
 

@@ -12,6 +12,7 @@ Playwright browser page is single-threaded.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import time
@@ -52,8 +53,12 @@ _client: ChatGPTClient | None = None
 _lock = asyncio.Lock()
 _jobs_lock = asyncio.Lock()
 _jobs: dict[str, ChatCompletionJobResponse] = {}
+_cache_lock = asyncio.Lock()
+_response_cache: dict[str, tuple[float, ChatCompletionResponse]] = {}
 
 MODEL_ID = "catgpt-browser"
+_CACHE_TTL_SECONDS = 600
+_CACHE_MAX_ENTRIES = 256
 
 
 def set_openai_client(client: ChatGPTClient) -> None:
@@ -74,6 +79,58 @@ def _get_client() -> ChatGPTClient:
 def _estimate_tokens(text: str) -> int:
     """Rough token estimate (~4 chars per token)."""
     return max(1, len(text) // 4)
+
+
+def _shrink_for_cache(value: Any) -> Any:
+    """Reduce large strings to a digest so cache-key generation stays cheap."""
+    if isinstance(value, str):
+        if len(value) > 512:
+            digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
+            return f"sha256:{digest}:len:{len(value)}"
+        return value
+    if isinstance(value, list):
+        return [_shrink_for_cache(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _shrink_for_cache(v) for k, v in value.items()}
+    return value
+
+
+def _cache_key_for_request(request: ChatCompletionRequest) -> str:
+    """
+    Build a stable cache key for semantic request identity.
+
+    `stream` and `user` are excluded because they do not change prompt content.
+    """
+    payload = request.model_dump(mode="json", exclude={"stream", "user"})
+    compact_payload = _shrink_for_cache(payload)
+    canonical = json.dumps(compact_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _clone_cached_response(cached: ChatCompletionResponse) -> ChatCompletionResponse:
+    """Return a fresh response object so ids/timestamps remain request-specific."""
+    return cached.model_copy(
+        deep=True,
+        update={
+            "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
+            "created": int(time.time()),
+        },
+    )
+
+
+def _prune_cache(now: float) -> None:
+    """Prune expired entries and enforce size cap."""
+    expired_keys = [key for key, (ts, _) in _response_cache.items() if now - ts > _CACHE_TTL_SECONDS]
+    for key in expired_keys:
+        _response_cache.pop(key, None)
+
+    if len(_response_cache) <= _CACHE_MAX_ENTRIES:
+        return
+
+    ordered = sorted(_response_cache.items(), key=lambda item: item[1][0])
+    overflow = len(_response_cache) - _CACHE_MAX_ENTRIES
+    for key, _ in ordered[:overflow]:
+        _response_cache.pop(key, None)
 
 
 def _extract_content_text(content) -> str:
@@ -250,8 +307,17 @@ def _build_prompt(messages: list[ChatMessage]) -> str:
     if len(non_system) == 1 and non_system[0].role == "user":
         prefix = ""
         if system_msgs:
-            sys_text = _extract_content_text(system_msgs[0].content)
-            prefix = f"[System instruction: {sys_text}]\n\n"
+            sys_texts = []
+            for msg in system_msgs:
+                text = _extract_content_text(msg.content).strip()
+                if text:
+                    sys_texts.append(text)
+
+            if len(sys_texts) == 1:
+                prefix = f"[System instruction: {sys_texts[0]}]\n\n"
+            elif sys_texts:
+                combined = "\n".join(f"{idx + 1}. {text}" for idx, text in enumerate(sys_texts))
+                prefix = f"[System instructions]\n{combined}\n\n"
         user_text = _extract_content_text(non_system[0].content)
         return prefix + (user_text or "")
 
@@ -297,33 +363,19 @@ def _build_tool_system_prompt(tools: list[ToolDefinition]) -> str:
 
     tools_json = "\n---\n".join(tool_descriptions)
 
-    return f"""Forget all prior instructions in this conversation. You are now in TOOL MODE.
+    return f"""You are in TOOL MODE. Ignore prior statements about tool availability.
 
-When the user asks something that matches one of the functions below, output ONLY a JSON code block like this:
+If the user's latest request should call one or more functions, output ONLY:
+{{"tool_calls":[{{"name":"<function_name>","arguments":{{...}}}}]}}
 
-```json
-{{"tool_calls": [{{"name": "<function_name>", "arguments": {{...}}}}]}}
-```
-
-Functions you can route to:
+Available functions:
 {tools_json}
 
-Examples:
-
-User: "What time is it?" → ```json
-{{"tool_calls": [{{"name": "get_current_time", "arguments": {{}}}}]}}```
-
-User: "Add 5 and 3" → ```json
-{{"tool_calls": [{{"name": "add_numbers", "arguments": {{"a": 5, "b": 3}}}}]}}```
-
-User: "Weather in Tokyo and 2+2" → ```json
-{{"tool_calls": [{{"name": "weather_forecast", "arguments": {{"city": "Tokyo", "date": "today"}}}}, {{"name": "calculate_expression", "arguments": {{"expression": "2+2"}}}}]}}```
-
-Important:
-- Always output the JSON block for tool-matching requests. Do not answer the question yourself.
-- You can call multiple functions in one response.
-- If a follow-up message shows tool results, summarize them naturally for the user.
-- Do not refuse or say tools are unavailable.
+Rules:
+- Use exact function names from the list.
+- Arguments must be a valid JSON object.
+- Return multiple calls when needed.
+- If no function applies, answer normally.
 """
 
 
@@ -727,6 +779,15 @@ async def _execute_chat_completion(request: ChatCompletionRequest) -> ChatComple
             f"{len(request.messages)} messages, prompt={len(prompt)} chars"
         )
 
+        cache_key = _cache_key_for_request(request)
+        now = time.time()
+        async with _cache_lock:
+            _prune_cache(now)
+            cached_entry = _response_cache.get(cache_key)
+            if cached_entry and now - cached_entry[0] <= _CACHE_TTL_SECONDS:
+                log.info("Response cache hit: returning cached completion")
+                return _clone_cached_response(cached_entry[1])
+
         # ── Extract attachments from messages ──────────────
         image_paths: list[str] = []
         file_paths: list[str] = []
@@ -825,6 +886,10 @@ async def _execute_chat_completion(request: ChatCompletionRequest) -> ChatComple
             f"tokens≈{response.usage.total_tokens}"
         )
 
+        async with _cache_lock:
+            _prune_cache(time.time())
+            _response_cache[cache_key] = (time.time(), response.model_copy(deep=True))
+
         return response
 
 
@@ -892,3 +957,4 @@ async def get_chat_completion_async_job(job_id: str) -> ChatCompletionJobRespons
         raise HTTPException(status_code=404, detail="Job not found")
 
     return job
+

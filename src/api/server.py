@@ -112,7 +112,8 @@ async def lifespan(app: FastAPI):
     ]
 
     # Endpoints
-    host = f"http://{Config.API_HOST}:{Config.API_PORT}"
+    advertised_host = Config.API_ADVERTISE_HOST or Config.API_HOST
+    host = f"http://{advertised_host}:{Config.API_PORT}"
     endpoints = [
         ("POST", f"{host}/v1/chat/completions", "Chat completions"),
         ("POST", f"{host}/v1/chat/completions/async", "Async chat submit"),
