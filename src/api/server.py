@@ -210,6 +210,10 @@ class BearerTokenMiddleware(BaseHTTPMiddleware):
 
         # Check Authorization header
         auth_header = request.headers.get("authorization", "")
+        if Config.API_TOKEN_OPTIONAL and not auth_header:
+            # Optional-auth mode: no header is allowed.
+            return await call_next(request)
+
         if auth_header.startswith("Bearer "):
             provided = auth_header[7:].strip()
         else:
@@ -255,3 +259,4 @@ if __name__ == "__main__":
         port=Config.API_PORT,
         log_level="info",
     )
+

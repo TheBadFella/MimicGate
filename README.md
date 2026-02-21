@@ -159,7 +159,7 @@ If your session expires (typically after days/weeks), repeat the login flow. The
 
 ### API Bearer Token
 
-All API endpoints require a Bearer token when `API_TOKEN` is set (default: `dummy123`).
+By default, all API endpoints require a Bearer token when `API_TOKEN` is set (default: `dummy123`).
 
 ```bash
 curl -H "Authorization: Bearer dummy123" http://localhost:8000/v1/models
@@ -178,7 +178,8 @@ client = OpenAI(
 
 **Open paths** (no token required): `/docs`, `/redoc`, `/openapi.json`, `/healthz`
 
-To **disable** API auth, set `API_TOKEN=` (empty string) in `docker-compose.yml` or `.env`.
+To **disable** API auth entirely, set `API_TOKEN=` (empty string) in `docker-compose.yml` or `.env`.
+To allow requests **with or without token** while still accepting token auth, set `API_TOKEN_OPTIONAL=true`.
 
 ### noVNC Password
 
@@ -592,6 +593,7 @@ All settings are loaded from environment variables (`.env` file or `docker-compo
 | `API_ADVERTISE_PORT` | ``                    | Optional port used only in printed startup endpoint URLs |
 | `API_PORT`           | `8000`                | FastAPI server port                                      |
 | `API_TOKEN`          | `dummy123`            | Bearer token for API auth (empty = disabled)             |
+| `API_TOKEN_OPTIONAL` | `false`               | If `true`, requests without token are allowed even when `API_TOKEN` is set |
 | `VNC_PASSWORD`       | `catgpt`              | Password for noVNC browser UI                            |
 | `RATE_LIMIT_SECONDS` | `5`                   | Min seconds between API requests                         |
 

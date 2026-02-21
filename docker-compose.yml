@@ -45,6 +45,7 @@ services:
       API_ADVERTISE_PORT: 8650
       API_PORT: 8000
       API_TOKEN: ${CATGPT_API_KEY}
+      API_TOKEN_OPTIONAL: "true"
       # VNC Authentication
       VNC_PASSWORD: "catgpt"
       # Logging (verbose for Docker)

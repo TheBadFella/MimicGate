@@ -48,6 +48,8 @@ class Config:
     API_ADVERTISE_HOST: str = os.getenv("API_ADVERTISE_HOST", "").strip()
     # Optional port used only for printed endpoint URLs (defaults to API_PORT)
     API_ADVERTISE_PORT: int = int(os.getenv("API_ADVERTISE_PORT", str(API_PORT)))
+    # If true, requests without Bearer token are allowed even when API_TOKEN is set
+    API_TOKEN_OPTIONAL: bool = os.getenv("API_TOKEN_OPTIONAL", "false").lower() == "true"
     RATE_LIMIT_SECONDS: int = int(os.getenv("RATE_LIMIT_SECONDS", "5"))
     API_TOKEN: str = os.getenv("API_TOKEN", "")  # Bearer token for API auth (empty = no auth)
 
