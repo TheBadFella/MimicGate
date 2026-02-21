@@ -207,11 +207,13 @@ class BearerTokenMiddleware(BaseHTTPMiddleware):
         # Check Authorization header
         auth_header = request.headers.get("authorization", "")
         if auth_header.startswith("Bearer "):
-            provided = auth_header[7:]
+            provided = auth_header[7:].strip()
         else:
             provided = ""
 
-        if provided != token:
+        expected = token.strip()
+        if provided != expected:
+            log.warning(f"Auth failed from {request.client.host if request.client else 'unknown'}: invalid token")
             return JSONResponse(
                 status_code=401,
                 content={"error": {"message": "Invalid or missing API token. Set Authorization: Bearer <API_TOKEN>", "type": "auth_error"}},
