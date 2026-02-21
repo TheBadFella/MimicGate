@@ -1,0 +1,76 @@
+version: 2
+
+updates:
+  # Python dependencies from requirements.txt
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/Regina"
+    # Group all minor and patch updates together
+    groups:
+      python-dependencies:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    # Keep major version updates separate for easier review
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    # Rebase PRs when they become conflicted
+    rebase-strategy: "auto"
+    # Allow version updates that only support newer Python versions
+    allow:
+      - dependency-type: "all"
+
+  # Docker Dockerfile updates
+  - package-ecosystem: "docker"
+    directory: "/docker"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/Regina"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(docker)"
+      include: "scope"
+    rebase-strategy: "auto"
+
+  # Docker Compose updates
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/Regina"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(docker)"
+      include: "scope"
+    rebase-strategy: "auto"
+
+  # GitHub Actions dependencies
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/Regina"
+    # Group all GitHub Actions updates together
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(ci)"
+      include: "scope"
+    rebase-strategy: "auto"
