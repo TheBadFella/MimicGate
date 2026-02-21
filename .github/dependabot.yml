@@ -42,20 +42,6 @@ updates:
       include: "scope"
     rebase-strategy: "auto"
 
-  # Docker Compose updates
-  - package-ecosystem: "docker"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "06:00"
-      timezone: "America/Regina"
-    open-pull-requests-limit: 5
-    commit-message:
-      prefix: "chore(docker)"
-      include: "scope"
-    rebase-strategy: "auto"
-
   # GitHub Actions dependencies
   - package-ecosystem: "github-actions"
     directory: "/"

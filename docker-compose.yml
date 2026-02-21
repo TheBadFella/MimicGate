@@ -43,3 +43,9 @@ services:
       - ${DOCKERDIR}/appdata/catgpt/browser:/app/browser_data
       - ${DOCKERDIR}/appdata/catgpt/logs:/app/logs
     shm_size: "2gb"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
