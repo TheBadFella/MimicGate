@@ -148,6 +148,73 @@ def _extract_content_text(content) -> str:
     return str(content)
 
 
+def _normalize_instruction_text(text: str) -> str:
+    """Normalize instruction text for duplicate/equivalence checks."""
+    return re.sub(r"\s+", " ", text or "").strip().lower()
+
+
+def _collect_system_texts(messages: list[ChatMessage]) -> list[str]:
+    """Collect non-empty system message texts."""
+    texts: list[str] = []
+    for msg in messages:
+        if msg.role != "system":
+            continue
+        text = _extract_content_text(msg.content).strip()
+        if text:
+            texts.append(text)
+    return texts
+
+
+def _dedupe_system_messages(messages: list[ChatMessage]) -> list[ChatMessage]:
+    """Remove duplicate system messages while preserving order."""
+    deduped: list[ChatMessage] = []
+    seen: set[str] = set()
+
+    for msg in messages:
+        if msg.role != "system":
+            deduped.append(msg)
+            continue
+
+        text = _extract_content_text(msg.content).strip()
+        key = _normalize_instruction_text(text)
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        deduped.append(msg)
+
+    return deduped
+
+
+def _looks_like_json_only_instruction(text: str) -> bool:
+    """Heuristic detection for a generic JSON-only system instruction."""
+    normalized = _normalize_instruction_text(text)
+    return (
+        "valid json only" in normalized
+        and "markdown/code fences" in normalized
+    )
+
+
+def _has_equivalent_response_instruction(
+    messages: list[ChatMessage], response_format_system: str
+) -> bool:
+    """Check if an equivalent structured-output instruction already exists."""
+    target = _normalize_instruction_text(response_format_system)
+    if not target:
+        return False
+
+    for text in _collect_system_texts(messages):
+        normalized = _normalize_instruction_text(text)
+        if normalized == target:
+            return True
+
+    # Generic json_object instruction can be considered equivalent even if phrasing differs.
+    if "return exactly one json object" in target:
+        return any(_looks_like_json_only_instruction(text) for text in _collect_system_texts(messages))
+
+    return False
+
+
 def _extract_image_urls(content) -> list[str]:
     """Extract image URLs from message content (OpenAI vision format)."""
     if not isinstance(content, list):
@@ -770,13 +837,19 @@ async def _execute_chat_completion(request: ChatCompletionRequest) -> ChatComple
 
         # If structured output is requested, force strict JSON response
         response_format_system = _build_response_format_system_prompt(request.response_format)
-        if response_format_system:
+        if response_format_system and not _has_equivalent_response_instruction(messages, response_format_system):
             messages.insert(0, ChatMessage(role="system", content=response_format_system))
 
+        messages = _dedupe_system_messages(messages)
         prompt = _build_prompt(messages)
+        system_chars = sum(len(_extract_content_text(m.content)) for m in messages if m.role == "system")
+        user_chars = sum(len(_extract_content_text(m.content)) for m in messages if m.role == "user")
+        assistant_chars = sum(len(_extract_content_text(m.content)) for m in messages if m.role == "assistant")
+        tool_chars = sum(len(_extract_content_text(m.content)) for m in messages if m.role == "tool")
         log.info(
             f"POST /v1/chat/completions — model={request.model}, "
-            f"{len(request.messages)} messages, prompt={len(prompt)} chars"
+            f"{len(request.messages)} messages, prompt={len(prompt)} chars "
+            f"(system={system_chars}, user={user_chars}, assistant={assistant_chars}, tool={tool_chars})"
         )
 
         cache_key = _cache_key_for_request(request)
@@ -957,4 +1030,5 @@ async def get_chat_completion_async_job(job_id: str) -> ChatCompletionJobRespons
         raise HTTPException(status_code=404, detail="Job not found")
 
     return job
+
 
