@@ -21,6 +21,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from src.api.openai_schemas import (
+    ChatCompletionAsyncRequest,
+    ChatCompletionJobResponse,
     ChatCompletionRequest,
     ChatCompletionResponse,
     ChatMessage,
@@ -48,6 +50,8 @@ _client: ChatGPTClient | None = None
 
 # Serialize all requests — single browser page, not thread-safe
 _lock = asyncio.Lock()
+_jobs_lock = asyncio.Lock()
+_jobs: dict[str, ChatCompletionJobResponse] = {}
 
 MODEL_ID = "catgpt-browser"
 
@@ -387,6 +391,167 @@ def _parse_tool_calls(
     return result if result else None
 
 
+def _build_response_format_system_prompt(response_format: Any) -> str | None:
+    """Build a strict JSON-output instruction from OpenAI response_format."""
+    if not response_format:
+        return None
+
+    if isinstance(response_format, str):
+        if response_format == "json_object":
+            return (
+                "You must respond with valid JSON only. "
+                "Return exactly one JSON object and no markdown/code fences."
+            )
+        return None
+
+    if not isinstance(response_format, dict):
+        return None
+
+    rf_type = response_format.get("type")
+    if rf_type == "json_object":
+        return (
+            "You must respond with valid JSON only. "
+            "Return exactly one JSON object and no markdown/code fences."
+        )
+
+    if rf_type == "json_schema":
+        schema_obj = response_format.get("json_schema", {})
+        schema = schema_obj.get("schema") if isinstance(schema_obj, dict) else None
+        strict = bool(schema_obj.get("strict")) if isinstance(schema_obj, dict) else False
+        if schema:
+            strict_text = " Follow it strictly." if strict else ""
+            return (
+                "You must respond with valid JSON only (no markdown/code fences). "
+                "The JSON must satisfy this schema:" +
+                f"\n{json.dumps(schema, ensure_ascii=False)}" +
+                strict_text
+            )
+        return (
+            "You must respond with valid JSON only. "
+            "Return exactly one JSON object and no markdown/code fences."
+        )
+
+    return None
+
+
+def _extract_json_payload(text: str) -> Any | None:
+    """Extract and parse a JSON object/array from model text."""
+    if not text:
+        return None
+
+    stripped = text.strip()
+
+    try:
+        return json.loads(stripped)
+    except Exception:
+        pass
+
+    block = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", stripped)
+    if block:
+        candidate = block.group(1).strip()
+        try:
+            return json.loads(candidate)
+        except Exception:
+            pass
+
+    first_obj = stripped.find("{")
+    first_arr = stripped.find("[")
+    candidates = [i for i in (first_obj, first_arr) if i >= 0]
+    if not candidates:
+        return None
+
+    start = min(candidates)
+    try:
+        return json.loads(stripped[start:])
+    except Exception:
+        return None
+
+
+def _coerce_payload_to_schema(payload: Any, schema: dict[str, Any]) -> Any:
+    """Best-effort payload coercion guided by a JSON schema."""
+    schema_type = schema.get("type")
+
+    if schema_type == "object":
+        if isinstance(payload, dict):
+            return payload
+
+        properties = schema.get("properties", {})
+        if not isinstance(properties, dict) or not properties:
+            return payload
+
+        if isinstance(payload, list):
+            array_keys = [
+                key for key, prop in properties.items()
+                if isinstance(prop, dict) and prop.get("type") == "array"
+            ]
+            if len(array_keys) == 1:
+                return {array_keys[0]: payload}
+
+            if len(properties) == 1:
+                key = next(iter(properties))
+                return {key: payload}
+
+            required = schema.get("required", [])
+            if isinstance(required, list):
+                for key in required:
+                    if key in properties:
+                        return {key: payload}
+
+        if len(properties) == 1:
+            key = next(iter(properties))
+            return {key: payload}
+
+        return payload
+
+    if schema_type == "array":
+        if isinstance(payload, list):
+            return payload
+
+        if isinstance(payload, dict) and len(payload) == 1:
+            only_value = next(iter(payload.values()))
+            if isinstance(only_value, list):
+                return only_value
+
+        return [payload]
+
+    return payload
+
+
+def _coerce_to_response_schema(payload: Any, response_format: Any) -> Any:
+    """Coerce common payload mismatches into the requested response format."""
+    if not isinstance(response_format, dict):
+        return payload
+
+    rf_type = response_format.get("type")
+    if rf_type == "json_object":
+        if isinstance(payload, dict):
+            return payload
+        return {"data": payload}
+
+    if rf_type != "json_schema":
+        return payload
+
+    json_schema = response_format.get("json_schema", {})
+    if not isinstance(json_schema, dict):
+        return payload
+
+    schema = json_schema.get("schema")
+    if not isinstance(schema, dict):
+        return payload
+
+    return _coerce_payload_to_schema(payload, schema)
+
+
+def _normalize_structured_content(response_text: str, response_format: Any) -> str:
+    """Best-effort normalization to JSON string for structured output calls."""
+    payload = _extract_json_payload(response_text)
+    if payload is None:
+        return response_text
+
+    payload = _coerce_to_response_schema(payload, response_format)
+    return json.dumps(payload, ensure_ascii=False)
+
+
 # ── Routes ──────────────────────────────────────────────────────
 
 
@@ -532,6 +697,11 @@ async def create_chat_completion(
     if not request.messages:
         raise HTTPException(status_code=400, detail="messages array cannot be empty")
 
+    return await _execute_chat_completion(request)
+
+
+async def _execute_chat_completion(request: ChatCompletionRequest) -> ChatCompletionResponse:
+    """Shared sync/async executor for chat completions."""
     client = _get_client()
 
     async with _lock:
@@ -546,6 +716,11 @@ async def create_chat_completion(
             # Prepend as the first system message
             messages.insert(0, ChatMessage(role="system", content=tool_system))
 
+        # If structured output is requested, force strict JSON response
+        response_format_system = _build_response_format_system_prompt(request.response_format)
+        if response_format_system:
+            messages.insert(0, ChatMessage(role="system", content=response_format_system))
+
         prompt = _build_prompt(messages)
         log.info(
             f"POST /v1/chat/completions — model={request.model}, "
@@ -557,13 +732,12 @@ async def create_chat_completion(
         file_paths: list[str] = []
         for msg in request.messages:
             if msg.role == "user" and isinstance(msg.content, list):
-                # Images (OpenAI vision format)
                 image_urls = _extract_image_urls(msg.content)
                 for url in image_urls:
                     local_path = await _download_file(url)
                     if local_path:
                         image_paths.append(local_path)
-                # Generic file attachments
+
                 file_attachments = _extract_file_attachments(msg.content)
                 for fa in file_attachments:
                     local_path = await _download_file(fa)
@@ -594,13 +768,13 @@ async def create_chat_completion(
             try:
                 await asyncio.sleep(3)
                 from src.chatgpt.detector import extract_last_response_via_copy
+
                 retry_text = await extract_last_response_via_copy(client.page)
                 if retry_text and "[System instruction:" not in retry_text:
                     response_text = retry_text
                     log.info(f"Retry extraction succeeded: {len(response_text)} chars")
                 else:
                     log.warning("Retry extraction still echoed — stripping system prefix")
-                    # Last resort: try to find assistant content after the prompt
                     idx = response_text.rfind("\n\n")
                     if idx > 0:
                         tail = response_text[idx:].strip()
@@ -613,11 +787,13 @@ async def create_chat_completion(
         tool_calls = None
         finish_reason = "stop"
 
+        if request.response_format and response_text:
+            response_text = _normalize_structured_content(response_text, request.response_format)
+
         if request.tools:
             tool_calls = _parse_tool_calls(response_text, request.tools)
             if tool_calls:
                 finish_reason = "tool_calls"
-                # When the model calls tools, content should be null
                 response_text = None
 
         # ── Build response ──────────────────────────────────
@@ -650,3 +826,69 @@ async def create_chat_completion(
         )
 
         return response
+
+
+async def _run_async_chat_job(job_id: str, request: ChatCompletionRequest) -> None:
+    """Background runner for async chat completion jobs."""
+    async with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job is None:
+            return
+        job.status = "running"
+
+    try:
+        response = await _execute_chat_completion(request)
+        async with _jobs_lock:
+            job = _jobs.get(job_id)
+            if job is not None:
+                job.status = "completed"
+                job.response = response
+    except Exception as e:
+        log.error(f"Async chat job failed ({job_id}): {e}", exc_info=True)
+        async with _jobs_lock:
+            job = _jobs.get(job_id)
+            if job is not None:
+                job.status = "failed"
+                job.error = str(e)
+
+
+@openai_router.post("/v1/chat/completions/async", response_model=ChatCompletionJobResponse)
+async def create_chat_completion_async(
+    request: ChatCompletionAsyncRequest,
+) -> ChatCompletionJobResponse:
+    """Submit an async chat completion job and return the job handle."""
+    if request.stream:
+        raise HTTPException(
+            status_code=400,
+            detail="Streaming is not supported. Set stream=false or omit it.",
+        )
+
+    if not request.messages:
+        raise HTTPException(status_code=400, detail="messages array cannot be empty")
+
+    _get_client()
+
+    job_id = f"chatjob-{uuid.uuid4().hex[:24]}"
+    job = ChatCompletionJobResponse(
+        id=job_id,
+        status="queued",
+        model=request.model,
+    )
+
+    async with _jobs_lock:
+        _jobs[job_id] = job
+
+    asyncio.create_task(_run_async_chat_job(job_id, request))
+    return job
+
+
+@openai_router.get("/v1/chat/completions/async/{job_id}", response_model=ChatCompletionJobResponse)
+async def get_chat_completion_async_job(job_id: str) -> ChatCompletionJobResponse:
+    """Get async chat completion job state and result."""
+    async with _jobs_lock:
+        job = _jobs.get(job_id)
+
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    return job

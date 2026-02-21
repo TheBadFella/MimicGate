@@ -196,6 +196,8 @@ Base URL: `http://localhost:8000/v1` — **Model ID:** `catgpt-browser`
 | Method | Path                     | Description                                                                     |
 | ------ | ------------------------ | ------------------------------------------------------------------------------- |
 | `POST` | `/v1/chat/completions`   | Chat completions — tools, images, file attachments supported. **No streaming.** |
+| `POST` | `/v1/chat/completions/async` | Submit async chat job (poll with job ID). Structured output supported.      |
+| `GET`  | `/v1/chat/completions/async/{job_id}` | Get async job status/result (`queued/running/completed/failed`). |
 | `POST` | `/v1/images/generations` | Generate images via DALL-E                                                      |
 | `GET`  | `/v1/models`             | List available models (returns `catgpt-browser`)                                |
 
@@ -216,6 +218,8 @@ Base URL: `http://localhost:8000/v1` — **Model ID:** `catgpt-browser`
 | `GET`  | `/healthz` | Unauthenticated health check (used by Docker too) |
 
 > **Streaming note:** `/v1/chat/completions` actively rejects `stream=true` with a 400 error. This is a fundamental limitation since the browser waits for the full ChatGPT response before returning.
+
+> **Structured output note:** `response_format` is supported for `/v1/chat/completions` and `/v1/chat/completions/async` (including `json_object` and `json_schema`).
 
 ---
 
@@ -244,6 +248,65 @@ curl -X POST http://localhost:8000/v1/chat/completions \
     "model": "catgpt-browser",
     "messages": [{"role": "user", "content": "What is quantum computing?"}]
   }'
+```
+
+---
+
+### Async Chat + Polling
+
+```bash
+# Submit job
+curl -X POST http://localhost:8000/v1/chat/completions/async \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer dummy123" \
+    -d '{
+        "model": "catgpt-browser",
+        "messages": [{"role": "user", "content": "Summarize this in 5 bullets"}]
+    }'
+
+# Response example:
+# {"id":"chatjob-...","status":"queued", ...}
+
+# Poll status/result
+curl -H "Authorization: Bearer dummy123" \
+    http://localhost:8000/v1/chat/completions/async/chatjob-REPLACE_ID
+```
+
+```python
+import time
+import requests
+
+base = "http://localhost:8000/v1"
+headers = {
+    "Authorization": "Bearer dummy123",
+    "Content-Type": "application/json",
+}
+
+submit = requests.post(
+    f"{base}/chat/completions/async",
+    headers=headers,
+    json={
+        "model": "catgpt-browser",
+        "messages": [{"role": "user", "content": "Return only JSON with title and tags"}],
+        "response_format": {"type": "json_object"},
+    },
+    timeout=30,
+)
+submit.raise_for_status()
+job_id = submit.json()["id"]
+
+while True:
+    job = requests.get(
+        f"{base}/chat/completions/async/{job_id}",
+        headers={"Authorization": "Bearer dummy123"},
+        timeout=30,
+    )
+    job.raise_for_status()
+    payload = job.json()
+    if payload["status"] in {"completed", "failed"}:
+        print(payload)
+        break
+    time.sleep(1)
 ```
 
 ---

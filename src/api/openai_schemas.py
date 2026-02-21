@@ -83,6 +83,7 @@ class ChatCompletionRequest(BaseModel):
     stream: Optional[bool] = False
     n: Optional[int] = 1
     user: Optional[str] = None
+    response_format: Optional[Any] = None
 
 
 # ── Response ────────────────────────────────────────────────────
@@ -117,6 +118,21 @@ class ChatCompletionResponse(BaseModel):
     model: str = "catgpt-browser"
     choices: list[Choice]
     usage: UsageInfo = Field(default_factory=UsageInfo)
+
+
+class ChatCompletionAsyncRequest(ChatCompletionRequest):
+    """Async chat request; same payload as chat completion."""
+
+
+class ChatCompletionJobResponse(BaseModel):
+    """Job status/result for async chat completion."""
+    id: str
+    object: str = "chat.completion.job"
+    created: int = Field(default_factory=lambda: int(time.time()))
+    status: str  # queued | running | completed | failed
+    model: str = "catgpt-browser"
+    response: Optional[ChatCompletionResponse] = None
+    error: Optional[str] = None
 
 
 # ── Models endpoint ─────────────────────────────────────────────
