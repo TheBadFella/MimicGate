@@ -217,7 +217,7 @@ class ChatGPTClient:
         Image turns may contain a title/description like:
         "Creating image • Adorable orange tabby kitten close-up"
         """
-        text = await self._page.evaluate("""
+        text = await self._page.evaluate(r"""
             () => {
                 const articles = document.querySelectorAll('article');
                 if (articles.length === 0) return '';
