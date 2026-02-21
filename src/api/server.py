@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.utils import get_openapi
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -153,14 +154,36 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="ChatGPT API",
+    title="CatGPT API",
     description=(
         "Browser automation API for ChatGPT. "
         "Sends messages via browser and returns responses."
     ),
     version="1.0.0",
     lifespan=lifespan,
+    swagger_ui_parameters={"persistAuthorization": True},
 )
+
+
+def _custom_openapi():
+    """Inject BearerAuth security scheme so Swagger UI shows the Authorize button."""
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+    schema.setdefault("components", {})["securitySchemes"] = {
+        "BearerAuth": {"type": "http", "scheme": "bearer"}
+    }
+    schema["security"] = [{"BearerAuth": []}]
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = _custom_openapi
 
 # ── Bearer Token Auth Middleware ────────────────────────────────
 class BearerTokenMiddleware(BaseHTTPMiddleware):
