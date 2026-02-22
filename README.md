@@ -70,7 +70,8 @@ Docker runs the entire stack (virtual display + VNC + browser + API) in one cont
 git clone <repo-url> catgpt && cd catgpt
 
 # 2. Copy environment template
-cp .env.example .env
+# Optional for local (non-Docker) runs: create a .env file with needed values
+# (Docker deployments should configure environment variables in docker-compose.yml)
 
 # 3. Build and start
 docker compose up --build -d catgpt
@@ -656,7 +657,7 @@ catgpt/
 ├── README.md                     ← This file
 ├── requirements.txt              ← Python dependencies
 ├── docker-compose.yml            ← Single-service stack: ports 8000+6080, volumes
-├── .env.example                  ← Environment variables template
+├── .env                          ← Local environment overrides (optional)
 ├── .dockerignore / .gitignore
 │
 ├── docker/

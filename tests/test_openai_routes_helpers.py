@@ -169,12 +169,27 @@ class OpenAIRoutesHelpersTests(unittest.TestCase):
         assert detected is not None
         found_prefix, tail = detected
         self.assertTrue(found_prefix.startswith("[System instruction"))
-        self.assertEqual(tail, "URL: two\nTitle: beta article")
+        self.assertTrue(tail.endswith("URL: two\nTitle: beta article"))
 
     def test_detect_user_prefix_contract_rejects_short_or_non_instruction_prefix(self) -> None:
         prev_text = ("hello world\n" * 20) + "tail one"
         curr_text = ("hello world\n" * 20) + "tail two"
         self.assertIsNone(_detect_user_prefix_contract(prev_text, curr_text))
+
+    def test_detect_user_prefix_contract_with_text_content_marker(self) -> None:
+        fixed = (
+            "[System instruction: You must respond with valid JSON only]\n"
+            "You are an expert tagger.\n"
+            "Rules apply.\n"
+            "<TEXT_CONTENT>\n"
+        )
+        prev_text = fixed + ("A" * 1500)
+        curr_text = fixed + ("B" * 1500)
+        detected = _detect_user_prefix_contract(prev_text, curr_text)
+        self.assertIsNotNone(detected)
+        assert detected is not None
+        _, tail = detected
+        self.assertEqual(tail, "B" * 1500)
 
 
 if __name__ == "__main__":

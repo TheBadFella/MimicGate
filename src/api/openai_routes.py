@@ -375,6 +375,27 @@ def _detect_user_prefix_contract(prev_text: str, curr_text: str) -> tuple[str, s
     if not prev_text or not curr_text:
         return None
 
+    # First, try marker-aware split for instruction + payload formats.
+    # This handles cases where payload body changes heavily while instructions remain fixed.
+    for marker in ("<TEXT_CONTENT>", "<INPUT>", "INPUT:"):
+        i_prev = prev_text.find(marker)
+        i_curr = curr_text.find(marker)
+        if i_prev < 0 or i_curr < 0:
+            continue
+        e_prev = prev_text.find("\n", i_prev)
+        e_curr = curr_text.find("\n", i_curr)
+        if e_prev < 0 or e_curr < 0:
+            continue
+        prefix_prev = prev_text[: e_prev + 1]
+        prefix_curr = curr_text[: e_curr + 1]
+        if prefix_prev != prefix_curr:
+            continue
+        if not _looks_like_instruction_prefix(prefix_prev):
+            continue
+        tail = curr_text[e_curr + 1 :].strip()
+        if len(tail) >= 20:
+            return prefix_prev, tail
+
     lcp_len = _common_prefix_len(prev_text, curr_text)
     if lcp_len < 400:
         return None
@@ -382,8 +403,14 @@ def _detect_user_prefix_contract(prev_text: str, curr_text: str) -> tuple[str, s
     min_len = min(len(prev_text), len(curr_text))
     if min_len <= 0:
         return None
-    if (lcp_len / min_len) < 0.5:
-        return None
+    # Keep conservative ratio by default, but allow low-ratio cases when the
+    # shared prefix itself is very large and instruction-like.
+    ratio = lcp_len / min_len
+    if ratio < 0.5:
+        if lcp_len < 1200:
+            return None
+        if not _looks_like_instruction_prefix(prev_text[:lcp_len]):
+            return None
 
     candidate = prev_text[:lcp_len]
     if "\n" in candidate:
