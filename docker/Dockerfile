@@ -61,7 +61,6 @@ RUN patchright install chromium && patchright install-deps chromium
 # Copy application code
 COPY src/ src/
 COPY scripts/ scripts/
-COPY .env.example .env
 
 # ── Directory setup ─────────────────────────────────────────────
 # These will be overridden by volume mounts in docker-compose

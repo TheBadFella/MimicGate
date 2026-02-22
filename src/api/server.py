@@ -12,6 +12,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -30,6 +31,31 @@ from src.api.openai_routes import openai_router, set_openai_client
 from src.log import setup_logging
 
 log = setup_logging("api_server", log_file="api_server.log")
+
+
+class SuppressHealthyHealthzAccessFilter(logging.Filter):
+    """Hide noisy successful /healthz access logs while keeping failures visible."""
+
+    def filter(self, record: logging.LogRecord) -> bool:  # type: ignore[override]
+        try:
+            message = record.getMessage()
+        except Exception:
+            return True
+
+        if '"GET /healthz' in message and (' 200' in message or ' 204' in message):
+            return False
+        return True
+
+
+def _install_uvicorn_access_filters() -> None:
+    """Attach access-log filters once at process startup."""
+    access_logger = logging.getLogger("uvicorn.access")
+    if any(isinstance(f, SuppressHealthyHealthzAccessFilter) for f in access_logger.filters):
+        return
+    access_logger.addFilter(SuppressHealthyHealthzAccessFilter())
+
+
+_install_uvicorn_access_filters()
 
 # Global instances — needed for lifespan
 _browser: BrowserManager | None = None
