@@ -75,6 +75,9 @@ _APP_KEY_HEADERS = (
     "x-application-name",
     "x-requested-with",
 )
+_THREAD_TITLE_TTL_SECONDS = 600
+_thread_title_lock = asyncio.Lock()
+_thread_titles: dict[str, tuple[float, str]] = {}
 
 
 def set_openai_client(client: ChatGPTClient) -> None:
@@ -240,6 +243,58 @@ def _prune_app_threads(now: float) -> None:
     expired = [app for app, (ts, _) in _app_threads.items() if now - ts > _APP_THREAD_TTL_SECONDS]
     for app in expired:
         _app_threads.pop(app, None)
+
+
+def _prune_thread_titles(now: float) -> None:
+    """Drop expired thread-title mappings."""
+    expired = [tid for tid, (ts, _) in _thread_titles.items() if now - ts > _THREAD_TITLE_TTL_SECONDS]
+    for tid in expired:
+        _thread_titles.pop(tid, None)
+
+
+def _display_app_name(app_key: str) -> str:
+    """Return a human-friendly app name extracted from app routing key."""
+    if not app_key:
+        return "unknown"
+    if app_key.startswith("user:"):
+        return app_key.split(":", 1)[1]
+    if app_key.startswith("hdr:"):
+        parts = app_key.split(":", 2)
+        if len(parts) == 3:
+            return parts[2]
+    if ":" in app_key:
+        return app_key.split(":", 1)[1]
+    return app_key
+
+
+async def _lookup_thread_title(client: ChatGPTClient, thread_id: str) -> str:
+    """Best-effort lookup for a conversation title from sidebar threads."""
+    if not thread_id:
+        return ""
+
+    now = time.time()
+    async with _thread_title_lock:
+        _prune_thread_titles(now)
+        cached = _thread_titles.get(thread_id)
+        if cached:
+            return cached[1]
+
+    try:
+        threads = await client.list_threads()
+    except Exception as e:
+        log.debug(f"Thread title lookup skipped: {e}")
+        return ""
+
+    now = time.time()
+    async with _thread_title_lock:
+        _prune_thread_titles(now)
+        for thread in threads:
+            tid = (thread.get("id") or "").strip()
+            title = (thread.get("title") or "").strip()
+            if tid and title:
+                _thread_titles[tid] = (now, title)
+        matched = _thread_titles.get(thread_id)
+        return matched[1] if matched else ""
 
 
 def _build_contract_reminder_prompt(user_text: str, contract_id: str) -> str:
@@ -1189,7 +1244,9 @@ async def _execute_chat_completion(
     async with _lock:
         start_time = time.time()
         app_key = (app_key_override or "").strip()
+        app_name = _display_app_name(app_key)
         explicit_thread_id = (request.thread_id or "").strip() if getattr(request, "thread_id", None) else ""
+        routing_action = "reuse-current"
         if Config.API_APP_THREAD_MODE and app_key:
             log.info("OpenAI app-thread key: %s", app_key)
 
@@ -1198,6 +1255,9 @@ async def _execute_chat_completion(
             if current_tid != explicit_thread_id:
                 log.info(f"OpenAI route: navigating to explicit thread {explicit_thread_id}")
                 await client.navigate_to_thread(explicit_thread_id)
+                routing_action = "explicit-thread"
+            else:
+                routing_action = "explicit-thread"
         elif Config.API_APP_THREAD_MODE and app_key:
             now_app = time.time()
             mapped_thread = ""
@@ -1211,6 +1271,17 @@ async def _execute_chat_completion(
                 if current_tid != mapped_thread:
                     log.info(f"OpenAI app-thread mode: app='{app_key}' -> thread {mapped_thread}")
                     await client.navigate_to_thread(mapped_thread)
+                    routing_action = "mapped-thread"
+                else:
+                    routing_action = "mapped-thread"
+            else:
+                # First request from this app key: start a new chat so apps do not share context.
+                log.info(
+                    "OpenAI app-thread mode: app='%s' has no mapped thread. New chat will be created before prompt send.",
+                    app_name,
+                )
+                await client.new_chat()
+                routing_action = "new-chat-for-app"
 
         # -- Build the prompt --------------------------------
         messages = list(request.messages)
@@ -1235,6 +1306,15 @@ async def _execute_chat_completion(
         prompt = full_prompt
         used_thread_contract = False
         current_thread_id = client._extract_thread_id()
+        current_chat_name = await _lookup_thread_title(client, current_thread_id) if current_thread_id else ""
+        chat_display = current_chat_name or ("New chat" if not current_thread_id else "Unknown")
+        log.info(
+            "Request context: app=%s, route=%s, thread=%s, chat_name=%s",
+            app_name,
+            routing_action,
+            current_thread_id or "<new>",
+            chat_display,
+        )
         contract_id = ""
 
         if (
@@ -1327,6 +1407,13 @@ async def _execute_chat_completion(
                 async with _app_thread_lock:
                     _prune_app_threads(time.time())
                     _app_threads[app_key] = (time.time(), thread_for_app)
+                thread_title = await _lookup_thread_title(client, thread_for_app)
+                log.info(
+                    "App-thread mapping updated: app=%s -> thread=%s (%s)",
+                    app_name,
+                    thread_for_app,
+                    thread_title or "title unavailable",
+                )
 
         response_text = result.message
         elapsed_ms = int((time.time() - start_time) * 1000)
