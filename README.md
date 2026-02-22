@@ -37,6 +37,7 @@
 11. [Project Structure](#project-structure)
 12. [Docker Internals](#docker-internals)
 13. [How It Works — Deep Dive](#how-it-works--deep-dive)
+   - [Complicated Flows](#complicated-flows)
 14. [Testing](#testing)
 15. [Troubleshooting](#troubleshooting)
 16. [Known Limitations](#known-limitations)
@@ -812,6 +813,87 @@ send_message(text, image_paths, file_paths)
 │       └── Text response → extract_last_response_via_copy() (copy button)
 └── 12. Return ChatResponse(message, thread_id, elapsed_ms, images)
 ```
+
+### Complicated Flows
+
+#### 1) Async Chat Job Lifecycle (`/v1/chat/completions/async`)
+
+```
+POST /v1/chat/completions/async
+│
+├── 1. Validate request and resolve app key (if app-thread mode enabled)
+├── 2. Create job entry: status=queued
+├── 3. Store ownership map: job_id -> app_key
+├── 4. Spawn background task (_run_async_chat_job)
+└── 5. Return job handle immediately
+
+Background task:
+├── 6. Mark job status=running
+├── 7. Execute normal chat pipeline (_execute_chat_completion)
+├── 8a. On success: status=completed + response
+└── 8b. On error:   status=failed + error
+
+GET /v1/chat/completions/async/{job_id}
+└── 9. Poll until completed/failed
+```
+
+#### 2) App-Thread Routing + Isolation
+
+When `API_APP_THREAD_MODE=true`, CatGPT maps each app identity to its own ChatGPT thread:
+
+```
+Incoming request
+│
+├── 1. Derive app key (priority order):
+│      endpoint app name -> request.user -> app headers -> origin/referer
+│      -> user-agent fingerprint -> client IP fallback
+├── 2. Check explicit request.thread_id:
+│      └── If present, navigate there directly (overrides app mapping)
+├── 3. Otherwise, look up app_key -> thread_id mapping
+│      ├── Found: navigate to mapped thread
+│      └── Missing: create a new chat to isolate this app
+├── 4. Execute message send in that thread context
+└── 5. Persist/refresh app_key -> resulting thread_id mapping (TTL-based)
+```
+
+This prevents multiple apps sharing one browser session from contaminating each
+other's context.
+
+#### 3) Thread Contract Compression (Large Instruction Prompts)
+
+When `API_THREAD_CONTRACT_MODE=true`, repeated long instructions are compacted:
+
+```
+Request with system instructions + single user message
+│
+├── 1. Hash normalized system messages -> contract_id
+├── 2. If current thread already learned same contract:
+│      └── Replace full prompt with compact reminder + user payload
+├── 3. Track previous user text in thread
+├── 4. Detect repeated user instruction prefix (if any)
+├── 5. If prefix contract is learned and response_format is active:
+│      └── Use even smaller "user-prefix contract" reminder prompt
+└── 6. On non-JSON result (when structured output requested):
+       fallback retry once with full original prompt
+```
+
+This reduces token-like prompt size while keeping long-lived instruction
+contracts stable across turns.
+
+#### 4) Structured Output + Cardinality Recovery
+
+For `response_format={"type":"json_schema"...}` or `{"type":"json_object"}`:
+
+```
+1. Inject strict structured-output system instruction (if not already present)
+2. Send message and normalize extracted assistant text
+3. Validate output cardinality against request expectation
+4. If mismatch, build retry prompt with expected vs actual counts
+5. Retry once and accept retry if cardinality now matches
+```
+
+This addresses common browser-UI model behavior where valid JSON is returned but
+with the wrong number of items.
 
 ### Response Detection Strategy
 
