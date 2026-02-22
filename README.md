@@ -201,6 +201,11 @@ Base URL: `http://localhost:8000/v1` — **Model ID:** `catgpt-browser`
 | `GET`  | `/v1/chat/completions/async/{job_id}` | Get async job status/result (`queued/running/completed/failed`). |
 | `POST` | `/v1/images/generations` | Generate images via DALL-E                                                      |
 | `GET`  | `/v1/models`             | List available models (returns `catgpt-browser`)                                |
+| `POST` | `/{app_name}/v1/chat/completions` | App-scoped chat completions (derives app from URL path)             |
+| `POST` | `/{app_name}/v1/chat/completions/async` | App-scoped async chat submit                                      |
+| `GET`  | `/{app_name}/v1/chat/completions/async/{job_id}` | App-scoped async status/result                           |
+| `POST` | `/{app_name}/v1/images/generations` | App-scoped image generation                                        |
+| `GET`  | `/{app_name}/v1/models` | App-scoped model list                                                       |
 
 ### Custom REST Endpoints
 
@@ -225,6 +230,10 @@ Base URL: `http://localhost:8000/v1` — **Model ID:** `catgpt-browser`
 > **Response cache note:** `/v1/chat/completions` now includes an in-memory dedup cache for identical requests (TTL: 600s, max entries: 256). Cache hits return a fresh OpenAI-style response envelope (`id`, `created`) with cached content.
 
 > **Prompt assembly note:** single-turn requests now include all provided `system` messages (not just the first one). Tool-mode prompt instructions were compacted to reduce repeated overhead.
+
+> **App URL note:** You can use app-specific base URLs without proxy rewrites. Examples:
+> `http://catgpt:8000/karakeep/v1`, `http://catgpt:8000/mealie/v1`,
+> `http://catgpt:8000/linkwarden/v1`, `http://catgpt:8000/immich/v1`
 
 ---
 

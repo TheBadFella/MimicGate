@@ -115,10 +115,15 @@ async def lifespan(app: FastAPI):
     host = f"http://{Config.API_HOST}:{Config.API_PORT}"
     endpoints = [
         ("POST", f"{host}/v1/chat/completions", "Chat completions"),
+        ("POST", f"{host}/{{app_name}}/v1/chat/completions", "App-scoped chat completions"),
         ("POST", f"{host}/v1/chat/completions/async", "Async chat submit"),
+        ("POST", f"{host}/{{app_name}}/v1/chat/completions/async", "App-scoped async submit"),
         ("GET ", f"{host}/v1/chat/completions/async/{{job_id}}", "Async chat status/result"),
+        ("GET ", f"{host}/{{app_name}}/v1/chat/completions/async/{{job_id}}", "App-scoped async status/result"),
         ("POST", f"{host}/v1/images/generations", "Image generation"),
+        ("POST", f"{host}/{{app_name}}/v1/images/generations", "App-scoped image generation"),
         ("GET ", f"{host}/v1/models", "List models"),
+        ("GET ", f"{host}/{{app_name}}/v1/models", "App-scoped models"),
         ("POST", f"{host}/chat", "Native chat"),
         ("POST", f"{host}/thread/new", "New thread"),
         ("GET ", f"{host}/threads", "List threads"),

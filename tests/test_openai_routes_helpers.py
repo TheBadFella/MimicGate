@@ -84,6 +84,15 @@ class OpenAIRoutesHelpersTests(unittest.TestCase):
         app_key = _derive_app_key(req, http_req)
         self.assertEqual(app_key, "origin:app.example.com")
 
+    def test_derive_app_key_prefers_endpoint_name(self) -> None:
+        req = ChatCompletionRequest(
+            messages=[ChatMessage(role="user", content="hello")],
+            user="karakeep",
+        )
+        http_req = _make_request({"x-app-name": "mealie"})
+        app_key = _derive_app_key(req, http_req, endpoint_app_name="linkwarden")
+        self.assertEqual(app_key, "endpoint:linkwarden")
+
     def test_display_app_name_from_user_key(self) -> None:
         self.assertEqual(_display_app_name("user:karakeep"), "karakeep")
 

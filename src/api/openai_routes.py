@@ -55,6 +55,7 @@ _client: ChatGPTClient | None = None
 _lock = asyncio.Lock()
 _jobs_lock = asyncio.Lock()
 _jobs: dict[str, ChatCompletionJobResponse] = {}
+_job_app_keys: dict[str, str] = {}
 _cache_lock = asyncio.Lock()
 _response_cache: dict[str, tuple[float, ChatCompletionResponse]] = {}
 _contract_lock = asyncio.Lock()
@@ -145,17 +146,26 @@ def _normalize_key_part(value: str) -> str:
     return cleaned[:200]
 
 
-def _derive_app_key(request: ChatCompletionRequest, http_request: Request | None) -> str:
+def _derive_app_key(
+    request: ChatCompletionRequest,
+    http_request: Request | None,
+    endpoint_app_name: str = "",
+) -> str:
     """
     Derive an app routing key for app-thread mode.
 
     Priority:
-    1) explicit OpenAI `user` field
-    2) app-identifying headers
-    3) Origin/Referer host
-    4) User-Agent product token
-    5) client IP (last fallback)
+    1) explicit endpoint app name (/{app_name}/v1/...)
+    2) explicit OpenAI `user` field
+    3) app-identifying headers
+    4) Origin/Referer host
+    5) User-Agent product token
+    6) client IP (last fallback)
     """
+    endpoint_name = (endpoint_app_name or "").strip()
+    if endpoint_name:
+        return f"endpoint:{_normalize_key_part(endpoint_name)}"
+
     explicit_user = (request.user or "").strip() if getattr(request, "user", None) else ""
     if explicit_user:
         return f"user:{_normalize_key_part(explicit_user)}"
@@ -262,6 +272,8 @@ def _display_app_name(app_key: str) -> str:
         parts = app_key.split(":", 2)
         if len(parts) == 3:
             return parts[2]
+    if app_key.startswith("endpoint:"):
+        return app_key.split(":", 1)[1]
     if ":" in app_key:
         return app_key.split(":", 1)[1]
     return app_key
@@ -1084,6 +1096,29 @@ def _build_cardinality_retry_prompt(base_prompt: str, expected: int, actual: int
     )
 
 
+def _validate_chat_request(request: ChatCompletionRequest) -> None:
+    """Shared validation for chat completion request payloads."""
+    if request.stream:
+        raise HTTPException(
+            status_code=400,
+            detail="Streaming is not supported. Set stream=false or omit it.",
+        )
+
+    if not request.messages:
+        raise HTTPException(status_code=400, detail="messages array cannot be empty")
+
+
+def _resolve_app_key(
+    request: ChatCompletionRequest,
+    http_request: Request,
+    endpoint_app_name: str = "",
+) -> str:
+    """Resolve app key when app-thread mode is enabled."""
+    if not Config.API_APP_THREAD_MODE:
+        return ""
+    return _derive_app_key(request, http_request, endpoint_app_name=endpoint_app_name)
+
+
 # -- Routes ------------------------------------------------------
 
 
@@ -1095,6 +1130,13 @@ async def list_models() -> ModelListResponse:
             ModelObject(id=MODEL_ID, owned_by="catgpt"),
         ]
     )
+
+
+@openai_router.get("/{app_name}/v1/models", response_model=ModelListResponse)
+async def list_models_scoped(app_name: str) -> ModelListResponse:
+    """App-scoped alias for model listing."""
+    _ = app_name
+    return await list_models()
 
 
 @openai_router.post("/v1/images/generations", response_model=ImagesResponse)
@@ -1208,6 +1250,16 @@ async def create_image(
         return ImagesResponse(data=image_data_list)
 
 
+@openai_router.post("/{app_name}/v1/images/generations", response_model=ImagesResponse)
+async def create_image_scoped(
+    app_name: str,
+    request: ImageGenerationRequest,
+) -> ImagesResponse:
+    """App-scoped alias for image generation."""
+    _ = app_name
+    return await create_image(request)
+
+
 @openai_router.post("/v1/chat/completions", response_model=ChatCompletionResponse)
 async def create_chat_completion(
     request: ChatCompletionRequest,
@@ -1220,17 +1272,20 @@ async def create_chat_completion(
     via browser automation, and returns an OpenAI-formatted response.
     Supports tool/function calling via prompt injection.
     """
-    # -- Validate --------------------------------------------
-    if request.stream:
-        raise HTTPException(
-            status_code=400,
-            detail="Streaming is not supported. Set stream=false or omit it.",
-        )
+    _validate_chat_request(request)
+    app_key = _resolve_app_key(request, http_request)
+    return await _execute_chat_completion(request, app_key_override=app_key)
 
-    if not request.messages:
-        raise HTTPException(status_code=400, detail="messages array cannot be empty")
 
-    app_key = _derive_app_key(request, http_request) if Config.API_APP_THREAD_MODE else ""
+@openai_router.post("/{app_name}/v1/chat/completions", response_model=ChatCompletionResponse)
+async def create_chat_completion_scoped(
+    app_name: str,
+    request: ChatCompletionRequest,
+    http_request: Request,
+) -> ChatCompletionResponse:
+    """App-scoped alias for chat completions (maps app name from URL path)."""
+    _validate_chat_request(request)
+    app_key = _resolve_app_key(request, http_request, endpoint_app_name=app_name)
     return await _execute_chat_completion(request, app_key_override=app_key)
 
 
@@ -1555,22 +1610,16 @@ async def _run_async_chat_job(job_id: str, request: ChatCompletionRequest, app_k
                 job.error = str(e)
 
 
-@openai_router.post("/v1/chat/completions/async", response_model=ChatCompletionJobResponse)
-async def create_chat_completion_async(
+async def _submit_async_chat_job(
     request: ChatCompletionAsyncRequest,
     http_request: Request,
+    endpoint_app_name: str = "",
 ) -> ChatCompletionJobResponse:
-    """Submit an async chat completion job and return the job handle."""
-    if request.stream:
-        raise HTTPException(
-            status_code=400,
-            detail="Streaming is not supported. Set stream=false or omit it.",
-        )
-
-    if not request.messages:
-        raise HTTPException(status_code=400, detail="messages array cannot be empty")
-
+    """Shared async chat submit logic for generic and app-scoped routes."""
+    _validate_chat_request(request)
     _get_client()
+
+    app_key = _resolve_app_key(request, http_request, endpoint_app_name=endpoint_app_name)
 
     job_id = f"chatjob-{uuid.uuid4().hex[:24]}"
     job = ChatCompletionJobResponse(
@@ -1581,10 +1630,29 @@ async def create_chat_completion_async(
 
     async with _jobs_lock:
         _jobs[job_id] = job
+        _job_app_keys[job_id] = app_key
 
-    app_key = _derive_app_key(request, http_request) if Config.API_APP_THREAD_MODE else ""
     asyncio.create_task(_run_async_chat_job(job_id, request, app_key))
     return job
+
+
+@openai_router.post("/v1/chat/completions/async", response_model=ChatCompletionJobResponse)
+async def create_chat_completion_async(
+    request: ChatCompletionAsyncRequest,
+    http_request: Request,
+) -> ChatCompletionJobResponse:
+    """Submit an async chat completion job and return the job handle."""
+    return await _submit_async_chat_job(request, http_request)
+
+
+@openai_router.post("/{app_name}/v1/chat/completions/async", response_model=ChatCompletionJobResponse)
+async def create_chat_completion_async_scoped(
+    app_name: str,
+    request: ChatCompletionAsyncRequest,
+    http_request: Request,
+) -> ChatCompletionJobResponse:
+    """App-scoped alias for async chat submit."""
+    return await _submit_async_chat_job(request, http_request, endpoint_app_name=app_name)
 
 
 @openai_router.get("/v1/chat/completions/async/{job_id}", response_model=ChatCompletionJobResponse)
@@ -1594,6 +1662,31 @@ async def get_chat_completion_async_job(job_id: str) -> ChatCompletionJobRespons
         job = _jobs.get(job_id)
 
     if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    return job
+
+
+@openai_router.get("/{app_name}/v1/chat/completions/async/{job_id}", response_model=ChatCompletionJobResponse)
+async def get_chat_completion_async_job_scoped(
+    app_name: str,
+    job_id: str,
+) -> ChatCompletionJobResponse:
+    """
+    App-scoped alias for async chat status/result.
+
+    Enforces app/job ownership so parallel apps cannot read each other's jobs.
+    """
+    expected_key = f"endpoint:{_normalize_key_part(app_name)}"
+
+    async with _jobs_lock:
+        job = _jobs.get(job_id)
+        job_key = _job_app_keys.get(job_id, "")
+
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job_key and job_key != expected_key:
         raise HTTPException(status_code=404, detail="Job not found")
 
     return job
