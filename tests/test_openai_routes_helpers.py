@@ -35,9 +35,11 @@ if "playwright_stealth" not in sys.modules:
     sys.modules["playwright_stealth"] = playwright_stealth_mod
 
 from src.api.openai_routes import (
+    _detect_user_prefix_contract,
     _display_app_name,
     _derive_app_key,
     _infer_expected_item_count,
+    _looks_like_instruction_prefix,
     _merge_header_rows_in_array,
     _should_use_line_cardinality_fallback,
 )
@@ -142,6 +144,37 @@ class OpenAIRoutesHelpersTests(unittest.TestCase):
         self.assertEqual(len(merged), 1)
         self.assertEqual(merged[0]["food"], "chapattis")
         self.assertEqual(merged[0]["note"], "TO SERVE")
+
+    def test_instruction_prefix_heuristic_detects_prompt_markers(self) -> None:
+        text = (
+            "[System instruction: You must respond with valid JSON only]\n"
+            "Follow it strictly.\n"
+            "<TEXT_CONTENT>\n"
+        )
+        self.assertTrue(_looks_like_instruction_prefix(text))
+
+    def test_detect_user_prefix_contract_finds_large_shared_prefix(self) -> None:
+        prefix = (
+            "[System instruction: You must respond with valid JSON only]\n"
+            "You are an expert tagger.\n"
+            "Follow it strictly.\n"
+            "<TEXT_CONTENT>\n"
+            + ("A" * 500)
+            + "\n"
+        )
+        prev_text = prefix + "URL: one\nTitle: alpha article"
+        curr_text = prefix + "URL: two\nTitle: beta article"
+        detected = _detect_user_prefix_contract(prev_text, curr_text)
+        self.assertIsNotNone(detected)
+        assert detected is not None
+        found_prefix, tail = detected
+        self.assertTrue(found_prefix.startswith("[System instruction"))
+        self.assertEqual(tail, "URL: two\nTitle: beta article")
+
+    def test_detect_user_prefix_contract_rejects_short_or_non_instruction_prefix(self) -> None:
+        prev_text = ("hello world\n" * 20) + "tail one"
+        curr_text = ("hello world\n" * 20) + "tail two"
+        self.assertIsNone(_detect_user_prefix_contract(prev_text, curr_text))
 
 
 if __name__ == "__main__":

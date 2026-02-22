@@ -60,6 +60,8 @@ _cache_lock = asyncio.Lock()
 _response_cache: dict[str, tuple[float, ChatCompletionResponse]] = {}
 _contract_lock = asyncio.Lock()
 _thread_contracts: dict[str, tuple[float, str]] = {}
+_thread_user_contracts: dict[str, tuple[float, str, str]] = {}
+_thread_last_user_text: dict[str, tuple[float, str]] = {}
 _app_thread_lock = asyncio.Lock()
 _app_threads: dict[str, tuple[float, str]] = {}
 
@@ -246,6 +248,12 @@ def _prune_thread_contracts(now: float) -> None:
     expired = [tid for tid, (ts, _) in _thread_contracts.items() if now - ts > _CONTRACT_TTL_SECONDS]
     for tid in expired:
         _thread_contracts.pop(tid, None)
+    expired_user = [tid for tid, (ts, _, _) in _thread_user_contracts.items() if now - ts > _CONTRACT_TTL_SECONDS]
+    for tid in expired_user:
+        _thread_user_contracts.pop(tid, None)
+    expired_last = [tid for tid, (ts, _) in _thread_last_user_text.items() if now - ts > _CONTRACT_TTL_SECONDS]
+    for tid in expired_last:
+        _thread_last_user_text.pop(tid, None)
 
 
 def _prune_app_threads(now: float) -> None:
@@ -316,6 +324,93 @@ def _build_contract_reminder_prompt(user_text: str, contract_id: str) -> str:
         f"[Contract {short_id}] Reuse the established instructions for this thread exactly.\n\n"
         f"{user_text}"
     )
+
+
+def _build_user_contract_reminder_prompt(user_tail: str, contract_id: str, user_contract_id: str) -> str:
+    """Compact prompt that reuses both system and repeated user-prefix instructions."""
+    sys_id = contract_id[:12] if contract_id else "none"
+    usr_id = user_contract_id[:12]
+    return (
+        f"[Contract {sys_id}/{usr_id}] Reuse the established instructions for this thread exactly. "
+        f"Apply them to the new payload only.\n\n"
+        f"{user_tail}"
+    )
+
+
+def _common_prefix_len(a: str, b: str) -> int:
+    """Return the length of the common prefix between two strings."""
+    n = min(len(a), len(b))
+    i = 0
+    while i < n and a[i] == b[i]:
+        i += 1
+    return i
+
+
+def _looks_like_instruction_prefix(prefix: str) -> bool:
+    """
+    Heuristic: detect instruction-heavy prefix text.
+
+    Keeps optimization conservative so we avoid compressing arbitrary repeated prose.
+    """
+    normalized = _normalize_instruction_text(prefix)
+    markers = (
+        "[system instruction",
+        "you must respond",
+        "respond in json",
+        "follow it strictly",
+        "rules are",
+        "json-schema",
+        "$schema",
+        "<text_content>",
+    )
+    return any(m in normalized for m in markers)
+
+
+def _detect_user_prefix_contract(prev_text: str, curr_text: str) -> tuple[str, str] | None:
+    """
+    Detect a repeated leading user instruction block.
+
+    Returns (prefix, tail) when confident; otherwise None.
+    """
+    if not prev_text or not curr_text:
+        return None
+
+    lcp_len = _common_prefix_len(prev_text, curr_text)
+    if lcp_len < 400:
+        return None
+
+    min_len = min(len(prev_text), len(curr_text))
+    if min_len <= 0:
+        return None
+    if (lcp_len / min_len) < 0.5:
+        return None
+
+    candidate = prev_text[:lcp_len]
+    if "\n" in candidate:
+        newline_idx = candidate.rfind("\n")
+        if newline_idx >= 200:
+            candidate = candidate[: newline_idx + 1]
+
+    tail = curr_text[len(candidate) :].strip()
+    if len(tail) < 20:
+        return None
+    if not _looks_like_instruction_prefix(candidate):
+        return None
+
+    return candidate, tail
+
+
+def _user_contract_hash(system_texts: list[str], user_prefix: str) -> str:
+    """Stable hash for combined system+user-prefix instruction contract."""
+    canonical = json.dumps(
+        {
+            "system": [_normalize_instruction_text(t) for t in system_texts if t.strip()],
+            "user_prefix": _normalize_instruction_text(user_prefix),
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _extract_content_text(content) -> str:
@@ -1360,6 +1455,7 @@ async def _execute_chat_completion(
         full_prompt = _build_prompt(messages)
         prompt = full_prompt
         used_thread_contract = False
+        used_user_contract = False
         current_thread_id = client._extract_thread_id()
         current_chat_name = await _lookup_thread_title(client, current_thread_id) if current_thread_id else ""
         chat_display = current_chat_name or ("New chat" if not current_thread_id else "Unknown")
@@ -1371,6 +1467,8 @@ async def _execute_chat_completion(
             chat_display,
         )
         contract_id = ""
+        user_contract_id = ""
+        user_text = _extract_content_text(non_system[0].content) if len(non_system) == 1 else ""
 
         if (
             Config.API_THREAD_CONTRACT_MODE
@@ -1385,10 +1483,36 @@ async def _execute_chat_completion(
                     _prune_thread_contracts(now_contract)
                     known = _thread_contracts.get(current_thread_id)
                     if known and known[1] == contract_id:
-                        user_text = _extract_content_text(non_system[0].content)
                         prompt = _build_contract_reminder_prompt(user_text, contract_id)
                         used_thread_contract = True
                         _thread_contracts[current_thread_id] = (now_contract, contract_id)
+
+                    # Learn repeated user-instruction prefixes across turns.
+                    prev_user = _thread_last_user_text.get(current_thread_id)
+                    detected_prefix = None
+                    if prev_user:
+                        detected_prefix = _detect_user_prefix_contract(prev_user[1], user_text)
+                    if detected_prefix:
+                        prefix, tail = detected_prefix
+                        candidate_user_contract_id = _user_contract_hash(system_texts, prefix)
+                        known_user = _thread_user_contracts.get(current_thread_id)
+                        if known_user and known_user[1] == candidate_user_contract_id and request.response_format:
+                            prompt = _build_user_contract_reminder_prompt(
+                                tail,
+                                contract_id,
+                                candidate_user_contract_id,
+                            )
+                            used_user_contract = True
+                            used_thread_contract = False
+                        # Store/refresh learned prefix contract for future turns.
+                        _thread_user_contracts[current_thread_id] = (
+                            now_contract,
+                            candidate_user_contract_id,
+                            prefix,
+                        )
+                        user_contract_id = candidate_user_contract_id
+
+                    _thread_last_user_text[current_thread_id] = (now_contract, user_text)
 
         system_chars = sum(len(_extract_content_text(m.content)) for m in messages if m.role == "system")
         user_chars = sum(len(_extract_content_text(m.content)) for m in messages if m.role == "user")
@@ -1407,6 +1531,12 @@ async def _execute_chat_completion(
         )
         if used_thread_contract:
             log.info("Thread contract mode: compact prompt used for thread=%s", current_thread_id or "unknown")
+        if used_user_contract:
+            log.info(
+                "User prefix contract mode: compact prompt used for thread=%s contract=%s",
+                current_thread_id or "unknown",
+                user_contract_id[:12] if user_contract_id else "unknown",
+            )
 
         cache_key = _cache_key_for_request_with_app(request, app_key)
         now = time.time()
@@ -1455,6 +1585,9 @@ async def _execute_chat_completion(
                 async with _contract_lock:
                     _prune_thread_contracts(time.time())
                     _thread_contracts[thread_for_contract] = (time.time(), contract_id)
+                    # Refresh user text tracking on resolved thread id too.
+                    if user_text:
+                        _thread_last_user_text[thread_for_contract] = (time.time(), user_text)
 
         if Config.API_APP_THREAD_MODE and app_key:
             thread_for_app = result.thread_id or client._extract_thread_id()
@@ -1473,8 +1606,9 @@ async def _execute_chat_completion(
         response_text = result.message
         elapsed_ms = int((time.time() - start_time) * 1000)
 
-        if used_thread_contract and request.response_format and _extract_json_payload(response_text) is None:
-            log.warning("Thread contract mode produced non-JSON content. Retrying once with full prompt.")
+        if (used_thread_contract or used_user_contract) and request.response_format and _extract_json_payload(response_text) is None:
+            mode_name = "user-prefix contract" if used_user_contract else "thread contract"
+            log.warning("%s mode produced non-JSON content. Retrying once with full prompt.", mode_name.capitalize())
             try:
                 full_retry = await client.send_message(
                     full_prompt,
