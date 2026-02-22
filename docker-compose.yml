@@ -1,7 +1,7 @@
 services:
   # CatGPT Gateway - Enhanced Container Mock for Chat Apps
   catgpt:
-    image: ghcr.io/thebadfella/catgpt:latest
+    image: g
     container_name: catgpt
     security_opt:
       - seccomp=unconfined

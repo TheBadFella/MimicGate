@@ -17,9 +17,10 @@ import json
 import re
 import time
 import uuid
+from urllib.parse import urlparse
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from src.api.openai_schemas import (
     ChatCompletionAsyncRequest,
@@ -66,6 +67,14 @@ _CACHE_TTL_SECONDS = 600
 _CACHE_MAX_ENTRIES = 256
 _CONTRACT_TTL_SECONDS = max(60, Config.API_THREAD_CONTRACT_TTL_SECONDS)
 _APP_THREAD_TTL_SECONDS = max(300, Config.API_APP_THREAD_TTL_SECONDS)
+_APP_KEY_HEADERS = (
+    "x-catgpt-app-key",
+    "x-app-name",
+    "x-client-name",
+    "x-service-name",
+    "x-application-name",
+    "x-requested-with",
+)
 
 
 def set_openai_client(client: ChatGPTClient) -> None:
@@ -102,16 +111,85 @@ def _shrink_for_cache(value: Any) -> Any:
     return value
 
 
-def _cache_key_for_request(request: ChatCompletionRequest) -> str:
+def _cache_key_for_request_with_app(request: ChatCompletionRequest, app_key: str) -> str:
     """
-    Build a stable cache key for semantic request identity.
+    Build a stable cache key with optional app partitioning.
 
-    `stream` and `user` are excluded because they do not change prompt content.
+    When app-thread mode is enabled, app-specific thread context can affect output,
+    so app key must be part of the cache identity to avoid cross-app cache reuse.
     """
     payload = request.model_dump(mode="json", exclude={"stream", "user"})
+    if Config.API_APP_THREAD_MODE and app_key:
+        payload["_app_key"] = app_key
     compact_payload = _shrink_for_cache(payload)
     canonical = json.dumps(compact_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _host_from_header_url(value: str) -> str:
+    """Extract normalized host:port from URL-like header values."""
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    parsed = urlparse(raw)
+    host = (parsed.netloc or parsed.path or "").strip().lower()
+    return host
+
+
+def _normalize_key_part(value: str) -> str:
+    """Normalize user/header-derived key parts for stable app routing keys."""
+    cleaned = re.sub(r"\s+", " ", (value or "").strip().lower())
+    return cleaned[:200]
+
+
+def _derive_app_key(request: ChatCompletionRequest, http_request: Request | None) -> str:
+    """
+    Derive an app routing key for app-thread mode.
+
+    Priority:
+    1) explicit OpenAI `user` field
+    2) app-identifying headers
+    3) Origin/Referer host
+    4) User-Agent product token
+    5) client IP (last fallback)
+    """
+    explicit_user = (request.user or "").strip() if getattr(request, "user", None) else ""
+    if explicit_user:
+        return f"user:{_normalize_key_part(explicit_user)}"
+
+    if http_request is None:
+        return ""
+
+    headers = http_request.headers
+
+    for header_name in _APP_KEY_HEADERS:
+        value = (headers.get(header_name) or "").strip()
+        if value:
+            return f"hdr:{header_name}:{_normalize_key_part(value)}"
+
+    origin_host = _host_from_header_url(headers.get("origin", ""))
+    if origin_host:
+        return f"origin:{origin_host}"
+
+    referer_host = _host_from_header_url(headers.get("referer", ""))
+    if referer_host:
+        return f"referer:{referer_host}"
+
+    user_agent = (headers.get("user-agent") or "").strip()
+    if user_agent:
+        first_token = user_agent.split()[0].strip()
+        product = first_token.split("/", 1)[0].strip().lower()
+        if product and product != "mozilla":
+            return f"ua:{_normalize_key_part(product)}"
+        ua_hash = hashlib.sha256(user_agent.encode("utf-8")).hexdigest()[:16]
+        return f"ua_hash:{ua_hash}"
+
+    client_host = (http_request.client.host if http_request.client else "") or ""
+    client_host = client_host.strip()
+    if client_host:
+        return f"ip:{client_host}"
+
+    return ""
 
 
 def _clone_cached_response(cached: ChatCompletionResponse) -> ChatCompletionResponse:
@@ -832,7 +910,8 @@ def _infer_expected_item_count(messages: list[ChatMessage]) -> int | None:
 
     Strategy:
     1) If user content is JSON, infer from its primary array cardinality.
-    2) Otherwise, fallback to counting non-empty text lines.
+    2) Otherwise, fallback to line counting only when input appears to be
+       a compact line-item list (not an instruction-heavy prompt).
     """
     text = _latest_user_text(messages)
     if not text:
@@ -845,7 +924,10 @@ def _infer_expected_item_count(messages: list[ChatMessage]) -> int | None:
         if json_count is not None and json_count >= 1:
             return json_count
 
-    # Fallback: line-oriented plain text payloads.
+    # Heuristic fallback: only for line-item style prompts.
+    if not _should_use_line_cardinality_fallback(text):
+        return None
+
     count = 0
     for line in text.splitlines():
         cleaned = re.sub(r"^\s*(?:[-*]|\d+[.)])\s*", "", line).strip()
@@ -853,6 +935,53 @@ def _infer_expected_item_count(messages: list[ChatMessage]) -> int | None:
             count += 1
 
     return count if count >= 2 else None
+
+
+def _should_use_line_cardinality_fallback(text: str) -> bool:
+    """
+    Decide whether plain-text line-count cardinality fallback is safe.
+
+    Avoids instruction-heavy prompts (schemas, long docs, embedded templates)
+    where line count does not represent expected output cardinality.
+    """
+    lower = (text or "").lower()
+    if not lower:
+        return False
+
+    # Strong signals this is an instruction/template payload, not line items.
+    instruction_markers = (
+        "[system instruction",
+        "[system instructions",
+        "you must respond with valid json only",
+        "$schema",
+        "json-schema.org",
+        "<text_content>",
+        "table of contents",
+        "project structure",
+        "architecture",
+    )
+    if any(marker in lower for marker in instruction_markers):
+        return False
+
+    lines: list[str] = []
+    short_lines = 0
+    for line in text.splitlines():
+        cleaned = re.sub(r"^\s*(?:[-*]|\d+[.)])\s*", "", line).strip()
+        if not cleaned:
+            continue
+        lines.append(cleaned)
+        if len(cleaned) <= 120:
+            short_lines += 1
+
+    if len(lines) < 2:
+        return False
+
+    # Very large/verbose payloads are likely instructions or article content.
+    if len(text) > 2000 or len(lines) > 40:
+        return False
+
+    # Require mostly short item-like lines.
+    return (short_lines / len(lines)) >= 0.8
 
 
 def _infer_primary_array_count(payload: Any) -> int | None:
@@ -1027,6 +1156,7 @@ async def create_image(
 @openai_router.post("/v1/chat/completions", response_model=ChatCompletionResponse)
 async def create_chat_completion(
     request: ChatCompletionRequest,
+    http_request: Request,
 ) -> ChatCompletionResponse:
     """
     OpenAI-compatible chat completions endpoint.
@@ -1045,17 +1175,23 @@ async def create_chat_completion(
     if not request.messages:
         raise HTTPException(status_code=400, detail="messages array cannot be empty")
 
-    return await _execute_chat_completion(request)
+    app_key = _derive_app_key(request, http_request) if Config.API_APP_THREAD_MODE else ""
+    return await _execute_chat_completion(request, app_key_override=app_key)
 
 
-async def _execute_chat_completion(request: ChatCompletionRequest) -> ChatCompletionResponse:
+async def _execute_chat_completion(
+    request: ChatCompletionRequest,
+    app_key_override: str = "",
+) -> ChatCompletionResponse:
     """Shared sync/async executor for chat completions."""
     client = _get_client()
 
     async with _lock:
         start_time = time.time()
-        app_key = (request.user or "").strip() if request.user else ""
+        app_key = (app_key_override or "").strip()
         explicit_thread_id = (request.thread_id or "").strip() if getattr(request, "thread_id", None) else ""
+        if Config.API_APP_THREAD_MODE and app_key:
+            log.info("OpenAI app-thread key: %s", app_key)
 
         if explicit_thread_id:
             current_tid = client._extract_thread_id()
@@ -1137,7 +1273,7 @@ async def _execute_chat_completion(request: ChatCompletionRequest) -> ChatComple
         if used_thread_contract:
             log.info("Thread contract mode: compact prompt used for thread=%s", current_thread_id or "unknown")
 
-        cache_key = _cache_key_for_request(request)
+        cache_key = _cache_key_for_request_with_app(request, app_key)
         now = time.time()
         async with _cache_lock:
             _prune_cache(now)
@@ -1308,7 +1444,7 @@ async def _execute_chat_completion(request: ChatCompletionRequest) -> ChatComple
         return response
 
 
-async def _run_async_chat_job(job_id: str, request: ChatCompletionRequest) -> None:
+async def _run_async_chat_job(job_id: str, request: ChatCompletionRequest, app_key: str = "") -> None:
     """Background runner for async chat completion jobs."""
     async with _jobs_lock:
         job = _jobs.get(job_id)
@@ -1317,7 +1453,7 @@ async def _run_async_chat_job(job_id: str, request: ChatCompletionRequest) -> No
         job.status = "running"
 
     try:
-        response = await _execute_chat_completion(request)
+        response = await _execute_chat_completion(request, app_key_override=app_key)
         async with _jobs_lock:
             job = _jobs.get(job_id)
             if job is not None:
@@ -1335,6 +1471,7 @@ async def _run_async_chat_job(job_id: str, request: ChatCompletionRequest) -> No
 @openai_router.post("/v1/chat/completions/async", response_model=ChatCompletionJobResponse)
 async def create_chat_completion_async(
     request: ChatCompletionAsyncRequest,
+    http_request: Request,
 ) -> ChatCompletionJobResponse:
     """Submit an async chat completion job and return the job handle."""
     if request.stream:
@@ -1358,7 +1495,8 @@ async def create_chat_completion_async(
     async with _jobs_lock:
         _jobs[job_id] = job
 
-    asyncio.create_task(_run_async_chat_job(job_id, request))
+    app_key = _derive_app_key(request, http_request) if Config.API_APP_THREAD_MODE else ""
+    asyncio.create_task(_run_async_chat_job(job_id, request, app_key))
     return job
 
 
