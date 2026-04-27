@@ -8,7 +8,7 @@ typer>=0.12
 rich>=13.0
 
 # API (Phase 3)
-fastapi>=0.115
+fastapi>=0.136.1
 uvicorn>=0.32
 
 # Data & Config
