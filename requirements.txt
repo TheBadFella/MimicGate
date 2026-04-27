@@ -13,7 +13,7 @@ uvicorn>=0.32
 
 # Data & Config
 pydantic>=2.5
-python-dotenv>=1.0
+python-dotenv>=1.2.2
 
 # OpenAI-compatible testing
 openai>=1.0
