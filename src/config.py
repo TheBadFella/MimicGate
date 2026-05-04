@@ -26,6 +26,12 @@ class Config:
     HEADLESS: bool = os.getenv("HEADLESS", "false").lower() == "true"
     SLOW_MO: int = int(os.getenv("SLOW_MO", "50"))
     CHATGPT_URL: str = os.getenv("CHATGPT_URL", "https://chatgpt.com")
+    CHATGPT_DEFAULT_MODEL: str = os.getenv("CHATGPT_DEFAULT_MODEL", "")
+    CHATGPT_MODEL_ALIASES: str = os.getenv(
+        "CHATGPT_MODEL_ALIASES",
+        "gpt-5.5=GPT-5.5,gpt-5.5-pro=GPT-5.5 pro,gpt-5.4=GPT-5.4,gpt-5.4-pro=GPT-5.4 pro,gpt-5.4-mini=GPT-5.4 mini,gpt-5.4-nano=GPT-5.4 nano,gpt-5-mini=GPT-5 mini,gpt-5-nano=GPT-5 nano,gpt-5=GPT-5,gpt-5.3=GPT-5.3,o3=o3,o4-mini=o4-mini,gpt-4.5=GPT-4.5,gpt-4.1=GPT-4.1,gpt-4.1-mini=GPT-4.1 mini,gpt-4o=GPT-4o",
+    )
+    CHATGPT_MODEL_SWITCH_TIMEOUT: int = int(os.getenv("CHATGPT_MODEL_SWITCH_TIMEOUT", "10000"))
 
     # Timeouts (ms)
     RESPONSE_TIMEOUT: int = int(os.getenv("RESPONSE_TIMEOUT", "120000"))

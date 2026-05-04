@@ -41,6 +41,11 @@ from src.api.openai_schemas import (
     UsageInfo,
 )
 from src.chatgpt.client import ChatGPTClient
+from src.chatgpt.model_registry import (
+    PUBLIC_BROWSER_MODEL_ID,
+    is_supported_chat_model,
+    list_public_chat_models,
+)
 from src.config import Config
 from src.log import setup_logging
 
@@ -65,7 +70,7 @@ _thread_last_user_text: dict[str, tuple[float, str]] = {}
 _app_thread_lock = asyncio.Lock()
 _app_threads: dict[str, tuple[float, str]] = {}
 
-MODEL_ID = "catgpt-browser"
+MODEL_ID = PUBLIC_BROWSER_MODEL_ID
 _CACHE_TTL_SECONDS = 600
 _CACHE_MAX_ENTRIES = 256
 _CONTRACT_TTL_SECONDS = max(60, Config.API_THREAD_CONTRACT_TTL_SECONDS)
@@ -1229,6 +1234,13 @@ def _validate_chat_request(request: ChatCompletionRequest) -> None:
     if not request.messages:
         raise HTTPException(status_code=400, detail="messages array cannot be empty")
 
+    if not is_supported_chat_model(request.model):
+        supported = ", ".join(list_public_chat_models())
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported model '{request.model}'. Supported models: {supported}",
+        )
+
 
 def _resolve_app_key(
     request: ChatCompletionRequest,
@@ -1246,11 +1258,9 @@ def _resolve_app_key(
 
 @openai_router.get("/v1/models", response_model=ModelListResponse)
 async def list_models() -> ModelListResponse:
-    """List available models - returns our single browser-backed model."""
+    """List available browser-backed chat model ids."""
     return ModelListResponse(
-        data=[
-            ModelObject(id=MODEL_ID, owned_by="catgpt"),
-        ]
+        data=[ModelObject(id=model_id, owned_by="catgpt") for model_id in list_public_chat_models()]
     )
 
 
@@ -1601,6 +1611,7 @@ async def _execute_chat_completion(
                 prompt,
                 image_paths=image_paths or None,
                 file_paths=file_paths or None,
+                model=request.model,
             )
         except Exception as e:
             log.error(f"ChatGPT error: {e}", exc_info=True)
@@ -1641,6 +1652,7 @@ async def _execute_chat_completion(
                     full_prompt,
                     image_paths=image_paths or None,
                     file_paths=file_paths or None,
+                    model=request.model,
                 )
                 response_text = full_retry.message
                 elapsed_ms = int((time.time() - start_time) * 1000)
@@ -1688,6 +1700,7 @@ async def _execute_chat_completion(
                         retry_prompt,
                         image_paths=image_paths or None,
                         file_paths=file_paths or None,
+                        model=request.model,
                     )
                     retry_text = retry_result.message
                     retry_text = _normalize_structured_content(retry_text, request.response_format)
