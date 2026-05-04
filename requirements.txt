@@ -3,7 +3,7 @@ patchright>=1.58
 playwright-stealth>=2.0.3
 
 # TUI (Phase 2)
-textual>=0.85
+textual>=8.2.4
 typer>=0.12
 rich>=13.0
 
