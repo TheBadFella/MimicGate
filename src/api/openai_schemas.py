@@ -68,6 +68,11 @@ class ChatMessage(BaseModel):
 # ── Request ─────────────────────────────────────────────────────
 
 
+class PageExtractionOptions(BaseModel):
+    """CatGPT extension for structured page-by-page document extraction."""
+    mode: str = "structured"
+
+
 class ChatCompletionRequest(BaseModel):
     """OpenAI-compatible chat completion request body."""
     model: str = "catgpt-browser"
@@ -86,6 +91,8 @@ class ChatCompletionRequest(BaseModel):
     # CatGPT extension: explicit thread targeting for app-level isolation.
     thread_id: Optional[str] = None
     response_format: Optional[Any] = None
+    # CatGPT extension: force structured page-by-page extraction for attachments.
+    page_extraction: Optional[PageExtractionOptions] = None
 
 
 # ── Response ────────────────────────────────────────────────────

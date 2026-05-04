@@ -40,6 +40,12 @@ from src.api.openai_schemas import (
     ToolDefinition,
     UsageInfo,
 )
+from src.api.attachment_expander import (
+    AttachmentPageDescriptor,
+    build_attachment_context_note,
+    expand_attachments_for_chatgpt,
+)
+from src.api.browser_gate import browser_access_lock
 from src.chatgpt.client import ChatGPTClient
 from src.chatgpt.model_registry import (
     PUBLIC_BROWSER_MODEL_ID,
@@ -56,8 +62,6 @@ openai_router = APIRouter()
 # Global reference - set by server.py at startup
 _client: ChatGPTClient | None = None
 
-# Serialize all requests - single browser page, not thread-safe
-_lock = asyncio.Lock()
 _jobs_lock = asyncio.Lock()
 _jobs: dict[str, ChatCompletionJobResponse] = {}
 _job_app_keys: dict[str, str] = {}
@@ -627,7 +631,7 @@ async def _download_file(url_or_data: str | dict, download_dir: str = "/tmp/catg
                 mime = header.split(":")[1].split(";")[0]
             ext_map = {
                 "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp",
-                "image/gif": "gif", "application/pdf": "pdf",
+                "image/gif": "gif", "image/tiff": "tiff", "application/pdf": "pdf",
                 "text/plain": "txt", "text/csv": "csv",
                 "application/json": "json",
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
@@ -648,7 +652,7 @@ async def _download_file(url_or_data: str | dict, download_dir: str = "/tmp/catg
         try:
             import urllib.request
             ext = "bin"
-            for e in ["jpg", "jpeg", "webp", "gif", "png", "pdf", "txt", "csv", "docx", "xlsx"]:
+            for e in ["jpg", "jpeg", "webp", "gif", "png", "tif", "tiff", "pdf", "txt", "csv", "docx", "xlsx"]:
                 if e in url.lower():
                     ext = e
                     break
@@ -863,6 +867,71 @@ def _build_response_format_system_prompt(response_format: Any) -> str | None:
         )
 
     return None
+
+
+def _page_extraction_mode(request: ChatCompletionRequest) -> str:
+    """Normalize the requested page-extraction mode string."""
+    options = getattr(request, "page_extraction", None)
+    mode = getattr(options, "mode", "") if options is not None else ""
+    return str(mode or "").strip().lower()
+
+
+def _build_page_extraction_response_format(
+    page_descriptors: list[AttachmentPageDescriptor],
+) -> dict[str, Any]:
+    """Build a strict JSON schema for page-by-page extraction output."""
+    if not page_descriptors:
+        raise ValueError("page_descriptors cannot be empty")
+
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "page_extraction",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "pages": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "page_index": {"type": "integer"},
+                                "source_name": {"type": "string"},
+                                "page_number": {"type": "integer"},
+                                "text": {"type": "string"},
+                            },
+                            "required": ["page_index", "source_name", "page_number", "text"],
+                        },
+                    }
+                },
+                "required": ["pages"],
+            },
+        },
+    }
+
+
+def _build_page_extraction_note(page_descriptors: list[AttachmentPageDescriptor]) -> str:
+    """Build a compact prompt prefix describing the required page-map output."""
+    if not page_descriptors:
+        return ""
+
+    lines = [
+        "[Per-page extraction]",
+        f"- Return valid JSON only with a top-level `pages` array containing exactly {len(page_descriptors)} item(s).",
+        "- Preserve each `page_index`, `source_name`, and `page_number` exactly as listed below.",
+        "- Fill `text` with the extracted text for that page in reading order.",
+        "- If a page is blank or unreadable, keep the item and return an empty string for `text`.",
+        "- Keep the `pages` array in the same order as the numbered page map below.",
+        "- If an original document is also attached as a fallback, use it only to help read the listed page map. Do not add extra pages.",
+    ]
+    for descriptor in page_descriptors:
+        lines.append(
+            f"- page_index={descriptor.page_index}: '{descriptor.source_name}' page {descriptor.page_number}."
+        )
+    return "\n".join(lines) + "\n\n"
 
 
 def _extract_json_payload(text: str) -> Any | None:
@@ -1192,10 +1261,12 @@ def _infer_primary_array_count(payload: Any) -> int | None:
 
 
 def _structured_cardinality_mismatch(
-    messages: list[ChatMessage], response_text: str
+    messages: list[ChatMessage],
+    response_text: str,
+    expected_count: int | None = None,
 ) -> tuple[int, int] | None:
     """Return (expected, actual) if a clear structured cardinality mismatch exists."""
-    expected = _infer_expected_item_count(messages)
+    expected = expected_count if expected_count is not None else _infer_expected_item_count(messages)
     if expected is None:
         return None
 
@@ -1212,14 +1283,24 @@ def _structured_cardinality_mismatch(
     return None
 
 
-def _build_cardinality_retry_prompt(base_prompt: str, expected: int, actual: int) -> str:
+def _build_cardinality_retry_prompt(
+    base_prompt: str,
+    expected: int,
+    actual: int,
+    expectation_reason: str = "input line count",
+    correction_rule: str | None = None,
+) -> str:
     """Build a corrective retry prompt for structured cardinality mismatch."""
+    if not correction_rule:
+        correction_rule = (
+            "Return valid JSON only, with exactly one output item per non-empty input line, "
+            "preserving input order. Do not merge or drop lines."
+        )
     return (
         f"{base_prompt}\n\n"
         "Correction: The previous JSON had the wrong number of items.\n"
-        f"Input line count is {expected}, but output count was {actual}.\n"
-        "Return valid JSON only, with exactly one output item per non-empty input line, "
-        "preserving input order. Do not merge or drop lines."
+        f"Expected output count is {expected} based on {expectation_reason}, but output count was {actual}.\n"
+        f"{correction_rule}"
     )
 
 
@@ -1233,6 +1314,19 @@ def _validate_chat_request(request: ChatCompletionRequest) -> None:
 
     if not request.messages:
         raise HTTPException(status_code=400, detail="messages array cannot be empty")
+
+    page_extraction_mode = _page_extraction_mode(request)
+    if page_extraction_mode and page_extraction_mode != "structured":
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported page_extraction.mode. Supported modes: structured",
+        )
+
+    if page_extraction_mode and request.response_format:
+        raise HTTPException(
+            status_code=400,
+            detail="page_extraction.mode='structured' manages response_format automatically. Omit response_format.",
+        )
 
     if not is_supported_chat_model(request.model):
         supported = ", ".join(list_public_chat_models())
@@ -1289,7 +1383,7 @@ async def create_image(
 
     client = _get_client()
 
-    async with _lock:
+    async with browser_access_lock:
         start_time = time.time()
 
         # Build an image-generation prompt.
@@ -1428,7 +1522,7 @@ async def _execute_chat_completion(
     """Shared sync/async executor for chat completions."""
     client = _get_client()
 
-    async with _lock:
+    async with browser_access_lock:
         start_time = time.time()
         app_key = (app_key_override or "").strip()
         app_name = _display_app_name(app_key)
@@ -1470,6 +1564,60 @@ async def _execute_chat_completion(
                 await client.new_chat()
                 routing_action = "new-chat-for-app"
 
+        # -- Extract attachments from messages --------------
+        image_paths: list[str] = []
+        file_paths: list[str] = []
+        for msg in request.messages:
+            if msg.role == "user" and isinstance(msg.content, list):
+                image_urls = _extract_image_urls(msg.content)
+                for url in image_urls:
+                    local_path = await _download_file(url)
+                    if local_path:
+                        image_paths.append(local_path)
+
+                file_attachments = _extract_file_attachments(msg.content)
+                for fa in file_attachments:
+                    local_path = await _download_file(fa)
+                    if local_path:
+                        file_paths.append(local_path)
+
+        all_attachment_paths = image_paths + file_paths
+        if all_attachment_paths:
+            log.info(f"Extracted {len(image_paths)} image(s) and {len(file_paths)} file(s) from request")
+
+        expansion = expand_attachments_for_chatgpt(image_paths, file_paths)
+        image_paths = expansion.image_paths
+        file_paths = expansion.file_paths
+        page_extraction_mode = _page_extraction_mode(request)
+        page_extraction_expected_count: int | None = None
+        effective_response_format = request.response_format
+        prompt_prefixes: list[str] = []
+
+        if expansion.notes:
+            prompt_prefixes.append(build_attachment_context_note(expansion.notes))
+            log.info(
+                "Attachment expansion: rendered %d page image(s), upload set now has %d image(s) and %d file(s)",
+                expansion.total_rendered_pages,
+                len(image_paths),
+                len(file_paths),
+            )
+
+        if page_extraction_mode == "structured":
+            if not expansion.page_descriptors:
+                raise HTTPException(
+                    status_code=400,
+                    detail="page_extraction.mode='structured' requires at least one image or file attachment.",
+                )
+            page_extraction_expected_count = len(expansion.page_descriptors)
+            effective_response_format = _build_page_extraction_response_format(expansion.page_descriptors)
+            prompt_prefixes.append(_build_page_extraction_note(expansion.page_descriptors))
+            log.info(
+                "Per-page extraction mode enabled: %d logical page item(s)",
+                page_extraction_expected_count,
+            )
+
+        attachment_prefix = "".join(prefix for prefix in prompt_prefixes if prefix)
+
         # -- Build the prompt --------------------------------
         messages = list(request.messages)
 
@@ -1480,7 +1628,7 @@ async def _execute_chat_completion(
             messages.insert(0, ChatMessage(role="system", content=tool_system))
 
         # If structured output is requested, force strict JSON response
-        response_format_system = _build_response_format_system_prompt(request.response_format)
+        response_format_system = _build_response_format_system_prompt(effective_response_format)
         if response_format_system and not _has_equivalent_response_instruction(messages, response_format_system):
             messages.insert(0, ChatMessage(role="system", content=response_format_system))
 
@@ -1533,7 +1681,7 @@ async def _execute_chat_completion(
                         prefix, tail = detected_prefix
                         candidate_user_contract_id = _user_contract_hash(system_texts, prefix)
                         known_user = _thread_user_contracts.get(current_thread_id)
-                        if known_user and known_user[1] == candidate_user_contract_id and request.response_format:
+                        if known_user and known_user[1] == candidate_user_contract_id and effective_response_format:
                             prompt = _build_user_contract_reminder_prompt(
                                 tail,
                                 contract_id,
@@ -1575,6 +1723,10 @@ async def _execute_chat_completion(
                 user_contract_id[:12] if user_contract_id else "unknown",
             )
 
+        if attachment_prefix:
+            prompt = f"{attachment_prefix}{prompt}" if prompt else attachment_prefix.strip()
+            full_prompt = f"{attachment_prefix}{full_prompt}" if full_prompt else attachment_prefix.strip()
+
         cache_key = _cache_key_for_request_with_app(request, app_key)
         now = time.time()
         async with _cache_lock:
@@ -1583,27 +1735,6 @@ async def _execute_chat_completion(
             if cached_entry and now - cached_entry[0] <= _CACHE_TTL_SECONDS:
                 log.info("Response cache hit: returning cached completion")
                 return _clone_cached_response(cached_entry[1])
-
-        # -- Extract attachments from messages --------------
-        image_paths: list[str] = []
-        file_paths: list[str] = []
-        for msg in request.messages:
-            if msg.role == "user" and isinstance(msg.content, list):
-                image_urls = _extract_image_urls(msg.content)
-                for url in image_urls:
-                    local_path = await _download_file(url)
-                    if local_path:
-                        image_paths.append(local_path)
-
-                file_attachments = _extract_file_attachments(msg.content)
-                for fa in file_attachments:
-                    local_path = await _download_file(fa)
-                    if local_path:
-                        file_paths.append(local_path)
-
-        all_attachment_paths = image_paths + file_paths
-        if all_attachment_paths:
-            log.info(f"Extracted {len(image_paths)} image(s) and {len(file_paths)} file(s) from request")
 
         # -- Send to ChatGPT --------------------------------
         try:
@@ -1644,7 +1775,7 @@ async def _execute_chat_completion(
         response_text = result.message
         elapsed_ms = int((time.time() - start_time) * 1000)
 
-        if (used_thread_contract or used_user_contract) and request.response_format and _extract_json_payload(response_text) is None:
+        if (used_thread_contract or used_user_contract) and effective_response_format and _extract_json_payload(response_text) is None:
             mode_name = "user-prefix contract" if used_user_contract else "thread contract"
             log.warning("%s mode produced non-JSON content. Retrying once with full prompt.", mode_name.capitalize())
             try:
@@ -1684,9 +1815,13 @@ async def _execute_chat_completion(
         tool_calls = None
         finish_reason = "stop"
 
-        if request.response_format and response_text:
-            response_text = _normalize_structured_content(response_text, request.response_format)
-            mismatch = _structured_cardinality_mismatch(request.messages, response_text)
+        if effective_response_format and response_text:
+            response_text = _normalize_structured_content(response_text, effective_response_format)
+            mismatch = _structured_cardinality_mismatch(
+                request.messages,
+                response_text,
+                expected_count=page_extraction_expected_count,
+            )
             if mismatch:
                 expected, actual = mismatch
                 log.warning(
@@ -1694,7 +1829,19 @@ async def _execute_chat_completion(
                     expected,
                     actual,
                 )
-                retry_prompt = _build_cardinality_retry_prompt(prompt, expected, actual)
+                retry_prompt = _build_cardinality_retry_prompt(
+                    prompt,
+                    expected,
+                    actual,
+                    expectation_reason="the numbered page map" if page_extraction_expected_count is not None else "input line count",
+                    correction_rule=(
+                        "Return valid JSON only, with exactly one output item per numbered page-map entry, "
+                        "preserving `page_index`, `source_name`, and `page_number` exactly and keeping the same order. "
+                        "Do not merge, drop, or add pages."
+                    )
+                    if page_extraction_expected_count is not None
+                    else None,
+                )
                 try:
                     retry_result = await client.send_message(
                         retry_prompt,
@@ -1703,8 +1850,12 @@ async def _execute_chat_completion(
                         model=request.model,
                     )
                     retry_text = retry_result.message
-                    retry_text = _normalize_structured_content(retry_text, request.response_format)
-                    retry_mismatch = _structured_cardinality_mismatch(request.messages, retry_text)
+                    retry_text = _normalize_structured_content(retry_text, effective_response_format)
+                    retry_mismatch = _structured_cardinality_mismatch(
+                        request.messages,
+                        retry_text,
+                        expected_count=page_extraction_expected_count,
+                    )
                     if not retry_mismatch:
                         response_text = retry_text
                         elapsed_ms = int((time.time() - start_time) * 1000)

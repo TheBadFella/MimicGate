@@ -11,10 +11,9 @@ Endpoints:
 
 from __future__ import annotations
 
-import asyncio
-
 from fastapi import APIRouter, HTTPException
 
+from src.api.browser_gate import browser_access_lock
 from src.api.schemas import (
     ChatRequest,
     ChatResponse,
@@ -31,9 +30,6 @@ from src.log import setup_logging
 log = setup_logging("api_routes")
 
 router = APIRouter()
-
-# Serialize browser access — single page, not thread-safe
-_lock = asyncio.Lock()
 
 # Global reference — set by the server on startup
 _client: ChatGPTClient | None = None
@@ -96,7 +92,7 @@ async def chat(req: ChatRequest) -> ChatResponse:
     client = _get_client()
     log.info(f"POST /chat — {len(req.message)} chars")
 
-    async with _lock:
+    async with browser_access_lock:
         try:
             _validate_model(req.model)
             result = await client.send_message(req.message, model=req.model)
@@ -112,7 +108,7 @@ async def chat_in_thread(thread_id: str, req: ChatRequest) -> ChatResponse:
     client = _get_client()
     log.info(f"POST /thread/{thread_id}/chat — {len(req.message)} chars")
 
-    async with _lock:
+    async with browser_access_lock:
         try:
             _validate_model(req.model)
             # Navigate to the thread if not already there
@@ -133,7 +129,7 @@ async def new_thread(req: ChatRequest) -> ChatResponse:
     client = _get_client()
     log.info(f"POST /thread/new — {len(req.message)} chars")
 
-    async with _lock:
+    async with browser_access_lock:
         try:
             _validate_model(req.model)
             await client.new_chat()
@@ -153,7 +149,7 @@ async def list_threads() -> ThreadListResponse:
     client = _get_client()
     log.info("GET /threads")
 
-    async with _lock:
+    async with browser_access_lock:
         try:
             raw_threads = await client.list_threads()
             threads = [
@@ -174,8 +170,9 @@ async def status() -> StatusResponse:
     """Health check — returns login status and current thread."""
     try:
         client = _get_client()
-        logged_in = await _browser.is_logged_in()
-        tid = client._extract_thread_id()
-        return StatusResponse(status="ok", logged_in=logged_in, current_thread=tid)
+        async with browser_access_lock:
+            logged_in = await _browser.is_logged_in()
+            tid = client._extract_thread_id()
+            return StatusResponse(status="ok", logged_in=logged_in, current_thread=tid)
     except Exception:
         return StatusResponse(status="ok", logged_in=False, current_thread="")

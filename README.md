@@ -50,6 +50,7 @@
 CatGPT automates a real browser session with ChatGPT, letting you:
 
 - **Use ChatGPT as an OpenAI-compatible API** — drop-in replacement for `openai.ChatCompletion.create()`
+- **Use ChatGPT as an Ollama-compatible API** — supports common `/api/*` endpoints for Ollama-based clients
 - **Tool / Function calling** — full round-trip support (define tools → model calls them → send results back)
 - **Send images** — OpenAI vision format (`image_url` with base64 data URLs or HTTP URLs)
 - **Send file attachments** — PDF, DOCX, TXT, CSV, etc. via a custom `file` content type
@@ -217,6 +218,31 @@ Base URL: `http://localhost:8000/v1` — **Model ID:** `catgpt-browser`
 | `POST` | `/{app_name}/v1/images/generations` | App-scoped image generation                                        |
 | `GET`  | `/{app_name}/v1/models` | App-scoped model list                                                       |
 
+### Ollama-Compatible Endpoints
+
+CatGPT also exposes a compatibility layer for Ollama-oriented clients such as
+Open WebUI. Chat and generation requests are routed into the same browser-backed
+ChatGPT executor used by the OpenAI-compatible API.
+
+`/api/embed` is implemented as a deterministic compatibility embedding shim so
+clients that require the endpoint can function, but it is not a semantic
+embedding model suitable for production-quality retrieval or RAG ranking.
+
+| Method | Path                     | Description |
+| ------ | ------------------------ | ----------- |
+| `POST` | `/api/chat`              | Ollama-compatible chat mapping |
+| `POST` | `/api/generate`          | Ollama-compatible text generation mapping |
+| `POST` | `/api/embed`             | Ollama-compatible embedding shim |
+| `GET`  | `/api/tags`              | List configured model profiles |
+| `POST` | `/api/show`              | Return static metadata for a model |
+| `GET`  | `/api/ps`                | List recently active models |
+| `POST` | `/api/pull`              | Safety mock for configured models |
+| `DELETE` | `/api/delete`          | Safety mock delete success |
+| `POST` | `/api/copy`              | Unsupported mock response |
+
+Every Ollama endpoint is also available under the app-scoped `/{app_name}/api/*`
+prefix for consistency with app-thread routing.
+
 ### Custom REST Endpoints
 
 | Method | Path                | Description                                   |
@@ -236,6 +262,8 @@ Base URL: `http://localhost:8000/v1` — **Model ID:** `catgpt-browser`
 > **Streaming note:** `/v1/chat/completions` actively rejects `stream=true` with a 400 error. This is a fundamental limitation since the browser waits for the full ChatGPT response before returning.
 
 > **Structured output note:** `response_format` is supported for `/v1/chat/completions` and `/v1/chat/completions/async` (including `json_object` and `json_schema`).
+
+> **Per-page OCR note:** set `page_extraction={"mode":"structured"}` on `/v1/chat/completions` or `/v1/chat/completions/async` to force attachment OCR/document extraction into a strict JSON `pages` array with one item per rendered page. This mode manages `response_format` automatically.
 
 > **Response cache note:** `/v1/chat/completions` now includes an in-memory dedup cache for identical requests (TTL: 600s, max entries: 256). Cache hits return a fresh OpenAI-style response envelope (`id`, `created`) with cached content.
 
@@ -429,6 +457,31 @@ print(response.choices[0].message.content)
 
 CatGPT supports arbitrary file attachments via a custom `file` content type:
 
+Multi-page PDFs and multi-frame images (for example TIFF) are expanded into
+ordered page images automatically before upload so ChatGPT can see the full
+document, not just the first page/frame. For large document jobs, prefer
+`POST /v1/chat/completions/async` to avoid long-lived request timeouts.
+
+If you want structured OCR-style output instead of a free-form answer, add
+`"page_extraction": {"mode": "structured"}` to the request body. CatGPT will
+force a JSON response shaped like:
+
+```json
+{
+  "pages": [
+    {
+      "page_index": 1,
+      "source_name": "document.pdf",
+      "page_number": 1,
+      "text": "..."
+    }
+  ]
+}
+```
+
+Each `pages` item maps to one rendered page in upload order. Blank/unreadable
+pages are kept with an empty `text` string instead of being dropped.
+
 ```python
 import base64
 from openai import OpenAI
@@ -453,7 +506,8 @@ response = client.chat.completions.create(
                 }
             },
         ]
-    }]
+    }],
+    page_extraction={"mode": "structured"},
 )
 ```
 
@@ -602,6 +656,12 @@ All settings are loaded from environment variables (`.env` file or `docker-compo
 | `CHATGPT_DEFAULT_MODEL` | ``                  | Optional model id to auto-apply when requests use `catgpt-browser` |
 | `CHATGPT_MODEL_ALIASES` | `gpt-5.3=GPT-5.3,...` | Comma-separated `public_id=UI label` map for browser model switching |
 | `CHATGPT_MODEL_SWITCH_TIMEOUT` | `10000`     | Max wait time (ms) to confirm the ChatGPT UI switched models |
+| `ATTACHMENT_EXPAND_MULTIPAGE` | `true`      | If `true`, expands multi-page PDFs and multi-frame images into ordered page images before upload |
+| `ATTACHMENT_MAX_PAGES` | `24`                | Maximum pages/frames rendered from a single attachment |
+| `ATTACHMENT_RENDER_DPI` | `144`              | DPI used when rendering PDF pages to images |
+| `OLLAMA_EMBEDDING_MODELS` | `nomic-embed-text` | Comma-separated Ollama-visible embedding model profiles |
+| `OLLAMA_EMBEDDING_DIMENSIONS` | `768`       | Vector size used by the compatibility embedding shim |
+| `OLLAMA_ACTIVE_MODEL_TTL_SECONDS` | `900`   | How long a model remains listed in `/api/ps` after use |
 | `RESPONSE_TIMEOUT`   | `120000`              | Max wait for ChatGPT response (ms)                       |
 | `SELECTOR_TIMEOUT`   | `5000`                | Timeout per selector probe (ms)                          |
 | `TYPE_DELAY_MIN`     | `50`                  | Min delay between keystrokes (ms)                        |
