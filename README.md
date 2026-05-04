@@ -194,6 +194,14 @@ Change it with `VNC_PASSWORD` in `docker-compose.yml`.
 
 ### OpenAI-Compatible Endpoints
 
+`catgpt-browser` is the default browser alias. If you send an explicit paid-plan
+model id like `gpt-5.5`, `gpt-5.5-pro`, `gpt-5.4`, `gpt-5.4-pro`, `gpt-5.4-mini`,
+`gpt-5.4-nano`, `gpt-5-mini`, `gpt-5-nano`, `gpt-5`, `gpt-5.3`, `o3`, `o4-mini`,
+`gpt-4.5`, `gpt-4.1`, `gpt-4.1-mini`, or `gpt-4o`, CatGPT will try to switch
+the ChatGPT web UI to that model before sending the prompt. If you want
+`catgpt-browser` itself to auto-switch, set `CHATGPT_DEFAULT_MODEL` to one of
+the configured ids.
+
 Base URL: `http://localhost:8000/v1` — **Model ID:** `catgpt-browser`
 
 | Method | Path                     | Description                                                                     |
@@ -202,7 +210,7 @@ Base URL: `http://localhost:8000/v1` — **Model ID:** `catgpt-browser`
 | `POST` | `/v1/chat/completions/async` | Submit async chat job (poll with job ID). Structured output supported.      |
 | `GET`  | `/v1/chat/completions/async/{job_id}` | Get async job status/result (`queued/running/completed/failed`). |
 | `POST` | `/v1/images/generations` | Generate images via DALL-E                                                      |
-| `GET`  | `/v1/models`             | List available models (returns `catgpt-browser`)                                |
+| `GET`  | `/v1/models`             | List available browser-backed chat model ids (`catgpt-browser` + configured models) |
 | `POST` | `/{app_name}/v1/chat/completions` | App-scoped chat completions (derives app from URL path)             |
 | `POST` | `/{app_name}/v1/chat/completions/async` | App-scoped async chat submit                                      |
 | `GET`  | `/{app_name}/v1/chat/completions/async/{job_id}` | App-scoped async status/result                           |
@@ -591,6 +599,9 @@ All settings are loaded from environment variables (`.env` file or `docker-compo
 | `HEADLESS`           | `false`               | Run browser headless (not recommended — easily detected) |
 | `SLOW_MO`            | `0`                   | Playwright slow-motion delay (ms) for debugging          |
 | `CHATGPT_URL`        | `https://chatgpt.com` | Target ChatGPT URL                                       |
+| `CHATGPT_DEFAULT_MODEL` | ``                  | Optional model id to auto-apply when requests use `catgpt-browser` |
+| `CHATGPT_MODEL_ALIASES` | `gpt-5.3=GPT-5.3,...` | Comma-separated `public_id=UI label` map for browser model switching |
+| `CHATGPT_MODEL_SWITCH_TIMEOUT` | `10000`     | Max wait time (ms) to confirm the ChatGPT UI switched models |
 | `RESPONSE_TIMEOUT`   | `120000`              | Max wait for ChatGPT response (ms)                       |
 | `SELECTOR_TIMEOUT`   | `5000`                | Timeout per selector probe (ms)                          |
 | `TYPE_DELAY_MIN`     | `50`                  | Min delay between keystrokes (ms)                        |

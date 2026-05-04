@@ -25,6 +25,7 @@ from src.api.schemas import (
 )
 from src.browser.manager import BrowserManager
 from src.chatgpt.client import ChatGPTClient
+from src.chatgpt.model_registry import is_supported_chat_model, list_public_chat_models
 from src.log import setup_logging
 
 log = setup_logging("api_routes")
@@ -72,6 +73,20 @@ def _build_response(result) -> ChatResponse:
     )
 
 
+def _validate_model(model: str | None) -> None:
+    """Reject unsupported browser model ids early for the native REST routes."""
+    if not model:
+        return
+    if is_supported_chat_model(model):
+        return
+
+    supported = ", ".join(list_public_chat_models())
+    raise HTTPException(
+        status_code=400,
+        detail=f"Unsupported model '{model}'. Supported models: {supported}",
+    )
+
+
 # ── Chat ────────────────────────────────────────────────────────
 
 
@@ -83,7 +98,8 @@ async def chat(req: ChatRequest) -> ChatResponse:
 
     async with _lock:
         try:
-            result = await client.send_message(req.message)
+            _validate_model(req.model)
+            result = await client.send_message(req.message, model=req.model)
             return _build_response(result)
         except Exception as e:
             log.error(f"Chat error: {e}", exc_info=True)
@@ -98,12 +114,13 @@ async def chat_in_thread(thread_id: str, req: ChatRequest) -> ChatResponse:
 
     async with _lock:
         try:
+            _validate_model(req.model)
             # Navigate to the thread if not already there
             current_tid = client._extract_thread_id()
             if current_tid != thread_id:
                 await client.navigate_to_thread(thread_id)
 
-            result = await client.send_message(req.message)
+            result = await client.send_message(req.message, model=req.model)
             return _build_response(result)
         except Exception as e:
             log.error(f"Thread chat error: {e}", exc_info=True)
@@ -118,8 +135,9 @@ async def new_thread(req: ChatRequest) -> ChatResponse:
 
     async with _lock:
         try:
+            _validate_model(req.model)
             await client.new_chat()
-            result = await client.send_message(req.message)
+            result = await client.send_message(req.message, model=req.model)
             return _build_response(result)
         except Exception as e:
             log.error(f"New thread error: {e}", exc_info=True)

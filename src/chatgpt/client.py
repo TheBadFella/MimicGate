@@ -13,6 +13,11 @@ import time
 
 from patchright.async_api import Page
 
+from src.chatgpt.model_registry import (
+    list_switchable_models,
+    normalize_model_token,
+    resolve_requested_model,
+)
 from src.config import Config
 from src.selectors import Selectors
 from src.browser.human import human_type, human_click, thinking_pause, random_delay
@@ -37,6 +42,7 @@ class ChatGPTClient:
 
     def __init__(self, page: Page) -> None:
         self._page = page
+        self._last_model_label = ""
 
     @property
     def page(self) -> Page:
@@ -44,7 +50,13 @@ class ChatGPTClient:
 
     # ── Core: Send & Receive ────────────────────────────────────
 
-    async def send_message(self, text: str, image_paths: list[str] | None = None, file_paths: list[str] | None = None) -> ChatResponse:
+    async def send_message(
+        self,
+        text: str,
+        image_paths: list[str] | None = None,
+        file_paths: list[str] | None = None,
+        model: str | None = None,
+    ) -> ChatResponse:
         """
         Send a message to ChatGPT and wait for the complete response.
 
@@ -72,10 +84,14 @@ class ChatGPTClient:
         pre_count = await count_assistant_messages(self._page)
         log.debug(f"Assistant messages before send: {pre_count}")
 
-        # 1. Brief pause (human would take a moment to start typing)
+        # 1. Switch model if requested before interacting with the composer
+        if model:
+            await self.ensure_model(model)
+
+        # 2. Brief pause (human would take a moment to start typing)
         await random_delay(500, 1200)
 
-        # 1.5. Upload files/images if provided
+        # 2.5. Upload files/images if provided
         if all_attachments:
             await self._upload_files(all_attachments)
 
@@ -144,6 +160,51 @@ class ChatGPTClient:
             images=images,
             has_images=has_images,
         )
+
+    async def ensure_model(self, requested_model: str) -> None:
+        """Switch ChatGPT's model picker to the requested model when possible."""
+        target = resolve_requested_model(requested_model)
+        if target is None:
+            log.debug(f"No explicit browser model switch needed for request model={requested_model!r}")
+            return
+
+        current_label = await self._detect_current_model_label()
+        if current_label and normalize_model_token(current_label) == normalize_model_token(target.ui_label):
+            self._last_model_label = target.ui_label
+            log.debug(f"ChatGPT model already selected: {target.ui_label}")
+            return
+
+        log.info(
+            "Switching ChatGPT model: request=%s target=%s current=%s",
+            requested_model,
+            target.ui_label,
+            current_label or self._last_model_label or "unknown",
+        )
+
+        opened = await self._open_model_picker(target.ui_label, current_label=current_label)
+        if not opened:
+            raise RuntimeError(f"Could not open ChatGPT model picker for '{target.ui_label}'")
+
+        await asyncio.sleep(0.4)
+
+        switched = await self._click_model_option(target.ui_label)
+        if not switched:
+            more_models_opened = await self._click_menu_text("More models")
+            if more_models_opened:
+                await asyncio.sleep(0.3)
+                switched = await self._click_model_option(target.ui_label)
+
+        if not switched:
+            raise RuntimeError(f"Could not find ChatGPT model option '{target.ui_label}' in the model picker")
+
+        confirmed = await self._wait_for_model_label(target.ui_label)
+        if not confirmed:
+            current_after = await self._detect_current_model_label()
+            if normalize_model_token(current_after) != normalize_model_token(target.ui_label):
+                raise RuntimeError(f"Model switch to '{target.ui_label}' could not be confirmed")
+
+        self._last_model_label = target.ui_label
+        log.info(f"Model switched to {target.ui_label}")
 
     # ── Navigation ──────────────────────────────────────────────
 
@@ -271,6 +332,248 @@ class ChatGPTClient:
             await human_click(self._page, selector)
             log.debug("Send button clicked")
             return True
+        return False
+
+    async def _detect_current_model_label(self) -> str:
+        """Best-effort detection of the currently selected ChatGPT model label."""
+        known_labels = [option.ui_label for option in list_switchable_models()]
+        if self._last_model_label and self._last_model_label not in known_labels:
+            known_labels.append(self._last_model_label)
+        if not known_labels:
+            return ""
+
+        label = await self._page.evaluate(
+            r"""
+            (knownLabels) => {
+                const normalize = (value) =>
+                    (value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+                const isVisible = (el) => {
+                    if (!el) return false;
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    return rect.width > 0 &&
+                        rect.height > 0 &&
+                        style.visibility !== "hidden" &&
+                        style.display !== "none";
+                };
+                const wanted = (knownLabels || []).map((label) => ({
+                    label,
+                    normalized: normalize(label),
+                })).filter((item) => item.normalized);
+                const clickable = Array.from(document.querySelectorAll("button,[role='button'],[role='tab']"));
+                const matches = [];
+                for (const el of clickable) {
+                    if (!isVisible(el)) continue;
+                    const rect = el.getBoundingClientRect();
+                    const primaryText = ((el.innerText || el.textContent || "")
+                        .split(/\n+/)
+                        .map((part) => part.trim())
+                        .filter(Boolean)[0] || "").trim();
+                    const rawText = [
+                        primaryText,
+                        el.innerText || "",
+                        el.textContent || "",
+                        el.getAttribute("aria-label") || "",
+                        el.getAttribute("title") || "",
+                    ].join(" ").trim();
+                    const normalizedText = normalize(rawText);
+                    const normalizedPrimary = normalize(primaryText);
+                    if (!normalizedText) continue;
+                    for (const wantedLabel of wanted) {
+                        if (!normalizedText.includes(wantedLabel.normalized)) continue;
+                        let score = 0;
+                        if (normalizedPrimary === wantedLabel.normalized) score += 70;
+                        else if (normalizedText === wantedLabel.normalized) score += 50;
+                        else if (normalizedPrimary.startsWith(wantedLabel.normalized)) score += 35;
+                        else if (normalizedText.startsWith(wantedLabel.normalized)) score += 25;
+                        else score += 10;
+                        score += Math.min(10, wantedLabel.normalized.length);
+                        if (rect.top < 260) score += 20;
+                        if (rect.left < 500) score += 10;
+                        matches.push({
+                            label: wantedLabel.label,
+                            score,
+                            top: rect.top,
+                            left: rect.left,
+                        });
+                    }
+                }
+                matches.sort((a, b) => b.score - a.score || a.top - b.top || a.left - b.left);
+                return matches.length ? matches[0].label : "";
+            }
+            """,
+            known_labels,
+        )
+        return (label or "").strip()
+
+    async def _open_model_picker(self, target_label: str, current_label: str = "") -> bool:
+        """Open ChatGPT's model picker using the visible current-model button."""
+        for selector in Selectors.MODEL_PICKER_BUTTON:
+            try:
+                el = await self._page.wait_for_selector(selector, timeout=1000, state="visible")
+                if el:
+                    await human_click(self._page, selector)
+                    return True
+            except Exception:
+                continue
+
+        hints = [current_label, self._last_model_label, target_label, "model", "GPT", "o3", "o4"]
+        if await self._click_top_button_by_text(hints):
+            return True
+
+        return False
+
+    async def _click_top_button_by_text(self, hints: list[str]) -> bool:
+        """Click a visible top-of-page button whose label best matches the hints."""
+        filtered_hints = [hint for hint in hints if (hint or "").strip()]
+        if not filtered_hints:
+            return False
+
+        clicked = await self._page.evaluate(
+            r"""
+            (hints) => {
+                const normalize = (value) =>
+                    (value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+                const wanted = (hints || []).map(normalize).filter(Boolean);
+                const isVisible = (el) => {
+                    if (!el) return false;
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    return rect.width > 0 &&
+                        rect.height > 0 &&
+                        style.visibility !== "hidden" &&
+                        style.display !== "none";
+                };
+                const clickable = Array.from(document.querySelectorAll("button,[role='button'],[role='tab']"));
+                const matches = [];
+                for (const el of clickable) {
+                    if (!isVisible(el)) continue;
+                    const rect = el.getBoundingClientRect();
+                    if (rect.top > 320) continue;
+                    const primaryText = ((el.innerText || el.textContent || "")
+                        .split(/\n+/)
+                        .map((part) => part.trim())
+                        .filter(Boolean)[0] || "").trim();
+                    const text = [
+                        primaryText,
+                        el.innerText || "",
+                        el.textContent || "",
+                        el.getAttribute("aria-label") || "",
+                        el.getAttribute("title") || "",
+                    ].join(" ").trim();
+                    const normalizedText = normalize(text);
+                    const normalizedPrimary = normalize(primaryText);
+                    if (!normalizedText) continue;
+                    let score = 0;
+                    for (const hint of wanted) {
+                        if (!normalizedText.includes(hint)) continue;
+                        score = Math.max(
+                            score,
+                            normalizedPrimary === hint
+                                ? 70
+                                : normalizedText === hint
+                                  ? 60
+                                  : normalizedPrimary.startsWith(hint)
+                                    ? 45
+                                    : normalizedText.startsWith(hint)
+                                      ? 40
+                                      : 20,
+                        );
+                    }
+                    if (!score) continue;
+                    if (rect.left < 500) score += 10;
+                    matches.push({ el, score, top: rect.top, left: rect.left });
+                }
+                matches.sort((a, b) => b.score - a.score || a.top - b.top || a.left - b.left);
+                const best = matches[0];
+                if (!best) return false;
+                best.el.click();
+                return true;
+            }
+            """,
+            filtered_hints,
+        )
+        return bool(clicked)
+
+    async def _click_model_option(self, target_label: str) -> bool:
+        """Click a visible model option in an open picker/menu by its label."""
+        return await self._click_menu_text(target_label)
+
+    async def _click_menu_text(self, target_text: str) -> bool:
+        """Click a visible menu-style element whose text matches the target."""
+        clicked = await self._page.evaluate(
+            r"""
+            (targetText) => {
+                const normalize = (value) =>
+                    (value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+                const target = normalize(targetText);
+                if (!target) return false;
+                const isVisible = (el) => {
+                    if (!el) return false;
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    return rect.width > 0 &&
+                        rect.height > 0 &&
+                        style.visibility !== "hidden" &&
+                        style.display !== "none";
+                };
+                const selectors = [
+                    "[role='menuitemradio']",
+                    "[role='menuitem']",
+                    "[role='option']",
+                    "button",
+                    "[data-radix-collection-item]",
+                    "li",
+                ];
+                const matches = [];
+                for (const selector of selectors) {
+                    for (const el of document.querySelectorAll(selector)) {
+                        if (!isVisible(el)) continue;
+                        const primaryText = ((el.innerText || el.textContent || "")
+                            .split(/\n+/)
+                            .map((part) => part.trim())
+                            .filter(Boolean)[0] || "").trim();
+                        const text = [
+                            primaryText,
+                            el.innerText || "",
+                            el.textContent || "",
+                            el.getAttribute("aria-label") || "",
+                            el.getAttribute("title") || "",
+                        ].join(" ").trim();
+                        const normalizedText = normalize(text);
+                        const normalizedPrimary = normalize(primaryText);
+                        if (!normalizedText || !normalizedText.includes(target)) continue;
+                        let score = 0;
+                        if (normalizedPrimary === target) score += 80;
+                        else if (normalizedText === target) score += 60;
+                        else if (normalizedPrimary.startsWith(target)) score += 45;
+                        else if (normalizedText.startsWith(target)) score += 40;
+                        else score += 20;
+                        const rect = el.getBoundingClientRect();
+                        if (rect.top < 700) score += 10;
+                        matches.push({ el, score, top: rect.top, left: rect.left });
+                    }
+                }
+                matches.sort((a, b) => b.score - a.score || a.top - b.top || a.left - b.left);
+                const best = matches[0];
+                if (!best) return false;
+                best.el.click();
+                return true;
+            }
+            """,
+            target_text,
+        )
+        return bool(clicked)
+
+    async def _wait_for_model_label(self, target_label: str) -> bool:
+        """Wait briefly until the current-model button reflects the requested label."""
+        deadline = time.time() + (Config.CHATGPT_MODEL_SWITCH_TIMEOUT / 1000.0)
+        target_normalized = normalize_model_token(target_label)
+        while time.time() < deadline:
+            current_label = await self._detect_current_model_label()
+            if normalize_model_token(current_label) == target_normalized:
+                return True
+            await asyncio.sleep(0.25)
         return False
 
     async def _upload_files(self, file_paths: list[str]) -> None:

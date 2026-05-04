@@ -26,6 +26,11 @@ class Selectors:
         "#prompt-textarea ~ button",
     ]
 
+    # Model picker trigger in ChatGPT's composer/header.
+    MODEL_PICKER_BUTTON = [
+        "button[data-testid='model-switcher-dropdown-button']",
+    ]
+
     # ── Assistant response messages ─────────────────────────────
     ASSISTANT_MESSAGE = [
         "div[data-message-author-role='assistant']",

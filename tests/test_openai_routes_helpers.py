@@ -5,6 +5,7 @@ import types
 import unittest
 
 from starlette.requests import Request
+from fastapi import HTTPException
 
 # Provide a minimal patchright stub so helper tests can import API modules
 # without requiring browser automation dependencies.
@@ -42,6 +43,7 @@ from src.api.openai_routes import (
     _looks_like_instruction_prefix,
     _merge_header_rows_in_array,
     _should_use_line_cardinality_fallback,
+    _validate_chat_request,
 )
 from src.api.openai_schemas import ChatCompletionRequest, ChatMessage
 
@@ -190,6 +192,16 @@ class OpenAIRoutesHelpersTests(unittest.TestCase):
         assert detected is not None
         _, tail = detected
         self.assertEqual(tail, "B" * 1500)
+
+    def test_validate_chat_request_rejects_unsupported_model(self) -> None:
+        req = ChatCompletionRequest(
+            model="not-a-real-model",
+            messages=[ChatMessage(role="user", content="hello")],
+        )
+        with self.assertRaises(HTTPException) as ctx:
+            _validate_chat_request(req)
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("Unsupported model", ctx.exception.detail)
 
 
 if __name__ == "__main__":

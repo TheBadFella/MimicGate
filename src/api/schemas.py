@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 class ChatRequest(BaseModel):
     """Request body for sending a message."""
     message: str = Field(..., min_length=1, description="The message to send to ChatGPT")
+    model: str | None = Field(None, description="Optional ChatGPT model id / label to switch to before sending")
 
 
 class ImageInfoResponse(BaseModel):
