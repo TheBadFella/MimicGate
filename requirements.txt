@@ -16,6 +16,6 @@ pydantic>=2.13.3
 python-dotenv>=1.2.2
 
 # OpenAI-compatible testing
-openai>=1.0
+openai>=2.32.0
 langchain-openai>=0.1
 langchain>=0.2
