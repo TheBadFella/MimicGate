@@ -26,6 +26,7 @@ from src.browser.manager import BrowserManager
 from src.browser.auto_login import ensure_logged_in
 from src.chatgpt.client import ChatGPTClient
 from src.config import Config
+from src.api.ollama_routes import ollama_router
 from src.api.routes import router, set_client
 from src.api.openai_routes import openai_router, set_openai_client
 from src.log import setup_logging
@@ -150,6 +151,12 @@ async def lifespan(app: FastAPI):
         ("POST", f"{host}/{{app_name}}/v1/images/generations", "App-scoped image generation"),
         ("GET ", f"{host}/v1/models", "List models"),
         ("GET ", f"{host}/{{app_name}}/v1/models", "App-scoped models"),
+        ("POST", f"{host}/api/chat", "Ollama-compatible chat"),
+        ("POST", f"{host}/api/generate", "Ollama-compatible generation"),
+        ("POST", f"{host}/api/embed", "Ollama-compatible embeddings"),
+        ("GET ", f"{host}/api/tags", "Ollama model tags"),
+        ("POST", f"{host}/api/show", "Ollama model metadata"),
+        ("GET ", f"{host}/api/ps", "Ollama active models"),
         ("POST", f"{host}/chat", "Native chat"),
         ("POST", f"{host}/thread/new", "New thread"),
         ("GET ", f"{host}/threads", "List threads"),
@@ -271,6 +278,7 @@ app.add_middleware(
 
 app.include_router(router)
 app.include_router(openai_router)
+app.include_router(ollama_router)
 
 
 @app.get("/healthz", include_in_schema=False)

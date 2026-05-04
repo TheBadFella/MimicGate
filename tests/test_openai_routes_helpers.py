@@ -36,15 +36,22 @@ if "playwright_stealth" not in sys.modules:
     sys.modules["playwright_stealth"] = playwright_stealth_mod
 
 from src.api.openai_routes import (
+    _build_page_extraction_note,
+    _build_page_extraction_response_format,
     _detect_user_prefix_contract,
     _display_app_name,
     _derive_app_key,
     _infer_expected_item_count,
     _looks_like_instruction_prefix,
     _merge_header_rows_in_array,
+    _structured_cardinality_mismatch,
     _should_use_line_cardinality_fallback,
     _validate_chat_request,
 )
+from src.api.browser_gate import browser_access_lock
+from src.api import routes as native_routes
+from src.api import openai_routes as openai_routes_module
+from src.api.attachment_expander import AttachmentPageDescriptor
 from src.api.openai_schemas import ChatCompletionRequest, ChatMessage
 
 
@@ -67,6 +74,10 @@ def _make_request(headers: dict[str, str] | None = None, client_host: str = "127
 
 
 class OpenAIRoutesHelpersTests(unittest.TestCase):
+    def test_route_families_share_browser_access_lock(self) -> None:
+        self.assertIs(native_routes.browser_access_lock, browser_access_lock)
+        self.assertIs(openai_routes_module.browser_access_lock, browser_access_lock)
+
     def test_derive_app_key_prefers_user(self) -> None:
         req = ChatCompletionRequest(
             messages=[ChatMessage(role="user", content="hello")],
@@ -202,6 +213,55 @@ class OpenAIRoutesHelpersTests(unittest.TestCase):
             _validate_chat_request(req)
         self.assertEqual(ctx.exception.status_code, 400)
         self.assertIn("Unsupported model", ctx.exception.detail)
+
+    def test_validate_chat_request_rejects_unknown_page_extraction_mode(self) -> None:
+        req = ChatCompletionRequest(
+            messages=[ChatMessage(role="user", content="hello")],
+            page_extraction={"mode": "table"},
+        )
+        with self.assertRaises(HTTPException) as ctx:
+            _validate_chat_request(req)
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("Unsupported page_extraction.mode", ctx.exception.detail)
+
+    def test_validate_chat_request_rejects_page_extraction_with_response_format(self) -> None:
+        req = ChatCompletionRequest(
+            messages=[ChatMessage(role="user", content="hello")],
+            response_format="json_object",
+            page_extraction={"mode": "structured"},
+        )
+        with self.assertRaises(HTTPException) as ctx:
+            _validate_chat_request(req)
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("manages response_format automatically", ctx.exception.detail)
+
+    def test_build_page_extraction_note_lists_pages(self) -> None:
+        note = _build_page_extraction_note(
+            [
+                AttachmentPageDescriptor(source_name="contract.pdf", page_number=1, page_index=1, source_kind="pdf"),
+                AttachmentPageDescriptor(source_name="contract.pdf", page_number=2, page_index=2, source_kind="pdf"),
+            ]
+        )
+        self.assertIn("[Per-page extraction]", note)
+        self.assertIn("exactly 2 item(s)", note)
+        self.assertIn("page_index=1", note)
+        self.assertIn("page 2", note)
+
+    def test_build_page_extraction_response_format_requires_pages_array(self) -> None:
+        response_format = _build_page_extraction_response_format(
+            [AttachmentPageDescriptor(source_name="doc.pdf", page_number=1, page_index=1, source_kind="pdf")]
+        )
+        self.assertEqual(response_format["type"], "json_schema")
+        schema = response_format["json_schema"]["schema"]
+        self.assertIn("pages", schema["properties"])
+        self.assertEqual(schema["required"], ["pages"])
+
+    def test_structured_cardinality_mismatch_uses_explicit_expected_count(self) -> None:
+        messages = [ChatMessage(role="user", content="single page")]
+        response_text = '{"pages":[{"page_index":1,"source_name":"a.pdf","page_number":1,"text":"a"}]}'
+        self.assertIsNone(_structured_cardinality_mismatch(messages, response_text, expected_count=1))
+        mismatch = _structured_cardinality_mismatch(messages, '{"pages":[]}', expected_count=1)
+        self.assertEqual(mismatch, (1, 0))
 
 
 if __name__ == "__main__":

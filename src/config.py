@@ -32,6 +32,12 @@ class Config:
         "gpt-5.5=GPT-5.5,gpt-5.5-pro=GPT-5.5 pro,gpt-5.4=GPT-5.4,gpt-5.4-pro=GPT-5.4 pro,gpt-5.4-mini=GPT-5.4 mini,gpt-5.4-nano=GPT-5.4 nano,gpt-5-mini=GPT-5 mini,gpt-5-nano=GPT-5 nano,gpt-5=GPT-5,gpt-5.3=GPT-5.3,o3=o3,o4-mini=o4-mini,gpt-4.5=GPT-4.5,gpt-4.1=GPT-4.1,gpt-4.1-mini=GPT-4.1 mini,gpt-4o=GPT-4o",
     )
     CHATGPT_MODEL_SWITCH_TIMEOUT: int = int(os.getenv("CHATGPT_MODEL_SWITCH_TIMEOUT", "10000"))
+    ATTACHMENT_EXPAND_MULTIPAGE: bool = os.getenv("ATTACHMENT_EXPAND_MULTIPAGE", "true").lower() == "true"
+    ATTACHMENT_MAX_PAGES: int = int(os.getenv("ATTACHMENT_MAX_PAGES", "24"))
+    ATTACHMENT_RENDER_DPI: int = int(os.getenv("ATTACHMENT_RENDER_DPI", "144"))
+    OLLAMA_EMBEDDING_MODELS: str = os.getenv("OLLAMA_EMBEDDING_MODELS", "nomic-embed-text")
+    OLLAMA_EMBEDDING_DIMENSIONS: int = int(os.getenv("OLLAMA_EMBEDDING_DIMENSIONS", "768"))
+    OLLAMA_ACTIVE_MODEL_TTL_SECONDS: int = int(os.getenv("OLLAMA_ACTIVE_MODEL_TTL_SECONDS", "900"))
 
     # Timeouts (ms)
     RESPONSE_TIMEOUT: int = int(os.getenv("RESPONSE_TIMEOUT", "120000"))
