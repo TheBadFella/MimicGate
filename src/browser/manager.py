@@ -116,6 +116,15 @@ def _cleanup_stale_locks(data_dir: Path) -> None:
         log.info(f"Removed {removed} stale SQLite journal/WAL/SHM files")
 
 
+def _env_int(name: str, default: int) -> int:
+    """Read a positive integer from the environment."""
+    try:
+        value = int(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
 class BrowserManager:
     """Manages a single persistent Chromium browser context."""
 
@@ -139,9 +148,18 @@ class BrowserManager:
         log.info("Launching browser...")
         self._playwright = await async_playwright().start()
 
-        # Randomize viewport slightly to avoid fingerprint consistency
-        width = Config.VIEWPORT_WIDTH + random.randint(-20, 20)
-        height = Config.VIEWPORT_HEIGHT + random.randint(-20, 20)
+        in_docker = os.path.exists("/.dockerenv") or os.environ.get("DISPLAY") == ":99"
+        display_width = _env_int("DISPLAY_WIDTH", Config.VIEWPORT_WIDTH)
+        display_height = _env_int("DISPLAY_HEIGHT", Config.VIEWPORT_HEIGHT)
+
+        # Randomize local headed launches slightly to avoid fingerprint consistency.
+        # In Docker/VNC, use the Xvfb size so Chrome fills the visible remote desktop.
+        if in_docker:
+            width = display_width
+            height = display_height
+        else:
+            width = Config.VIEWPORT_WIDTH + random.randint(-20, 20)
+            height = Config.VIEWPORT_HEIGHT + random.randint(-20, 20)
 
         # Try real Chrome first, fall back to bundled Chromium
         chrome_args = [
@@ -151,11 +169,14 @@ class BrowserManager:
         ]
 
         # Docker-specific flags
-        if os.path.exists("/.dockerenv") or os.environ.get("DISPLAY") == ":99":
+        if in_docker:
             chrome_args.extend([
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
                 "--disable-gpu",
+                "--start-maximized",
+                "--window-position=0,0",
+                f"--window-size={width},{height}",
             ])
 
         # In Docker, Chrome's DNS resolver can fail. Pre-resolve domains
@@ -168,11 +189,14 @@ class BrowserManager:
             user_data_dir=str(Config.BROWSER_DATA_DIR),
             headless=Config.HEADLESS,
             slow_mo=Config.SLOW_MO,
-            viewport={"width": width, "height": height},
             locale="en-US",
             timezone_id="America/Los_Angeles",
             args=chrome_args,
         )
+        if in_docker:
+            launch_kwargs["no_viewport"] = True
+        else:
+            launch_kwargs["viewport"] = {"width": width, "height": height}
 
         try:
             self._context = await self._playwright.chromium.launch_persistent_context(
