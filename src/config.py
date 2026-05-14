@@ -8,8 +8,20 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load .env from project root
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_CODE_ROOT = Path(__file__).resolve().parent.parent
+_CWD = Path.cwd()
+
+# Prefer the invocation directory as project root when running from a checkout
+# (for example `nix run .#proxy` from repo root). Fall back to the code location
+# when running from packaged/store execution.
+if (_CWD / "src").exists() and (_CWD / "scripts").exists():
+    _PROJECT_ROOT = _CWD
+else:
+    _PROJECT_ROOT = _CODE_ROOT
+
+# Load .env from current working directory first, then from the resolved project
+# root. Environment variables already set by the shell/systemd still win.
+load_dotenv(_CWD / ".env")
 load_dotenv(_PROJECT_ROOT / ".env")
 
 
