@@ -367,6 +367,111 @@ class ChatGPTClient:
         log.info(f"Found {len(threads)} threads in sidebar")
         return threads
 
+    async def delete_thread(self, thread_id: str) -> bool:
+        """
+        Delete a ChatGPT conversation thread via the web UI.
+
+        Navigates to the thread, opens the sidebar context menu, clicks Delete,
+        and confirms in the modal dialog. Returns True on success, False otherwise.
+
+        This is best-effort: failures are logged but never raised.
+        """
+        log.info(f"Attempting to delete ChatGPT thread: {thread_id}")
+        try:
+            # Navigate to the thread so the sidebar item is visible/interactable
+            await self.navigate_to_thread(thread_id)
+            await asyncio.sleep(2)
+
+            # Locate the sidebar thread item for this specific thread
+            thread_href = f"/c/{thread_id}"
+            thread_el = None
+            for sel in Selectors.SIDEBAR_THREAD_ITEM:
+                try:
+                    elements = await self._page.query_selector_all(sel)
+                    for el in elements:
+                        href = (await el.get_attribute("href") or "").rstrip("/")
+                        if thread_href in href or href.endswith(f"/c/{thread_id}"):
+                            thread_el = el
+                            break
+                    if thread_el:
+                        break
+                except Exception:
+                    continue
+
+            if not thread_el:
+                log.warning(f"Could not find sidebar item for thread {thread_id}")
+                return False
+
+            # Hover over the thread item to reveal the menu button
+            try:
+                await thread_el.hover()
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                log.debug(f"Hover on thread item failed (non-fatal): {e}")
+
+            # Click the three-dot / overflow menu button
+            menu_clicked = False
+            for sel in Selectors.SIDEBAR_THREAD_MENU_BUTTON:
+                try:
+                    # Try within the thread item's parent row first
+                    parent = await thread_el.evaluate_handle("el => el.closest('li') || el.closest('div[class*=\"group\"]')")
+                    btn = await parent.query_selector(sel)
+                    if btn:
+                        await btn.click(timeout=3000)
+                        menu_clicked = True
+                        break
+                except Exception:
+                    continue
+
+            if not menu_clicked:
+                log.warning(f"Could not open context menu for thread {thread_id}")
+                return False
+
+            await asyncio.sleep(0.5)
+
+            # Click "Delete" in the context menu
+            delete_clicked = False
+            for sel in Selectors.THREAD_DELETE_OPTION:
+                try:
+                    btn = await self._page.wait_for_selector(sel, timeout=3000, state="visible")
+                    if btn:
+                        await btn.click(timeout=3000)
+                        delete_clicked = True
+                        break
+                except Exception:
+                    continue
+
+            if not delete_clicked:
+                log.warning(f"Could not click Delete option for thread {thread_id}")
+                return False
+
+            await asyncio.sleep(0.5)
+
+            # Confirm deletion in the modal dialog
+            confirm_clicked = False
+            for sel in Selectors.THREAD_CONFIRM_DELETE_BUTTON:
+                try:
+                    btn = await self._page.wait_for_selector(sel, timeout=3000, state="visible")
+                    if btn:
+                        await btn.click(timeout=3000)
+                        confirm_clicked = True
+                        break
+                except Exception:
+                    continue
+
+            if not confirm_clicked:
+                log.warning(f"Could not confirm deletion for thread {thread_id}")
+                return False
+
+            # Allow time for the deletion request to process
+            await asyncio.sleep(2)
+            log.info(f"Successfully deleted ChatGPT thread: {thread_id}")
+            return True
+
+        except Exception as e:
+            log.warning(f"Failed to delete thread {thread_id}: {e}", exc_info=True)
+            return False
+
     # ── Private Helpers ─────────────────────────────────────────
 
     async def _extract_image_turn_text(self, previous_turn_signature: str | None = None) -> str:

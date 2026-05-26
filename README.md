@@ -748,6 +748,7 @@ All settings are loaded from environment variables (`.env` file or `docker-compo
 | `API_THREAD_CONTRACT_TTL_SECONDS` | `3600`    | TTL for per-thread instruction contracts in memory       |
 | `API_APP_THREAD_MODE` | `false`               | If `true`, routes requests to app-specific threads keyed by app identity (`user` first, then built-in app-name headers) |
 | `API_APP_THREAD_TTL_SECONDS` | `86400`       | TTL for app-to-thread mappings in memory                 |
+| `API_APP_THREAD_DELETE_EXPIRED` | `false`  | If `true`, best-effort deletion of expired CatGPT-created app threads from the web UI |
 | `API_HEADER_ROW_MERGE_MODE` | `false`        | If `true`, merges header-only rows (note/context only) into the next item's note/context |
 | `VNC_PASSWORD`       | `catgpt`              | Password for noVNC browser UI                            |
 | `RATE_LIMIT_SECONDS` | `5`                   | Min seconds between API requests                         |
@@ -1001,6 +1002,24 @@ Incoming request
 
 This prevents multiple apps sharing one browser session from contaminating each
 other's context.
+
+##### Expired App-Thread Cleanup
+
+`API_APP_THREAD_TTL_SECONDS` controls how long an app identity can reuse the same
+mapped ChatGPT thread. The default is `86400` seconds (24 hours), and CatGPT
+enforces a minimum of 300 seconds.
+
+Cleanup is opportunistic, not a background timer: expired mappings are checked
+when an app-thread request is handled. If `API_APP_THREAD_DELETE_EXPIRED=false`
+(the default), CatGPT only drops the expired in-memory mapping. If
+`API_APP_THREAD_DELETE_EXPIRED=true`, CatGPT also schedules a best-effort browser
+UI deletion after the current request finishes and releases the shared browser
+lock.
+
+Only threads that CatGPT created for app-thread isolation are eligible for UI
+deletion. Threads supplied through `request.thread_id`, manually-created ChatGPT
+threads, and pre-existing chats are not marked delete-owned; when those mappings
+expire, CatGPT forgets the mapping but does not delete the ChatGPT conversation.
 
 #### 3) Thread Contract Compression (Large Instruction Prompts)
 

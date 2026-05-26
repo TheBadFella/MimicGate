@@ -339,6 +339,17 @@ class BrowserManager:
             logged_in_indicators = []
 
         try:
+            # Logged-out ChatGPT can still show a guest composer, so visible
+            # login controls must win over chat-input detection.
+            for selector in login_indicators:
+                try:
+                    el = await self.page.wait_for_selector(selector, timeout=2000)
+                    if el:
+                        log.warning("Login check: NOT LOGGED IN (login button found)")
+                        return False
+                except Exception:
+                    continue
+
             # Try to find the chat input
             for selector in chat_inputs:
                 try:
@@ -356,16 +367,6 @@ class BrowserManager:
                     if el:
                         log.info("Login check: LOGGED IN (user menu found)")
                         return True
-                except Exception:
-                    continue
-
-            # Check for login indicators
-            for selector in login_indicators:
-                try:
-                    el = await self.page.wait_for_selector(selector, timeout=2000)
-                    if el:
-                        log.warning("Login check: NOT LOGGED IN (login button found)")
-                        return False
                 except Exception:
                     continue
 

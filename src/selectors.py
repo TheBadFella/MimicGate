@@ -130,3 +130,37 @@ class Selectors:
         "button[aria-label='Add files and more']",
         "button[aria-label='Attach files']",
     ]
+
+    # ── Thread deletion (sidebar context menu → Delete → confirm) ──
+    # Sidebar conversation item — bring up its context/overflow menu.
+    SIDEBAR_THREAD_ITEM = [
+        "nav a[href^='/c/']",
+        "a[href^='/c/']",
+    ]
+    # Three-dot / overflow menu button on a sidebar conversation row.
+    SIDEBAR_THREAD_MENU_BUTTON = [
+        "button[data-testid='thread-menu-button']",
+        "button[aria-label='More options']",
+        "button[aria-label*='menu' i]",
+        "button[aria-label*='actions' i]",
+        "button[aria-haspopup='menu']",
+    ]
+    # "Delete" choice in the conversation context menu.
+    THREAD_DELETE_OPTION = [
+        "button:has-text('Delete')",
+        "[role='menuitem']:has-text('Delete')",
+        "div[role='menu'] button:has-text('Delete')",
+        "div button:has-text('Delete')",
+    ]
+    # Confirm-delete action in the modal dialog.
+    THREAD_CONFIRM_DELETE_BUTTON = [
+        "button[data-testid='confirm-delete-button']",
+        "button[data-testid='delete-confirm-button']",
+        "button:has-text('Delete conversation')",
+        "button:has-text('Delete chat')",
+        "button:has-text('Delete thread')",
+        "button[aria-label='Delete conversation']",
+        "div[role='alertdialog'] button.bg-red-700",
+        "div[role='alertdialog'] button:has-text('Delete')",
+        "div[role='dialog'] button:has-text('Delete')",
+    ]
