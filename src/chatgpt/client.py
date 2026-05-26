@@ -245,15 +245,7 @@ class ChatGPTClient:
             configure_opened = await self._click_menu_text("Configure")
             if configure_opened:
                 await asyncio.sleep(0.5)
-                switched = await self._click_model_option(target.ui_labels)
-
-        if not switched and await self._menu_contains_any_text(target.ui_labels):
-            log.info(
-                "ChatGPT model family is visible in the Pro composer menu: %s",
-                target.ui_label,
-            )
-            self._last_model_label = target.ui_label
-            return
+                switched = await self._select_model_from_configure_dialog(target.ui_labels)
 
         if not switched:
             raise RuntimeError(f"Could not find ChatGPT model option '{target.ui_label}' in the model picker")
@@ -613,42 +605,65 @@ class ChatGPTClient:
                 return True
         return False
 
-    async def _menu_contains_any_text(self, target_labels: tuple[str, ...]) -> bool:
-        """Return whether an open model menu contains any target label."""
-        return await self._page.evaluate(
+    async def _select_model_from_configure_dialog(self, target_labels: tuple[str, ...]) -> bool:
+        """Select a model from the Pro Intelligence -> Model dropdown dialog."""
+        dropdown_opened = await self._page.evaluate(
             r"""
-            (targetLabels) => {
+            () => {
                 const normalize = (value) =>
                     (value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
-                const targets = (targetLabels || []).map(normalize).filter(Boolean);
-                if (!targets.length) return false;
-                const selectors = [
-                    "[role='menu']",
-                    "[role='listbox']",
-                    "[data-radix-popper-content-wrapper]",
-                    "div",
-                ];
-                for (const selector of selectors) {
-                    for (const el of document.querySelectorAll(selector)) {
-                        const rect = el.getBoundingClientRect();
-                        const style = window.getComputedStyle(el);
-                        if (rect.width <= 0 ||
-                            rect.height <= 0 ||
-                            style.visibility === "hidden" ||
-                            style.display === "none") {
-                            continue;
-                        }
-                        const text = normalize(el.innerText || el.textContent || "");
-                        if (targets.some((target) => text.includes(target))) {
-                            return true;
-                        }
+                const isVisible = (el) => {
+                    if (!el) return false;
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    return rect.width > 0 &&
+                        rect.height > 0 &&
+                        style.visibility !== "hidden" &&
+                        style.display !== "none";
+                };
+                const dialogs = Array.from(document.querySelectorAll("[role='dialog'], [aria-modal='true'], div"))
+                    .filter((el) => isVisible(el) && normalize(el.innerText || "").includes("intelligence"));
+                const dialog = dialogs.sort((a, b) => {
+                    const ar = a.getBoundingClientRect();
+                    const br = b.getBoundingClientRect();
+                    return (ar.width * ar.height) - (br.width * br.height);
+                })[0];
+                if (!dialog) return false;
+
+                const buttons = Array.from(dialog.querySelectorAll("button,[role='button'],[aria-haspopup]"))
+                    .filter(isVisible);
+                const candidates = [];
+                for (const el of buttons) {
+                    const text = normalize([
+                        el.innerText || "",
+                        el.textContent || "",
+                        el.getAttribute("aria-label") || "",
+                        el.getAttribute("title") || "",
+                    ].join(" "));
+                    const rect = el.getBoundingClientRect();
+                    let score = 0;
+                    if (text.match(/^5[0-9]*$/)) score += 80;
+                    if (text.includes("model")) score += 40;
+                    if (el.getAttribute("aria-haspopup")) score += 30;
+                    if (rect.top < dialog.getBoundingClientRect().top + 140) score += 20;
+                    if (rect.left > dialog.getBoundingClientRect().left + dialog.getBoundingClientRect().width / 2) {
+                        score += 20;
                     }
+                    if (score) candidates.push({ el, score, top: rect.top, left: rect.left });
                 }
-                return false;
+                candidates.sort((a, b) => b.score - a.score || a.top - b.top || b.left - a.left);
+                const best = candidates[0];
+                if (!best) return false;
+                best.el.click();
+                return true;
             }
-            """,
-            list(target_labels),
+            """
         )
+        if not dropdown_opened:
+            return False
+
+        await asyncio.sleep(0.3)
+        return await self._click_model_option(target_labels)
 
     async def _click_menu_text(self, target_text: str) -> bool:
         """Click a visible menu-style element whose text matches the target."""
