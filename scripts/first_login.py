@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-First Login — One-time script to open browser and let user sign in manually.
+First Login -- One-time script to open browser and let user sign in manually.
 
 Run this once to create a persistent browser session. After signing in,
 the session (cookies, tokens) is saved to browser_data/ and reused.
@@ -26,14 +26,27 @@ log = setup_logging("first_login", log_file="first_login.log")
 async def main():
     browser = BrowserManager()
 
+    provider_name = Config.PROVIDER.title()
+    provider_url = Config.provider_url()
+
     try:
         print("\n" + "=" * 60)
-        print("  ChatGPT First Login — Browser Session Setup")
+        print(f"  CatGPT Gateway -- {provider_name} First Login")
         print("=" * 60)
-        print(f"\n  Browser data dir: {Config.BROWSER_DATA_DIR}")
-        print(f"  Target: {Config.CHATGPT_URL}")
+        print(f"\n  Provider:         {provider_name}")
+        print(f"  Browser data dir: {Config.BROWSER_DATA_DIR}")
+        print(f"  Target:           {provider_url}")
+        print("\n  " + "!" * 56)
+        print("  IMPORTANT: Google login will NOT work here.")
+        print("  Chromium in a controlled/automated context is blocked")
+        print("  by Google's OAuth bot detection. Use instead:")
+        print("    • Email + password  (most reliable)")
+        print("    • Microsoft account")
+        print("    • Apple ID")
+        print("    • Magic link / OTP sent to your email")
+        print("  " + "!" * 56)
         print("\n  A Chrome window will open. Please:")
-        print("  1. Sign in to ChatGPT with your account")
+        print(f"  1. Sign in to {provider_name} with your account (NOT Google)")
         print("  2. Complete any CAPTCHA / Cloudflare checks")
         print("  3. Wait until you see the chat interface")
         print("  4. Come back here and press Enter")
@@ -42,8 +55,8 @@ async def main():
         # Launch browser
         page = await browser.start()
 
-        # Navigate to ChatGPT
-        await browser.navigate(Config.CHATGPT_URL)
+        # Navigate to provider
+        await browser.navigate(provider_url)
 
         print("  Browser opened. Sign in now...")
         print()
@@ -55,11 +68,11 @@ async def main():
         logged_in = await browser.is_logged_in()
 
         if logged_in:
-            print("\n  ✅ Login verified! Session saved to browser_data/")
+            print(f"\n  Login verified! Session saved to {Config.BROWSER_DATA_DIR}/")
             print("  You won't need to sign in again.\n")
             log.info("First login completed successfully")
         else:
-            print("\n  ⚠️  Could not verify login. Session may still be saved.")
+            print("\n  Could not verify login. Session may still be saved.")
             print("  Try running test_phase1.py to check.\n")
             log.warning("Login verification uncertain")
 

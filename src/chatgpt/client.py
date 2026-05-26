@@ -93,7 +93,7 @@ class ChatGPTClient:
             await self.ensure_model(model)
 
         # 2. Brief pause (human would take a moment to start typing)
-        await random_delay(500, 1200)
+        await random_delay(250, 700)
 
         # 2.5. Upload files/images if provided
         if all_attachments:

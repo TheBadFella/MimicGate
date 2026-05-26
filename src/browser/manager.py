@@ -18,7 +18,6 @@ from patchright.async_api import async_playwright, BrowserContext, Page, Playwri
 from src.config import Config
 from src.browser.stealth import apply_stealth
 from src.log import setup_logging
-from src.selectors import Selectors
 
 log = setup_logging("browser")
 
@@ -47,6 +46,12 @@ def _resolve_domains_for_chrome() -> str:
         "challenges.cloudflare.com",
         "static.cloudflareinsights.com",
         "tcr9i.chat.openai.com",
+        # Claude domains
+        "claude.ai",
+        "api.claude.ai",
+        "cdn.claude.ai",
+        "anthropic.com",
+        "www.anthropic.com",
     ]
     rules = []
     for domain in domains:
@@ -322,9 +327,21 @@ class BrowserManager:
 
         Returns True if the chat interface is visible, False if login page detected.
         """
+        from src.selectors import Selectors
+        from src.claude.selectors import ClaudeSelectors
+
+        if Config.PROVIDER == "claude":
+            chat_inputs = ClaudeSelectors.CHAT_INPUT
+            login_indicators = ClaudeSelectors.LOGIN_INDICATORS
+            logged_in_indicators = ClaudeSelectors.LOGGED_IN_INDICATORS
+        else:
+            chat_inputs = Selectors.CHAT_INPUT
+            login_indicators = Selectors.LOGIN_INDICATORS
+            logged_in_indicators = []
+
         try:
             # Try to find the chat input
-            for selector in Selectors.CHAT_INPUT:
+            for selector in chat_inputs:
                 try:
                     el = await self.page.wait_for_selector(selector, timeout=3000)
                     if el:
@@ -333,8 +350,18 @@ class BrowserManager:
                 except Exception:
                     continue
 
+            # Claude: also check for user-menu-button as a logged-in signal
+            for selector in logged_in_indicators:
+                try:
+                    el = await self.page.wait_for_selector(selector, timeout=2000)
+                    if el:
+                        log.info("Login check: LOGGED IN (user menu found)")
+                        return True
+                except Exception:
+                    continue
+
             # Check for login indicators
-            for selector in Selectors.LOGIN_INDICATORS:
+            for selector in login_indicators:
                 try:
                     el = await self.page.wait_for_selector(selector, timeout=2000)
                     if el:

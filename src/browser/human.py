@@ -37,7 +37,7 @@ async def human_type(page: Page, selector: str, text: str) -> None:
     element = page.locator(selector).first
     await element.click()
     # Small pause after focusing (human would take a moment)
-    await asyncio.sleep(random.uniform(0.2, 0.5))
+    await asyncio.sleep(random.uniform(0.1, 0.25))
 
     log.debug(f"Pasting {len(text)} chars into {selector}")
     await page.keyboard.insert_text(text)
@@ -55,7 +55,7 @@ async def human_click(page: Page, selector: str) -> None:
     """
     element = page.locator(selector).first
     await element.hover()
-    await asyncio.sleep(random.uniform(0.1, 0.3))
+    await asyncio.sleep(random.uniform(0.05, 0.15))
     await element.click()
     log.debug(f"Human-clicked: {selector}")
 

@@ -28,11 +28,16 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.browser.manager import BrowserManager
-from src.chatgpt.client import ChatGPTClient
 from src.dom_observer import DOMObserver
 from src.network_recorder import NetworkRecorder
 from src.config import Config
 from src.log import setup_logging
+
+# Provider-aware client import
+if Config.PROVIDER == "claude":
+    from src.claude.client import ClaudeClient as ProviderClient
+else:
+    from src.chatgpt.client import ChatGPTClient as ProviderClient
 
 log = setup_logging("test_phase1", log_file="test_phase1.log")
 
@@ -44,16 +49,16 @@ async def main(message: str, new_chat: bool, observe: bool):
 
     try:
         print("\n" + "=" * 60)
-        print("  Phase 1 Test — ChatGPT Browser Automation")
+        print(f"  Phase 1 Test — {Config.PROVIDER.title()} Browser Automation")
         print("=" * 60)
 
         # 1. Launch browser
         print("\n  [1/7] Launching browser...")
         page = await browser.start()
 
-        # 2. Navigate to ChatGPT
-        print("  [2/7] Navigating to ChatGPT...")
-        await browser.navigate(Config.CHATGPT_URL)
+        # 2. Navigate to provider
+        print(f"  [2/7] Navigating to {Config.PROVIDER.title()}...")
+        await browser.navigate(Config.provider_url())
 
         # Give page time to fully load
         await asyncio.sleep(3)
@@ -82,7 +87,7 @@ async def main(message: str, new_chat: bool, observe: bool):
             print("  [4/7] Observers skipped (use --observe to enable)")
 
         # 5. Optionally start new chat
-        client = ChatGPTClient(page)
+        client = ProviderClient(page)
 
         if new_chat:
             print("  [5/7] Starting new chat...")
@@ -160,7 +165,7 @@ async def main(message: str, new_chat: bool, observe: bool):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Phase 1 Test — ChatGPT Automation")
+    parser = argparse.ArgumentParser(description="Phase 1 Test — Provider Automation")
     parser.add_argument(
         "--message", "-m",
         default=DEFAULT_MESSAGE,

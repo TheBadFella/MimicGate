@@ -25,6 +25,7 @@ def normalize_assistant_text(text: str | None) -> str:
     """Normalize extracted assistant text for validation and comparisons."""
     cleaned = (text or "").strip()
     cleaned = re.sub(r"^ChatGPT said:\s*", "", cleaned, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r"^You said:\s*", "", cleaned, flags=re.IGNORECASE).strip()
     return cleaned
 
 
@@ -109,7 +110,7 @@ async def _latest_assistant_turn_snapshot(page: Page) -> dict:
                     '';
 
                 const hasCopyButton = Boolean(
-                    article.querySelector('button[data-testid="copy-turn-action-button"], button[aria-label="Copy"]')
+                    article.querySelector('button[data-testid="copy-turn-action-button"], button[aria-label="Copy message"], button[aria-label="Copy"]')
                 );
 
                 const hasImage = hasGeneratedImage(article);
@@ -228,7 +229,7 @@ async def _count_copy_buttons(page: Page) -> int:
             for (const article of articles) {
                 if (!isAssistantArticle(article)) continue;
                 const hasCopyButton = article.querySelector(
-                    'button[data-testid="copy-turn-action-button"], button[aria-label="Copy"]'
+                    'button[data-testid="copy-turn-action-button"], button[aria-label="Copy message"], button[aria-label="Copy"]'
                 );
                 if (hasCopyButton) total++;
             }
@@ -246,7 +247,7 @@ async def _wait_for_new_turn_signature(
 ) -> bool:
     """Wait until latest assistant-turn signature differs from previous one."""
     elapsed = 0
-    poll_interval = 0.5
+    poll_interval = Config.POLL_INTERVAL_MS / 1000
     heartbeat = 10
 
     while elapsed * 1000 < timeout_ms:
@@ -334,7 +335,7 @@ async def _wait_for_copy_button_or_image(
     Returns "copy", "image", or None if timed out.
     """
     elapsed = 0
-    poll_interval = 1.0
+    poll_interval = Config.POLL_INTERVAL_MS / 1000
     heartbeat = 10
 
     while elapsed * 1000 < timeout_ms:
@@ -354,7 +355,7 @@ async def _wait_for_copy_button_or_image(
 
         has_image = await _detect_image_in_latest_turn(page, previous_turn_signature)
         if has_image:
-            await asyncio.sleep(2)
+            await asyncio.sleep(1.0)
             log.debug(f"Generated image detected on latest turn {signature}")
             return "image"
 
@@ -410,10 +411,10 @@ async def _wait_via_text_stability(
     If previous_turn_signature is provided, ignores stabilization on that old turn.
     """
     stable_count = 0
-    required_stable = 5
+    required_stable = 3
     last_text = ""
     elapsed = 0
-    poll_interval = 1.0
+    poll_interval = Config.POLL_INTERVAL_MS / 1000
 
     while elapsed * 1000 < timeout_ms:
         snapshot = await _latest_assistant_turn_snapshot(page)
@@ -510,7 +511,7 @@ async def extract_last_response_via_copy(
                     }
 
                     const btn = article.querySelector(
-                        'button[data-testid="copy-turn-action-button"], button[aria-label="Copy"]'
+                        'button[data-testid="copy-turn-action-button"], button[aria-label="Copy message"], button[aria-label="Copy"]'
                     );
                     if (!btn) {
                         return { clicked: false, reason: 'no-copy-button', signature };

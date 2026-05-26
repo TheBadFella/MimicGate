@@ -23,9 +23,14 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.browser.manager import BrowserManager
-from src.chatgpt.client import ChatGPTClient
 from src.config import Config
 from src.log import setup_logging
+
+# Provider-aware client import
+if Config.PROVIDER == "claude":
+    from src.claude.client import ClaudeClient as ProviderClient
+else:
+    from src.chatgpt.client import ChatGPTClient as ProviderClient
 
 log = setup_logging("test_robust", log_file="test_robust.log")
 
@@ -39,7 +44,7 @@ TESTS = [
             "and Rust. Columns: Language, Typing, Speed, Use Case, Year Created. "
             "Only output the table, nothing else."
         ),
-        "expect_contains": ["|", "Python", "JavaScript", "Rust"],
+        "expect_contains": ["|" if Config.PROVIDER != "claude" else "\t", "Python", "JavaScript", "Rust"],
     },
     {
         "name": "Code block",
@@ -75,7 +80,7 @@ TESTS = [
             "Layer Number, Name, Protocol Examples, PDU. Then below the table, "
             "write one sentence explaining why this model matters."
         ),
-        "expect_contains": ["|", "Physical", "Application"],
+        "expect_contains": ["|" if Config.PROVIDER != "claude" else "\t", "Physical", "Application"],
     },
 ]
 
@@ -118,7 +123,7 @@ async def main():
         # Launch browser
         print("  Starting browser...")
         page = await browser.start()
-        await browser.navigate(Config.CHATGPT_URL)
+        await browser.navigate(Config.provider_url())
         await asyncio.sleep(3)
 
         if not await browser.is_logged_in():
@@ -126,7 +131,7 @@ async def main():
             return
 
         print("  ✅ Logged in\n")
-        client = ChatGPTClient(page)
+        client = ProviderClient(page)
 
         # Start a fresh chat
         print("  Starting new chat...")

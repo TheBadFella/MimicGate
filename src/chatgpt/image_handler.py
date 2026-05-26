@@ -46,10 +46,10 @@ async def detect_images_in_response(page: Page) -> list[dict]:
     """
     result = await page.evaluate("""
         () => {
-            const articles = document.querySelectorAll('article');
-            if (articles.length === 0) return [];
+            const turns = document.querySelectorAll('section[data-testid^="conversation-turn-"]');
+            if (turns.length === 0) return [];
 
-            const lastTurn = articles[articles.length - 1];
+            const lastTurn = turns[turns.length - 1];
 
             // Find generated images — primary: alt="Generated image"
             let images = lastTurn.querySelectorAll('img[alt="Generated image"]');

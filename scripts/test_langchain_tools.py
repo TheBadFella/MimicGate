@@ -26,6 +26,13 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+# Load .env if dotenv is available
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+except ImportError:
+    pass
+
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langchain_core.tools import tool
@@ -34,7 +41,9 @@ from langchain_core.tools import tool
 # ── Configuration ───────────────────────────────────────────────
 
 BASE_URL = "http://localhost:8000/v1"
-MODEL = "catgpt-browser"
+# Auto-detect model from provider env var
+_provider = os.environ.get("PROVIDER", "chatgpt")
+MODEL = "claude-browser" if _provider == "claude" else "catgpt-browser"
 API_KEY = "dummy123"  # CatGPT doesn't require auth
 
 # Image test assets

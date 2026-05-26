@@ -47,6 +47,7 @@ from src.api.attachment_expander import (
 )
 from src.api.browser_gate import browser_access_lock
 from src.chatgpt.client import ChatGPTClient
+from src.claude.client import ClaudeClient
 from src.chatgpt.model_registry import (
     PUBLIC_BROWSER_MODEL_ID,
     is_supported_chat_model,
@@ -60,7 +61,8 @@ log = setup_logging("openai_routes")
 openai_router = APIRouter()
 
 # Global reference - set by server.py at startup
-_client: ChatGPTClient | None = None
+BrowserClient = ChatGPTClient | ClaudeClient
+_client: BrowserClient | None = None
 
 _jobs_lock = asyncio.Lock()
 _jobs: dict[str, ChatCompletionJobResponse] = {}
@@ -92,13 +94,13 @@ _thread_title_lock = asyncio.Lock()
 _thread_titles: dict[str, tuple[float, str]] = {}
 
 
-def set_openai_client(client: ChatGPTClient) -> None:
+def set_openai_client(client: BrowserClient) -> None:
     """Called by server.py to inject the ChatGPT client."""
     global _client
     _client = client
 
 
-def _get_client() -> ChatGPTClient:
+def _get_client() -> BrowserClient:
     if _client is None:
         raise HTTPException(status_code=503, detail="ChatGPT client not initialized")
     return _client
