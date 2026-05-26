@@ -30,6 +30,9 @@ class Selectors:
     # Model picker trigger in ChatGPT's composer/header.
     MODEL_PICKER_BUTTON = [
         "button[data-testid='model-switcher-dropdown-button']",
+        "button[aria-haspopup='menu']:has-text('Instant')",
+        "button[aria-haspopup='menu']:has-text('Thinking')",
+        "button[aria-haspopup='menu']:has-text('Auto')",
     ]
 
     # ── Assistant response messages ─────────────────────────────

@@ -6,7 +6,12 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from dotenv import load_dotenv
+
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:
+    def load_dotenv(*_args, **_kwargs) -> bool:
+        return False
 
 _CODE_ROOT = Path(__file__).resolve().parent.parent
 _CWD = Path.cwd()
@@ -44,9 +49,10 @@ class Config:
     CHATGPT_DEFAULT_MODEL: str = os.getenv("CHATGPT_DEFAULT_MODEL", "")
     CHATGPT_MODEL_ALIASES: str = os.getenv(
         "CHATGPT_MODEL_ALIASES",
-        "gpt-5.5=Latest 5.5|5.5|GPT-5.5,gpt-5.4=5.4|GPT-5.4,gpt-5.3=5.3|GPT-5.3,gpt-5.2=5.2|GPT-5.2,gpt-5.1=5.1|GPT-5.1,gpt-5=GPT-5,gpt-5-mini=GPT-5 mini,gpt-5-nano=GPT-5 nano,o3=o3,o4-mini=o4-mini,gpt-4.5=GPT-4.5,gpt-4.1=GPT-4.1,gpt-4.1-mini=GPT-4.1 mini,gpt-4o=GPT-4o",
+        "gpt-5.5=Instant|Latest 5.5|5.5|GPT-5.5,gpt-5.5-thinking=Thinking|5.5 Thinking|GPT-5.5 Thinking,gpt-5.4=5.4|GPT-5.4,gpt-5.3=5.3|GPT-5.3,gpt-5.2=5.2|GPT-5.2,gpt-5.1=5.1|GPT-5.1,gpt-5=GPT-5,gpt-5-mini=GPT-5 mini,gpt-5-nano=GPT-5 nano,o3=o3,o4-mini=o4-mini,gpt-4.5=GPT-4.5,gpt-4.1=GPT-4.1,gpt-4.1-mini=GPT-4.1 mini,gpt-4o=GPT-4o",
     )
     CHATGPT_MODEL_SWITCH_TIMEOUT: int = int(os.getenv("CHATGPT_MODEL_SWITCH_TIMEOUT", "10000"))
+    CHATGPT_MODEL_SWITCH_STRICT: bool = os.getenv("CHATGPT_MODEL_SWITCH_STRICT", "false").lower() == "true"
     ATTACHMENT_EXPAND_MULTIPAGE: bool = os.getenv("ATTACHMENT_EXPAND_MULTIPAGE", "true").lower() == "true"
     ATTACHMENT_MAX_PAGES: int = int(os.getenv("ATTACHMENT_MAX_PAGES", "24"))
     ATTACHMENT_RENDER_DPI: int = int(os.getenv("ATTACHMENT_RENDER_DPI", "144"))

@@ -46,6 +46,8 @@ class ChatGPTClient:
     def __init__(self, page: Page) -> None:
         self._page = page
         self._last_model_label = ""
+        self._last_model_version_label = ""
+        self._unavailable_model_keys: set[str] = set()
 
     @property
     def page(self) -> Page:
@@ -214,12 +216,30 @@ class ChatGPTClient:
         if target is None:
             log.debug(f"No explicit browser model switch needed for request model={requested_model!r}")
             return
+        target_version_label = self._model_version_label_for_option(target)
+        unavailable_keys = {
+            key
+            for key in (
+                normalize_model_token(requested_model),
+                normalize_model_token(target.public_id),
+                *(normalize_model_token(label) for label in target.ui_labels),
+            )
+            if key
+        }
+        if self._unavailable_model_keys.intersection(unavailable_keys):
+            detail = (
+                f"ChatGPT model option '{target.ui_label}' was previously unavailable "
+                "in this browser session"
+            )
+            self._handle_model_switch_failure(detail)
+            return
 
         current_label = await self._detect_current_model_label()
         if current_label and self._label_matches_model_option(current_label, target):
-            self._last_model_label = target.ui_label
-            log.debug(f"ChatGPT model already selected: {target.ui_label}")
-            return
+            if not self._model_version_needs_configure(target, target_version_label):
+                self._last_model_label = target.ui_label
+                log.debug(f"ChatGPT model already selected: {target.ui_label}")
+                return
 
         log.info(
             "Switching ChatGPT model: request=%s target=%s current=%s",
@@ -230,7 +250,9 @@ class ChatGPTClient:
 
         opened = await self._open_model_picker(target.ui_label, current_label=current_label)
         if not opened:
-            raise RuntimeError(f"Could not open ChatGPT model picker for '{target.ui_label}'")
+            await self._dismiss_model_picker()
+            self._handle_model_switch_failure(f"Could not open ChatGPT model picker for '{target.ui_label}'")
+            return
 
         await asyncio.sleep(0.4)
 
@@ -248,15 +270,38 @@ class ChatGPTClient:
                 switched = await self._select_model_from_configure_dialog(target.ui_labels)
 
         if not switched:
-            raise RuntimeError(f"Could not find ChatGPT model option '{target.ui_label}' in the model picker")
+            self._unavailable_model_keys.update(unavailable_keys)
+            visible_options = await self._collect_visible_model_options()
+            detail = f"Could not find ChatGPT model option '{target.ui_label}' in the model picker"
+            if visible_options:
+                detail = f"{detail}; visible options included: {', '.join(visible_options[:12])}"
+            await self._dismiss_model_picker()
+            self._handle_model_switch_failure(detail)
+            return
+
+        if target_version_label and not self._model_version_is_current(target_version_label):
+            version_configured = await self._ensure_configured_model_version(target_version_label)
+            if not version_configured:
+                visible_options = await self._collect_visible_model_options()
+                detail = f"Could not configure ChatGPT model version '{target_version_label}'"
+                if visible_options:
+                    detail = f"{detail}; visible options included: {', '.join(visible_options[:12])}"
+                await self._dismiss_model_picker()
+                self._handle_model_switch_failure(detail)
+                return
 
         confirmed = await self._wait_for_model_label(target.ui_labels)
         if not confirmed:
             current_after = await self._detect_current_model_label()
             if not self._label_matches_model_option(current_after, target):
-                raise RuntimeError(f"Model switch to '{target.ui_label}' could not be confirmed")
+                await self._dismiss_model_picker()
+                self._handle_model_switch_failure(f"Model switch to '{target.ui_label}' could not be confirmed")
+                return
 
+        await self._dismiss_model_picker()
         self._last_model_label = target.ui_label
+        if target_version_label:
+            self._last_model_version_label = target_version_label
         log.info(f"Model switched to {target.ui_label}")
 
     # ── Navigation ──────────────────────────────────────────────
@@ -497,6 +542,159 @@ class ChatGPTClient:
         )
         return (label or "").strip()
 
+    def _handle_model_switch_failure(self, detail: str) -> None:
+        """Either raise or continue when the requested ChatGPT UI model is unavailable."""
+        if Config.CHATGPT_MODEL_SWITCH_STRICT:
+            raise RuntimeError(detail)
+
+        log.warning(
+            "%s; continuing with the currently selected ChatGPT model "
+            "(set CHATGPT_MODEL_SWITCH_STRICT=true to fail instead)",
+            detail,
+        )
+
+    def _model_version_label_for_option(self, option) -> str:
+        """Return the Configure-dialog version label implied by a model option."""
+        public_id = (getattr(option, "public_id", "") or "").strip().lower()
+        match = re.match(r"gpt-(\d+)\.(\d+)", public_id)
+        if match:
+            return f"{match.group(1)}.{match.group(2)}"
+        if re.match(r"o\d+", public_id):
+            return public_id.split("-", 1)[0]
+        return ""
+
+    def _model_version_is_current(self, target_version_label: str) -> bool:
+        """Return whether the last configured model version matches the target."""
+        target = normalize_model_token(target_version_label)
+        current = normalize_model_token(self._last_model_version_label)
+        return bool(target and current and target == current)
+
+    def _model_version_needs_configure(self, option, target_version_label: str) -> bool:
+        """
+        Return whether a matching visible mode label is insufficient.
+
+        ChatGPT's composer can show only the mode, e.g. `Instant`, while the
+        configured model version inside Configure is `5.4`. For versioned
+        public ids, confirm Configure at least once per process unless we
+        already selected the same version.
+        """
+        if not target_version_label:
+            return False
+        if self._model_version_is_current(target_version_label):
+            return False
+        primary = normalize_model_token(getattr(option, "ui_label", ""))
+        target_version = normalize_model_token(target_version_label)
+        return primary != target_version
+
+    async def _dismiss_model_picker(self) -> None:
+        """Close any open model picker menu/dialog before interacting with the composer."""
+        for _ in range(2):
+            try:
+                await self._page.keyboard.press("Escape")
+                await asyncio.sleep(0.1)
+            except Exception:
+                break
+
+    async def _collect_visible_model_options(self) -> list[str]:
+        """Return visible model-like labels from the currently open picker/dialog."""
+        try:
+            labels = await self._page.evaluate(
+                r"""
+                () => {
+                    const isVisible = (el) => {
+                        if (!el) return false;
+                        const rect = el.getBoundingClientRect();
+                        const style = window.getComputedStyle(el);
+                        return rect.width > 0 &&
+                            rect.height > 0 &&
+                            style.visibility !== "hidden" &&
+                            style.display !== "none";
+                    };
+                    const selectors = [
+                        "[role='menuitemradio']",
+                        "[role='menuitem']",
+                        "[role='option']",
+                        "[role='radio']",
+                        "[role='combobox']",
+                        "[data-radix-collection-item]",
+                        "button",
+                        "li",
+                    ];
+                    const seen = new Set();
+                    const labels = [];
+                    const modelish = /(gpt|claude|o[0-9]|instant|thinking|latest|model|mini|nano|5\.[0-9]|4\.[0-9])/i;
+                    for (const selector of selectors) {
+                        for (const el of document.querySelectorAll(selector)) {
+                            if (!isVisible(el)) continue;
+                            const text = ((el.innerText || el.textContent || "")
+                                .split(/\n+/)
+                                .map((part) => part.trim())
+                                .filter(Boolean)[0] || "").trim();
+                            if (!text || text.length > 80 || !modelish.test(text)) continue;
+                            const key = text.toLowerCase().replace(/\s+/g, " ");
+                            if (seen.has(key)) continue;
+                            seen.add(key);
+                            labels.push(text);
+                            if (labels.length >= 20) return labels;
+                        }
+                    }
+                    return labels;
+                }
+                """
+            )
+        except Exception as e:
+            log.debug(f"Could not collect visible model options: {e}")
+            return []
+
+        if not isinstance(labels, list):
+            return []
+        return [str(label).strip() for label in labels if str(label).strip()]
+
+    async def _model_picker_is_open(self) -> bool:
+        """Return whether a model picker/menu is visibly open."""
+        try:
+            open_ = await self._page.evaluate(
+                r"""
+                () => {
+                    const isVisible = (el) => {
+                        if (!el) return false;
+                        const rect = el.getBoundingClientRect();
+                        const style = window.getComputedStyle(el);
+                        return rect.width > 0 &&
+                            rect.height > 0 &&
+                            style.visibility !== "hidden" &&
+                            style.display !== "none";
+                    };
+                    const modelish = /(gpt|o[0-9]|instant|thinking|latest|model|more|configure|5\.[0-9]|4\.[0-9])/i;
+                    const selectors = [
+                        "[role='menuitemradio']",
+                        "[role='menuitem']",
+                        "[role='option']",
+                        "[role='radio']",
+                        "[data-radix-collection-item]",
+                    ];
+                    for (const selector of selectors) {
+                        for (const el of document.querySelectorAll(selector)) {
+                            if (!isVisible(el)) continue;
+                            const text = [
+                                el.innerText || "",
+                                el.textContent || "",
+                                el.getAttribute("aria-label") || "",
+                                el.getAttribute("title") || "",
+                                el.getAttribute("data-testid") || "",
+                            ].join(" ");
+                            if (modelish.test(text)) return true;
+                        }
+                    }
+                    return false;
+                }
+                """
+            )
+            return bool(open_)
+        except Exception as e:
+            log.debug(f"Could not check model picker open state: {e}")
+            return False
+
     async def _open_model_picker(self, target_label: str, current_label: str = "") -> bool:
         """Open ChatGPT's model picker using the visible current-model button."""
         for selector in Selectors.MODEL_PICKER_BUTTON:
@@ -504,7 +702,9 @@ class ChatGPTClient:
                 el = await self._page.wait_for_selector(selector, timeout=1000, state="visible")
                 if el:
                     await human_click(self._page, selector)
-                    return True
+                    await asyncio.sleep(0.25)
+                    if await self._model_picker_is_open():
+                        return True
             except Exception:
                 continue
 
@@ -522,7 +722,8 @@ class ChatGPTClient:
             "o4",
         ]
         if await self._click_top_button_by_text(hints):
-            return True
+            await asyncio.sleep(0.25)
+            return await self._model_picker_is_open()
 
         return False
 
@@ -532,7 +733,7 @@ class ChatGPTClient:
         if not filtered_hints:
             return False
 
-        clicked = await self._page.evaluate(
+        candidate = await self._page.evaluate(
             r"""
             (hints) => {
                 const normalize = (value) =>
@@ -584,19 +785,30 @@ class ChatGPTClient:
                         );
                     }
                     if (!score) continue;
+                    if (el.getAttribute("aria-haspopup")) score += 15;
                     if (rect.left < 500) score += 10;
-                    matches.push({ el, score, top: rect.top, left: rect.left });
+                    matches.push({
+                        score,
+                        top: rect.top,
+                        left: rect.left,
+                        x: rect.left + rect.width / 2,
+                        y: rect.top + rect.height / 2,
+                    });
                 }
                 matches.sort((a, b) => b.score - a.score || a.top - b.top || a.left - b.left);
                 const best = matches[0];
-                if (!best) return false;
-                best.el.click();
-                return true;
+                return best || null;
             }
             """,
             filtered_hints,
         )
-        return bool(clicked)
+        if not isinstance(candidate, dict) or "x" not in candidate or "y" not in candidate:
+            return False
+
+        await self._page.mouse.move(float(candidate["x"]), float(candidate["y"]), steps=8)
+        await asyncio.sleep(0.05)
+        await self._page.mouse.click(float(candidate["x"]), float(candidate["y"]))
+        return True
 
     async def _click_model_option(self, target_labels: tuple[str, ...]) -> bool:
         """Click a visible model option in an open picker/menu by its label."""
@@ -607,7 +819,49 @@ class ChatGPTClient:
 
     async def _select_model_from_configure_dialog(self, target_labels: tuple[str, ...]) -> bool:
         """Select a model from the Pro Intelligence -> Model dropdown dialog."""
-        dropdown_opened = await self._page.evaluate(
+        target_tokens = {normalize_model_token(label) for label in target_labels}
+        version_tokens = {
+            token
+            for token in target_tokens
+            if re.match(r"^(5[0-9]+|o[0-9]+)$", token)
+        }
+
+        if version_tokens:
+            dropdown_opened = await self._click_configure_model_combobox()
+            if not dropdown_opened:
+                return False
+
+            await asyncio.sleep(0.4)
+            version_selected = await self._click_model_option(target_labels)
+            if not version_selected:
+                return False
+
+            await asyncio.sleep(0.4)
+            target_version_label = next(iter(version_tokens))
+            radio_selected = await self._click_configure_radio_for_version(target_version_label)
+            return radio_selected or version_selected
+
+        return await self._click_model_option(target_labels)
+
+    async def _ensure_configured_model_version(self, target_version_label: str) -> bool:
+        """Open Configure and select the requested model-version label."""
+        await self._dismiss_model_picker()
+        current_label = await self._detect_current_model_label()
+        opened = await self._open_model_picker(target_version_label, current_label=current_label)
+        if not opened:
+            return False
+
+        await asyncio.sleep(0.3)
+        configure_opened = await self._click_menu_text("Configure")
+        if not configure_opened:
+            return False
+
+        await asyncio.sleep(0.5)
+        return await self._select_model_from_configure_dialog((target_version_label,))
+
+    async def _click_configure_model_combobox(self) -> bool:
+        """Open the model-version combobox in ChatGPT's Configure dialog."""
+        dropdown_candidate = await self._page.evaluate(
             r"""
             () => {
                 const normalize = (value) =>
@@ -621,17 +875,8 @@ class ChatGPTClient:
                         style.visibility !== "hidden" &&
                         style.display !== "none";
                 };
-                const dialogs = Array.from(document.querySelectorAll("[role='dialog'], [aria-modal='true'], div"))
-                    .filter((el) => isVisible(el) && normalize(el.innerText || "").includes("intelligence"));
-                const dialog = dialogs.sort((a, b) => {
-                    const ar = a.getBoundingClientRect();
-                    const br = b.getBoundingClientRect();
-                    return (ar.width * ar.height) - (br.width * br.height);
-                })[0];
-                if (!dialog) return false;
-
-                const buttons = Array.from(dialog.querySelectorAll("button,[role='button'],[aria-haspopup]"))
-                    .filter(isVisible);
+                const buttons = Array.from(document.querySelectorAll("[role='combobox'],button,[role='button'],[aria-haspopup]"))
+                    .filter((el) => isVisible(el) && el.closest("[role='dialog'], [aria-modal='true']"));
                 const candidates = [];
                 for (const el of buttons) {
                     const text = normalize([
@@ -642,32 +887,104 @@ class ChatGPTClient:
                     ].join(" "));
                     const rect = el.getBoundingClientRect();
                     let score = 0;
-                    if (text.match(/^5[0-9]*$/)) score += 80;
+                    if (text.match(/^(5[0-9]*|o[0-9]+)$/)) score += 80;
+                    if ((el.getAttribute("role") || "") === "combobox") score += 120;
                     if (text.includes("model")) score += 40;
                     if (el.getAttribute("aria-haspopup")) score += 30;
-                    if (rect.top < dialog.getBoundingClientRect().top + 140) score += 20;
-                    if (rect.left > dialog.getBoundingClientRect().left + dialog.getBoundingClientRect().width / 2) {
-                        score += 20;
+                    if (rect.top < 360) score += 20;
+                    if (rect.left > window.innerWidth / 2) score += 20;
+                    if (score) {
+                        candidates.push({
+                            score,
+                            top: rect.top,
+                            left: rect.left,
+                            x: rect.left + rect.width / 2,
+                            y: rect.top + rect.height / 2,
+                        });
                     }
-                    if (score) candidates.push({ el, score, top: rect.top, left: rect.left });
                 }
                 candidates.sort((a, b) => b.score - a.score || a.top - b.top || b.left - a.left);
                 const best = candidates[0];
-                if (!best) return false;
-                best.el.click();
-                return true;
+                return best || null;
             }
             """
         )
-        if not dropdown_opened:
+        if (
+            not isinstance(dropdown_candidate, dict)
+            or "x" not in dropdown_candidate
+            or "y" not in dropdown_candidate
+        ):
             return False
 
-        await asyncio.sleep(0.3)
-        return await self._click_model_option(target_labels)
+        await self._page.mouse.move(float(dropdown_candidate["x"]), float(dropdown_candidate["y"]), steps=8)
+        await asyncio.sleep(0.05)
+        await self._page.mouse.click(float(dropdown_candidate["x"]), float(dropdown_candidate["y"]))
+        return True
+
+    async def _click_configure_radio_for_version(self, target_version_token: str) -> bool:
+        """Click a Configure dialog radio row that explicitly contains a model version."""
+        candidate = await self._page.evaluate(
+            r"""
+            (targetVersionToken) => {
+                const normalize = (value) =>
+                    (value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+                const target = normalize(targetVersionToken);
+                if (!target) return null;
+                const isVisible = (el) => {
+                    if (!el) return false;
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    return rect.width > 0 &&
+                        rect.height > 0 &&
+                        style.visibility !== "hidden" &&
+                        style.display !== "none";
+                };
+                const radios = Array.from(document.querySelectorAll("[role='radio']"))
+                    .filter(isVisible);
+                const matches = [];
+                for (const el of radios) {
+                    const text = [
+                        el.innerText || "",
+                        el.textContent || "",
+                        el.getAttribute("aria-label") || "",
+                    ].join(" ");
+                    if (!normalize(text).includes(target)) continue;
+                    const rect = el.getBoundingClientRect();
+                    matches.push({
+                        top: rect.top,
+                        left: rect.left,
+                        x: rect.left + rect.width / 2,
+                        y: rect.top + rect.height / 2,
+                    });
+                }
+                matches.sort((a, b) => a.top - b.top || a.left - b.left);
+                return matches[0] || null;
+            }
+            """,
+            target_version_token,
+        )
+        if not isinstance(candidate, dict) or "x" not in candidate or "y" not in candidate:
+            return False
+
+        await self._page.mouse.move(float(candidate["x"]), float(candidate["y"]), steps=8)
+        await asyncio.sleep(0.05)
+        await self._page.mouse.click(float(candidate["x"]), float(candidate["y"]))
+        return True
 
     async def _click_menu_text(self, target_text: str) -> bool:
         """Click a visible menu-style element whose text matches the target."""
-        clicked = await self._page.evaluate(
+        for role in ("option", "menuitemradio", "menuitem", "radio"):
+            try:
+                locator = self._page.get_by_role(role, name=target_text, exact=True).first
+                if await locator.count() > 0:
+                    await locator.hover()
+                    await asyncio.sleep(0.05)
+                    await locator.click()
+                    return True
+            except Exception:
+                continue
+
+        candidate = await self._page.evaluate(
             r"""
             (targetText) => {
                 const normalize = (value) =>
@@ -687,6 +1004,7 @@ class ChatGPTClient:
                     "[role='menuitemradio']",
                     "[role='menuitem']",
                     "[role='option']",
+                    "[role='radio']",
                     "button",
                     "[data-radix-collection-item]",
                     "li",
@@ -715,21 +1033,34 @@ class ChatGPTClient:
                         else if (normalizedPrimary.startsWith(target)) score += 45;
                         else if (normalizedText.startsWith(target)) score += 40;
                         else score += 20;
+                        const role = el.getAttribute("role") || "";
+                        if (["menuitemradio", "menuitem", "option", "radio"].includes(role)) score += 25;
+                        if ((el.getAttribute("data-testid") || "").includes("model-switcher")) score += 20;
                         const rect = el.getBoundingClientRect();
                         if (rect.top < 700) score += 10;
-                        matches.push({ el, score, top: rect.top, left: rect.left });
+                        matches.push({
+                            score,
+                            top: rect.top,
+                            left: rect.left,
+                            x: rect.left + rect.width / 2,
+                            y: rect.top + rect.height / 2,
+                        });
                     }
                 }
                 matches.sort((a, b) => b.score - a.score || a.top - b.top || a.left - b.left);
                 const best = matches[0];
-                if (!best) return false;
-                best.el.click();
-                return true;
+                return best || null;
             }
             """,
             target_text,
         )
-        return bool(clicked)
+        if not isinstance(candidate, dict) or "x" not in candidate or "y" not in candidate:
+            return False
+
+        await self._page.mouse.move(float(candidate["x"]), float(candidate["y"]), steps=8)
+        await asyncio.sleep(0.05)
+        await self._page.mouse.click(float(candidate["x"]), float(candidate["y"]))
+        return True
 
     async def _wait_for_model_label(self, target_labels: tuple[str, ...]) -> bool:
         """Wait briefly until the current-model button reflects the requested label."""

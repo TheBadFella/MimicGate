@@ -264,9 +264,13 @@ Change it with `VNC_PASSWORD` in `docker-compose.yml`.
 model id like `gpt-5.5`, `gpt-5.5-pro`, `gpt-5.4`, `gpt-5.4-pro`, `gpt-5.4-mini`,
 `gpt-5.4-nano`, `gpt-5-mini`, `gpt-5-nano`, `gpt-5`, `gpt-5.3`, `o3`, `o4-mini`,
 `gpt-4.5`, `gpt-4.1`, `gpt-4.1-mini`, or `gpt-4o`, CatGPT will try to switch
-the ChatGPT web UI to that model before sending the prompt. If you want
-`catgpt-browser` itself to auto-switch, set `CHATGPT_DEFAULT_MODEL` to one of
-the configured ids.
+the ChatGPT web UI to that model before sending the prompt. Current ChatGPT
+Plus composer labels map `gpt-5.5` to `Instant` and `gpt-5.5-thinking` to
+`Thinking`. If you want `catgpt-browser` itself to auto-switch, set
+`CHATGPT_DEFAULT_MODEL` to one of the configured ids. If the requested model is
+configured but not visible in your ChatGPT account's picker, CatGPT logs the
+visible picker labels and continues with the currently selected browser model
+by default. Set `CHATGPT_MODEL_SWITCH_STRICT=true` to return an error instead.
 
 Base URL: `http://localhost:8000/v1` — **Model ID:** `catgpt-browser`
 
@@ -719,8 +723,9 @@ All settings are loaded from environment variables (`.env` file or `docker-compo
 | `SLOW_MO`            | `0`                   | Playwright slow-motion delay (ms) for debugging          |
 | `CHATGPT_URL`        | `https://chatgpt.com` | Target ChatGPT URL                                       |
 | `CHATGPT_DEFAULT_MODEL` | ``                  | Optional model id to auto-apply when requests use `catgpt-browser` |
-| `CHATGPT_MODEL_ALIASES` | `gpt-5.3=GPT-5.3,...` | Comma-separated `public_id=UI label` map for browser model switching |
+| `CHATGPT_MODEL_ALIASES` | `gpt-5.5=Instant,...` | Comma-separated `public_id=UI label` map for browser model switching |
 | `CHATGPT_MODEL_SWITCH_TIMEOUT` | `10000`     | Max wait time (ms) to confirm the ChatGPT UI switched models |
+| `CHATGPT_MODEL_SWITCH_STRICT` | `false`      | If `true`, return an error when a requested ChatGPT UI model cannot be selected |
 | `ATTACHMENT_EXPAND_MULTIPAGE` | `true`      | If `true`, expands multi-page PDFs and multi-frame images into ordered page images before upload |
 | `ATTACHMENT_MAX_PAGES` | `24`                | Maximum pages/frames rendered from a single attachment |
 | `ATTACHMENT_RENDER_DPI` | `144`              | DPI used when rendering PDF pages to images |
