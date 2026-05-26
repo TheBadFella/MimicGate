@@ -33,7 +33,11 @@ def _resolve_domains_for_chrome() -> str:
     if not os.path.exists("/.dockerenv") and os.environ.get("DISPLAY") != ":99":
         return ""
 
-    domains = [
+    common_domains = [
+        "challenges.cloudflare.com",
+        "static.cloudflareinsights.com",
+    ]
+    chatgpt_domains = [
         "chatgpt.com",
         "cdn.oaistatic.com",
         "ab.chatgpt.com",
@@ -42,16 +46,19 @@ def _resolve_domains_for_chrome() -> str:
         "openai.com",
         "api.openai.com",
         "platform.openai.com",
-        "challenges.cloudflare.com",
-        "static.cloudflareinsights.com",
         "tcr9i.chat.openai.com",
-        # Claude domains
+    ]
+    claude_domains = [
         "claude.ai",
         "api.claude.ai",
         "cdn.claude.ai",
         "anthropic.com",
         "www.anthropic.com",
     ]
+    if Config.PROVIDER == "claude":
+        domains = common_domains + claude_domains
+    else:
+        domains = common_domains + chatgpt_domains
     rules = []
     for domain in domains:
         try:

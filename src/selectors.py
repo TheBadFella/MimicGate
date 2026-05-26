@@ -24,6 +24,7 @@ class Selectors:
         "button[data-testid='send-button']",
         "#composer-submit-button",
         "button[aria-label='Send prompt']",
+        "button[aria-label*='Send' i]",
         "#prompt-textarea ~ button",
     ]
 
@@ -39,6 +40,9 @@ class Selectors:
     ASSISTANT_MESSAGE = [
         "div[data-message-author-role='assistant']",
         "[data-message-author-role='assistant']",
+        "[data-testid^='conversation-turn-'] [data-message-author-role='assistant']",
+        "[data-testid*='conversation-turn' i]",
+        ".agent-turn",
         "section[data-turn='assistant']",
         "section[data-testid^='conversation-turn-']",
     ]
@@ -48,6 +52,7 @@ class Selectors:
         "button[data-testid='stop-button']",
         "button[aria-label='Stop answering']",
         "button[aria-label='Stop generating']",
+        "button[aria-label*='Stop' i]",
     ]
 
     # ── New chat ────────────────────────────────────────────────
@@ -89,8 +94,10 @@ class Selectors:
     # after the full response has been generated.
     COPY_BUTTON = [
         "button[data-testid='copy-turn-action-button']",
+        "button[data-testid*='copy' i]",
         "button[aria-label='Copy message']",
         "button[aria-label='Copy']",
+        "button[aria-label*='Copy' i]",
     ]
 
     # ── Generated images inside assistant responses ───────────────────
@@ -100,7 +107,9 @@ class Selectors:
     # Image wrapper DIVs have id="image-{uuid}" and class group/imagegen-image.
     ASSISTANT_IMAGE = [
         "img[alt='Generated image']",
+        "img[alt*='generated' i]",
         "div[id^='image-'] img",
+        "div[class*='imagegen-image'] img",
         "section[data-turn='assistant'] img[alt='Generated image']",
     ]
 

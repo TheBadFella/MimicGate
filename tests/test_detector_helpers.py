@@ -45,6 +45,8 @@ class DetectorHelperTests(unittest.TestCase):
     def test_incomplete_response_text_detects_transient_status(self) -> None:
         self.assertTrue(is_incomplete_response_text("Pro thinking"))
         self.assertTrue(is_incomplete_response_text("Searching the web"))
+        self.assertTrue(is_incomplete_response_text("Creating image"))
+        self.assertTrue(is_incomplete_response_text("Generating image for your request"))
         self.assertFalse(is_incomplete_response_text("Here is the final answer with enough detail."))
 
 

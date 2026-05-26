@@ -12,6 +12,7 @@ Playwright browser page is single-threaded.
 from __future__ import annotations
 
 import asyncio
+import copy
 from dataclasses import dataclass
 import hashlib
 import json
@@ -125,6 +126,28 @@ def _estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
+def _model_dump_compat(model: Any, **kwargs) -> dict:
+    """Pydantic v1/v2 compatible model dump helper."""
+    if hasattr(model, "model_dump"):
+        return model.model_dump(**kwargs)
+    if hasattr(model, "dict"):
+        safe_kwargs = {k: v for k, v in kwargs.items() if k != "mode"}
+        return model.dict(**safe_kwargs)
+    return dict(getattr(model, "__dict__", {}))
+
+
+def _model_copy_compat(model: Any, **kwargs):
+    """Pydantic v1/v2 compatible model copy helper."""
+    if hasattr(model, "model_copy"):
+        return model.model_copy(**kwargs)
+    if hasattr(model, "copy"):
+        return model.copy(**kwargs)
+    cloned = copy.deepcopy(model) if kwargs.get("deep") else copy.copy(model)
+    for key, value in (kwargs.get("update") or {}).items():
+        setattr(cloned, key, value)
+    return cloned
+
+
 def _shrink_for_cache(value: Any) -> Any:
     """Reduce large strings to a digest so cache-key generation stays cheap."""
     if isinstance(value, str):
@@ -146,7 +169,7 @@ def _cache_key_for_request_with_app(request: ChatCompletionRequest, app_key: str
     When app-thread mode is enabled, app-specific thread context can affect output,
     so app key must be part of the cache identity to avoid cross-app cache reuse.
     """
-    payload = request.model_dump(mode="json", exclude={"stream", "user"})
+    payload = _model_dump_compat(request, mode="json", exclude={"stream", "user"})
     if Config.API_APP_THREAD_MODE and app_key:
         payload["_app_key"] = app_key
     compact_payload = _shrink_for_cache(payload)
@@ -231,7 +254,8 @@ def _derive_app_key(
 
 def _clone_cached_response(cached: ChatCompletionResponse) -> ChatCompletionResponse:
     """Return a fresh response object so ids/timestamps remain request-specific."""
-    return cached.model_copy(
+    return _model_copy_compat(
+        cached,
         deep=True,
         update={
             "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
@@ -1402,6 +1426,166 @@ def _resolve_app_key(
     return _derive_app_key(request, http_request, endpoint_app_name=endpoint_app_name)
 
 
+def _resolve_image_app_key(
+    request: ImageGenerationRequest,
+    http_request: Request,
+    endpoint_app_name: str = "",
+) -> str:
+    """Resolve app key for image generation when app-thread mode is enabled."""
+    if not Config.API_APP_THREAD_MODE:
+        return ""
+    return _derive_app_key(request, http_request, endpoint_app_name=endpoint_app_name)  # type: ignore[arg-type]
+
+
+async def _execute_image_generation(
+    request: ImageGenerationRequest,
+    app_key_override: str = "",
+) -> ImagesResponse:
+    """Shared executor for generic and app-scoped image generation."""
+    import base64
+
+    if not request.prompt or not request.prompt.strip():
+        raise HTTPException(status_code=400, detail="prompt cannot be empty")
+
+    response_format = (request.response_format or "b64_json").strip()
+    if response_format not in {"b64_json", "url"}:
+        raise HTTPException(status_code=400, detail="response_format must be 'b64_json' or 'url'")
+
+    client = _get_client()
+    if not hasattr(client, "generate_image"):
+        raise HTTPException(status_code=422, detail="Image generation is only supported by the ChatGPT provider")
+
+    _deletion_pending: list[str] = []
+
+    try:
+        async with browser_access_lock:
+            start_time = time.time()
+            app_key = (app_key_override or "").strip()
+            app_name = _display_app_name(app_key)
+            app_thread_created_by_catgpt = False
+
+            if Config.API_APP_THREAD_MODE and app_key:
+                log.info("OpenAI image app-thread key: %s", app_key)
+                now_app = time.time()
+                mapped_thread = ""
+                expired_tids: list[str] = []
+                async with _app_thread_lock:
+                    expired_tids = _prune_app_threads(now_app)
+                    mapped = _app_threads.get(app_key)
+                    if mapped:
+                        mapped_thread = mapped.thread_id
+                        app_thread_created_by_catgpt = mapped.created_by_catgpt
+                if expired_tids:
+                    _deletion_pending.extend(expired_tids)
+                if mapped_thread:
+                    current_tid = client._extract_thread_id()
+                    if current_tid != mapped_thread:
+                        log.info(f"OpenAI image app-thread mode: app='{app_key}' -> thread {mapped_thread}")
+                        await client.navigate_to_thread(mapped_thread)
+                else:
+                    log.info(
+                        "OpenAI image app-thread mode: app='%s' has no mapped thread. New chat will be created.",
+                        app_name,
+                    )
+                    await client.new_chat()
+                    app_thread_created_by_catgpt = True
+
+            log.info(
+                "POST /v1/images/generations - model=%s, prompt=%r, n=%s, size=%s, response_format=%s",
+                request.model,
+                request.prompt[:80],
+                request.n,
+                request.size,
+                response_format,
+            )
+
+            try:
+                result = await client.generate_image(
+                    request.prompt,
+                    n=int(request.n or 1),
+                    size=request.size or "1024x1024",
+                    quality=request.quality or "standard",
+                    style=request.style or "vivid",
+                )
+            except Exception as e:
+                log.error(f"ChatGPT error during image generation: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=f"ChatGPT error: {str(e)}")
+
+            elapsed_ms = int((time.time() - start_time) * 1000)
+
+            if Config.API_APP_THREAD_MODE and app_key:
+                thread_for_app = result.thread_id or client._extract_thread_id()
+                if thread_for_app:
+                    post_prune_expired: list[str] = []
+                    async with _app_thread_lock:
+                        post_prune_expired = _prune_app_threads(time.time())
+                        _app_threads[app_key] = _AppThreadMapping(
+                            time.time(),
+                            thread_for_app,
+                            created_by_catgpt=app_thread_created_by_catgpt,
+                        )
+                    if post_prune_expired:
+                        _deletion_pending.extend(post_prune_expired)
+                    log.info("Image app-thread mapping updated: app=%s -> thread=%s", app_name, thread_for_app)
+
+            if not result.images:
+                log.warning(
+                    f"No images detected in response ({elapsed_ms}ms). "
+                    f"ChatGPT replied: {result.message[:200]}"
+                )
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "ChatGPT did not generate an image. "
+                        f"Model response: {result.message[:500]}"
+                    ),
+                )
+
+            image_data_list: list[ImageData] = []
+            for img_info in result.images:
+                revised_prompt = img_info.prompt_title or img_info.alt or request.prompt
+
+                if response_format == "b64_json":
+                    if img_info.local_path:
+                        try:
+                            with open(img_info.local_path, "rb") as f:
+                                img_bytes = f.read()
+                            b64 = base64.b64encode(img_bytes).decode("utf-8")
+                            image_data_list.append(
+                                ImageData(
+                                    b64_json=b64,
+                                    revised_prompt=revised_prompt,
+                                )
+                            )
+                        except Exception as e:
+                            log.error(f"Failed to read image file {img_info.local_path}: {e}")
+                    else:
+                        log.warning(f"Image has no local_path: {img_info.url[:80]}")
+                else:
+                    image_data_list.append(
+                        ImageData(
+                            url=img_info.local_path or img_info.url,
+                            revised_prompt=revised_prompt,
+                        )
+                    )
+
+            if not image_data_list:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Images were detected but could not be processed.",
+                )
+
+            log.info(
+                f"Image generation complete: {len(image_data_list)} image(s), "
+                f"{elapsed_ms}ms, format={response_format}"
+            )
+
+            return ImagesResponse(data=image_data_list)
+    finally:
+        if _deletion_pending:
+            asyncio.create_task(_maybe_delete_expired_app_threads(_deletion_pending))
+
+
 # -- Routes ------------------------------------------------------
 
 
@@ -1423,122 +1607,22 @@ async def list_models_scoped(app_name: str) -> ModelListResponse:
 @openai_router.post("/v1/images/generations", response_model=ImagesResponse)
 async def create_image(
     request: ImageGenerationRequest,
+    http_request: Request,
 ) -> ImagesResponse:
-    """
-    OpenAI-compatible image generation endpoint.
-
-    Sends the prompt to ChatGPT which uses DALL-E to generate images.
-    Downloads the generated images and returns them in OpenAI format.
-    Supports response_format='b64_json' (default) or 'url' (local file path).
-    """
-    import base64
-
-    if not request.prompt:
-        raise HTTPException(status_code=400, detail="prompt cannot be empty")
-
-    client = _get_client()
-
-    async with browser_access_lock:
-        start_time = time.time()
-
-        # Build an image-generation prompt.
-        # n > 1: we ask ChatGPT to generate multiple images
-        # size/quality/style hints are included but ChatGPT web may ignore them.
-        prompt_parts = [f"Generate an image: {request.prompt}"]
-        if request.n and request.n > 1:
-            prompt_parts.append(f"Please generate {request.n} different images.")
-        if request.size and request.size != "1024x1024":
-            prompt_parts.append(f"Image size: {request.size}.")
-        if request.quality == "hd":
-            prompt_parts.append("Make it high-definition / highly detailed.")
-        if request.style == "natural":
-            prompt_parts.append("Use a natural, realistic style.")
-
-        full_prompt = " ".join(prompt_parts)
-
-        log.info(
-            f"POST /v1/images/generations - prompt='{request.prompt[:80]}', "
-            f"n={request.n}, size={request.size}, response_format={request.response_format}"
-        )
-
-        # Send to ChatGPT
-        try:
-            result = await client.send_message(full_prompt)
-        except Exception as e:
-            log.error(f"ChatGPT error during image generation: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=f"ChatGPT error: {str(e)}")
-
-        elapsed_ms = int((time.time() - start_time) * 1000)
-
-        # Check if ChatGPT generated images
-        if not result.images:
-            # ChatGPT may have responded with text instead of generating an image.
-            # This can happen when the model declines or gives a text description.
-            log.warning(
-                f"No images detected in response ({elapsed_ms}ms). "
-                f"ChatGPT replied: {result.message[:200]}"
-            )
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    f"ChatGPT did not generate an image. "
-                    f"Model response: {result.message[:500]}"
-                ),
-            )
-
-        # Build image data objects
-        image_data_list: list[ImageData] = []
-        for img_info in result.images:
-            revised_prompt = img_info.prompt_title or img_info.alt or request.prompt
-
-            if request.response_format == "b64_json":
-                # Read the downloaded file and base64-encode it
-                if img_info.local_path:
-                    try:
-                        with open(img_info.local_path, "rb") as f:
-                            img_bytes = f.read()
-                        b64 = base64.b64encode(img_bytes).decode("utf-8")
-                        image_data_list.append(
-                            ImageData(
-                                b64_json=b64,
-                                revised_prompt=revised_prompt,
-                            )
-                        )
-                    except Exception as e:
-                        log.error(f"Failed to read image file {img_info.local_path}: {e}")
-                else:
-                    log.warning(f"Image has no local_path: {img_info.url[:80]}")
-            else:
-                # response_format == "url" - return local file path as URL
-                image_data_list.append(
-                    ImageData(
-                        url=img_info.local_path or img_info.url,
-                        revised_prompt=revised_prompt,
-                    )
-                )
-
-        if not image_data_list:
-            raise HTTPException(
-                status_code=500,
-                detail="Images were detected but could not be processed.",
-            )
-
-        log.info(
-            f"Image generation complete: {len(image_data_list)} image(s), "
-            f"{elapsed_ms}ms, format={request.response_format}"
-        )
-
-        return ImagesResponse(data=image_data_list)
+    """OpenAI-compatible image generation endpoint."""
+    app_key = _resolve_image_app_key(request, http_request)
+    return await _execute_image_generation(request, app_key_override=app_key)
 
 
 @openai_router.post("/{app_name}/v1/images/generations", response_model=ImagesResponse)
 async def create_image_scoped(
     app_name: str,
     request: ImageGenerationRequest,
+    http_request: Request,
 ) -> ImagesResponse:
     """App-scoped alias for image generation."""
-    _ = app_name
-    return await create_image(request)
+    app_key = _resolve_image_app_key(request, http_request, endpoint_app_name=app_name)
+    return await _execute_image_generation(request, app_key_override=app_key)
 
 
 @openai_router.post("/v1/chat/completions", response_model=ChatCompletionResponse)
@@ -1994,7 +2078,7 @@ async def _execute_chat_completion(
 
             async with _cache_lock:
                 _prune_cache(time.time())
-                _response_cache[cache_key] = (time.time(), response.model_copy(deep=True))
+                _response_cache[cache_key] = (time.time(), _model_copy_compat(response, deep=True))
 
             return response
     finally:

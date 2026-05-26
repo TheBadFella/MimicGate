@@ -26,7 +26,9 @@ from src.chatgpt.detector import (
     extract_last_response_via_copy,
     count_assistant_messages,
     get_latest_assistant_turn_signature,
+    get_latest_user_turn_signature,
     is_incomplete_response_text,
+    capture_response_diagnostics,
 )
 from src.chatgpt.image_handler import extract_images_from_response
 from src.chatgpt.audio_handler import generate_read_aloud_audio
@@ -48,6 +50,8 @@ class ChatGPTClient:
         self._last_model_label = ""
         self._last_model_version_label = ""
         self._unavailable_model_keys: set[str] = set()
+        self._recent_backend_events: list[dict] = []
+        self._wire_backend_event_logger()
 
     @property
     def page(self) -> Page:
@@ -90,8 +94,10 @@ class ChatGPTClient:
         # 0. Count existing assistant messages so we know when a new one appears
         pre_count = await count_assistant_messages(self._page)
         pre_turn_signature = await get_latest_assistant_turn_signature(self._page)
+        pre_user_signature = await get_latest_user_turn_signature(self._page)
         log.debug(f"Assistant messages before send: {pre_count}")
         log.debug(f"Latest assistant turn before send: {pre_turn_signature}")
+        log.debug(f"Latest user turn before send: {pre_user_signature}")
 
         # 1. Switch model if requested before interacting with the composer
         if model:
@@ -122,6 +128,23 @@ class ChatGPTClient:
             log.info("Send button not found, trying Enter key")
             await self._page.keyboard.press("Enter")
 
+        submitted = await self._wait_for_message_submission(pre_user_signature, text)
+        if not submitted:
+            diagnostic_path = await capture_response_diagnostics(
+                self._page,
+                "message-not-submitted",
+                previous_turn_signature=pre_turn_signature,
+                extra={
+                    "recent_backend_events": self._backend_events_snapshot(),
+                    "prompt_length": len(text),
+                    "sent_by_button": sent,
+                },
+            )
+            detail = "Message was not submitted to ChatGPT"
+            if diagnostic_path:
+                detail = f"{detail}; diagnostic={diagnostic_path}"
+            raise RuntimeError(detail)
+
         # 5. Wait for response with message count awareness
         log.info("Waiting for ChatGPT response...")
         expected_count = pre_count + 1
@@ -133,6 +156,16 @@ class ChatGPTClient:
 
         if not completed:
             log.warning("Response may not be complete (timeout)")
+            await capture_response_diagnostics(
+                self._page,
+                "response-timeout",
+                previous_turn_signature=pre_turn_signature,
+                extra={
+                    "recent_backend_events": self._backend_events_snapshot(),
+                    "prompt_length": len(text),
+                    "expected_assistant_count": expected_count,
+                },
+            )
 
         # Small buffer after completion to let DOM settle
         await asyncio.sleep(1.0)
@@ -140,7 +173,10 @@ class ChatGPTClient:
         # 6. Check for generated images in the response FIRST
         #    (image turns have no copy button, so we must detect images
         #    before trying copy-button extraction)
-        images = await extract_images_from_response(self._page)
+        images = await extract_images_from_response(
+            self._page,
+            previous_turn_signature=pre_turn_signature,
+        )
         has_images = len(images) > 0
 
         # 7. Extract text content
@@ -183,6 +219,18 @@ class ChatGPTClient:
                         response_text = retry_text
                     log.warning(f"Retry {attempt} still incomplete/transient")
 
+            if not response_text or is_incomplete_response_text(response_text):
+                await capture_response_diagnostics(
+                    self._page,
+                    "empty-or-incomplete-response",
+                    previous_turn_signature=pre_turn_signature,
+                    extra={
+                        "recent_backend_events": self._backend_events_snapshot(),
+                        "prompt_length": len(text),
+                        "has_images": has_images,
+                    },
+                )
+
         elapsed_ms = int((time.time() - start_time) * 1000)
         thread_id = self._extract_thread_id()
         audio = None
@@ -209,6 +257,30 @@ class ChatGPTClient:
             audio=audio,
             has_audio=audio is not None,
         )
+
+    async def generate_image(
+        self,
+        prompt: str,
+        n: int = 1,
+        size: str = "1024x1024",
+        quality: str = "standard",
+        style: str = "vivid",
+    ) -> ChatResponse:
+        """Generate images through the ChatGPT web UI and download results."""
+        count = max(1, min(int(n or 1), 4))
+        prompt_parts = [
+            f"Generate exactly {count} image{'s' if count != 1 else ''} from this prompt:",
+            prompt.strip(),
+        ]
+        if size:
+            prompt_parts.append(f"Requested size/aspect: {size}.")
+        if quality:
+            prompt_parts.append(f"Requested quality: {quality}.")
+        if style:
+            prompt_parts.append(f"Requested style: {style}.")
+        prompt_parts.append("Return the generated image result, not just a text description.")
+
+        return await self.send_message("\n\n".join(part for part in prompt_parts if part.strip()))
 
     async def ensure_model(self, requested_model: str) -> None:
         """Switch ChatGPT's model picker to the requested model when possible."""
@@ -474,6 +546,115 @@ class ChatGPTClient:
 
     # ── Private Helpers ─────────────────────────────────────────
 
+    def _wire_backend_event_logger(self) -> None:
+        """Record recent ChatGPT backend responses for timeout diagnostics."""
+        try:
+            self._page.on("response", self._record_backend_response)
+        except Exception as e:
+            log.debug(f"Could not attach backend response logger: {e}")
+
+    def _record_backend_response(self, response) -> None:
+        """Best-effort synchronous Playwright response event handler."""
+        try:
+            url = getattr(response, "url", "") or ""
+            if not any(marker in url for marker in ("backend-api", "conversation", "sentinel", "chat-requirements")):
+                return
+            status = getattr(response, "status", None)
+            self._recent_backend_events.append(
+                {
+                    "ts": time.time(),
+                    "status": status,
+                    "url": url[:500],
+                }
+            )
+            self._recent_backend_events = self._recent_backend_events[-80:]
+        except Exception:
+            return
+
+    def _backend_events_snapshot(self) -> list[dict]:
+        """Return recent backend events with small, serializable fields."""
+        return list(self._recent_backend_events[-40:])
+
+    async def _wait_for_message_submission(
+        self,
+        previous_user_signature: str | None,
+        sent_text: str,
+        timeout_ms: int = 15000,
+    ) -> bool:
+        """
+        Confirm that ChatGPT accepted the outgoing prompt.
+
+        This catches stale send selectors and Enter-key-newline failures before
+        the response detector spends a full timeout waiting for a reply.
+        """
+        deadline = time.monotonic() + timeout_ms / 1000
+        prompt_prefix = sent_text.strip()[:160]
+
+        while time.monotonic() < deadline:
+            latest_user_signature = await get_latest_user_turn_signature(self._page)
+            if latest_user_signature and latest_user_signature != previous_user_signature:
+                log.debug(f"Message submission confirmed by user turn: {latest_user_signature}")
+                return True
+
+            state = await self._composer_state()
+            if not state:
+                await asyncio.sleep(0.5)
+                continue
+            if state.get("hasStopButton"):
+                log.debug("Message submission confirmed by visible stop button")
+                return True
+
+            composer_text = str(state.get("composerText") or "").strip()
+            if not composer_text:
+                log.debug("Message submission confirmed by cleared composer")
+                return True
+
+            if prompt_prefix and prompt_prefix not in composer_text:
+                log.debug("Message submission likely confirmed by composer text change")
+                return True
+
+            await asyncio.sleep(0.5)
+
+        log.warning("Timed out waiting for prompt submission confirmation")
+        return False
+
+    async def _composer_state(self) -> dict:
+        """Read composer/stop-button state from the page."""
+        try:
+            state = await self._page.evaluate(
+                """
+                () => {
+                    const textOf = (el) => ((el && (el.innerText || el.textContent || el.value)) || '').trim();
+                    const isVisible = (el) => {
+                        if (!el) return false;
+                        const rect = el.getBoundingClientRect();
+                        const style = window.getComputedStyle(el);
+                        return rect.width > 0 &&
+                            rect.height > 0 &&
+                            style.visibility !== 'hidden' &&
+                            style.display !== 'none';
+                    };
+                    const composer = document.querySelector(
+                        "#prompt-textarea, div[contenteditable='true'][id='prompt-textarea'], div[contenteditable='true'], textarea"
+                    );
+                    const stopSelector = [
+                        'button[data-testid="stop-button"]',
+                        'button[aria-label="Stop answering"]',
+                        'button[aria-label="Stop generating"]',
+                        'button[aria-label*="stop" i]'
+                    ].join(',');
+                    return {
+                        composerText: textOf(composer),
+                        hasStopButton: Array.from(document.querySelectorAll(stopSelector)).some(isVisible),
+                    };
+                }
+                """
+            )
+            return state if isinstance(state, dict) else {}
+        except Exception as e:
+            log.debug(f"Composer state read failed: {e}")
+            return {}
+
     async def _extract_image_turn_text(self, previous_turn_signature: str | None = None) -> str:
         """
         Extract any text content from the latest turn (for image responses).
@@ -481,69 +662,10 @@ class ChatGPTClient:
         Image turns may contain a title/description like:
         "Creating image • Adorable orange tabby kitten close-up"
         """
-        text = await self._page.evaluate(r"""
-            (previousSignature) => {
-                const articles = Array.from(document.querySelectorAll('article'));
-                if (articles.length === 0) return '';
-
-                const hasGeneratedImage = (article) => {
-                    if (article.querySelector('img[alt="Generated image"], div[id^="image-"]')) return true;
-                    for (const img of article.querySelectorAll('img')) {
-                        const w = img.naturalWidth || img.width || 0;
-                        const src = img.src || '';
-                        if (w > 200 && (src.includes('backend-api/estuary') || src.includes('chatgpt.com'))) {
-                            return true;
-                        }
-                    }
-                    return false;
-                };
-
-                const isAssistantArticle = (article) => {
-                    const hasAssistantRole = article.querySelector('[data-message-author-role="assistant"]');
-                    const hasAgentTurn = article.querySelector('.agent-turn');
-                    return Boolean(hasAssistantRole || hasAgentTurn || hasGeneratedImage(article));
-                };
-
-                let last = null;
-                for (let idx = articles.length - 1; idx >= 0; idx--) {
-                    const article = articles[idx];
-                    if (!isAssistantArticle(article)) continue;
-
-                    const stableId =
-                        article.getAttribute('data-message-id') ||
-                        article.getAttribute('data-testid') ||
-                        article.id ||
-                        '';
-                    const signature = `${idx}:${stableId}`;
-                    if (previousSignature && signature === previousSignature) {
-                        return '';
-                    }
-
-                    last = article;
-                    break;
-                }
-
-                if (!last) return '';
-
-                // Try to get descriptive text (not "ChatGPT said:" heading)
-                const spans = last.querySelectorAll('span');
-                const parts = [];
-                for (const span of spans) {
-                    const t = (span.innerText || '').trim();
-                    if (t && t.length > 3 && t.length < 300 &&
-                        !t.includes('ChatGPT') && !t.includes('said')) {
-                        parts.push(t);
-                    }
-                }
-                if (parts.length > 0) return parts.join(' ');
-
-                // Fallback: full turn inner text
-                const full = (last.innerText || '').trim();
-                // Strip the "ChatGPT said:" prefix
-                return full.replace(/^ChatGPT said:\s*/i, '').trim();
-            }
-        """, previous_turn_signature)
-        return text or ""
+        return await extract_last_response_via_copy(
+            self._page,
+            previous_turn_signature=previous_turn_signature,
+        )
 
     async def _find_selector(self, selectors: list[str], name: str) -> str | None:
         """

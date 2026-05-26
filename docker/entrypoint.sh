@@ -33,8 +33,14 @@ echo "[entrypoint] VNC password set (user: admin, password: <VNC_PASSWORD env va
 # so Chrome can find them without DNS.
 echo "[entrypoint] Pre-resolving DNS for Chrome..."
 python3 -c "
+import os
 import socket
-domains = [
+provider = os.environ.get('PROVIDER', 'chatgpt').lower()
+common_domains = [
+    'challenges.cloudflare.com',
+    'static.cloudflareinsights.com',
+]
+chatgpt_domains = [
     'chatgpt.com',
     'cdn.oaistatic.com',
     'ab.chatgpt.com',
@@ -43,9 +49,15 @@ domains = [
     'openai.com',
     'api.openai.com',
     'platform.openai.com',
-    'challenges.cloudflare.com',
-    'static.cloudflareinsights.com',
 ]
+claude_domains = [
+    'claude.ai',
+    'api.claude.ai',
+    'cdn.claude.ai',
+    'anthropic.com',
+    'www.anthropic.com',
+]
+domains = common_domains + (claude_domains if provider == 'claude' else chatgpt_domains)
 resolved = []
 for d in domains:
     try:
