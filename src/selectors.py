@@ -22,6 +22,7 @@ class Selectors:
     # ── Send button ─────────────────────────────────────────────
     SEND_BUTTON = [
         "button[data-testid='send-button']",
+        "#composer-submit-button",
         "button[aria-label='Send prompt']",
         "#prompt-textarea ~ button",
     ]
@@ -29,20 +30,24 @@ class Selectors:
     # Model picker trigger in ChatGPT's composer/header.
     MODEL_PICKER_BUTTON = [
         "button[data-testid='model-switcher-dropdown-button']",
+        "button[aria-haspopup='menu']:has-text('Instant')",
+        "button[aria-haspopup='menu']:has-text('Thinking')",
+        "button[aria-haspopup='menu']:has-text('Auto')",
     ]
 
     # ── Assistant response messages ─────────────────────────────
     ASSISTANT_MESSAGE = [
         "div[data-message-author-role='assistant']",
         "[data-message-author-role='assistant']",
-        "div.agent-turn",
+        "section[data-turn='assistant']",
+        "section[data-testid^='conversation-turn-']",
     ]
 
     # ── Streaming / stop button (visible while generating) ─────
     STOP_BUTTON = [
-        "button[aria-label='Stop generating']",
         "button[data-testid='stop-button']",
-        "button.stop-button",
+        "button[aria-label='Stop answering']",
+        "button[aria-label='Stop generating']",
     ]
 
     # ── New chat ────────────────────────────────────────────────
@@ -69,7 +74,8 @@ class Selectors:
     ASSISTANT_MARKDOWN = [
         "div[data-message-author-role='assistant'] .markdown",
         "div[data-message-author-role='assistant'] .prose",
-        "div.agent-turn .markdown",
+        "section[data-turn='assistant'] .markdown",
+        "section[data-turn='assistant'] .prose",
     ]
 
     # ── Regenerate / continue buttons (appear after response completes) ──
@@ -83,8 +89,8 @@ class Selectors:
     # after the full response has been generated.
     COPY_BUTTON = [
         "button[data-testid='copy-turn-action-button']",
+        "button[aria-label='Copy message']",
         "button[aria-label='Copy']",
-        "button:has(svg path[d*='M7'])[class*='rounded']",  # copy icon SVG
     ]
 
     # ── Generated images inside assistant responses ───────────────────
@@ -95,8 +101,7 @@ class Selectors:
     ASSISTANT_IMAGE = [
         "img[alt='Generated image']",
         "div[id^='image-'] img",
-        "article img[alt='Generated image']",
-        ".agent-turn img",
+        "section[data-turn='assistant'] img[alt='Generated image']",
     ]
 
     # Image container identifiers (used for detection, not clicking)
@@ -113,15 +118,49 @@ class Selectors:
 
     # ── File / attachment upload input ────────────────────────────
     FILE_UPLOAD_INPUT = [
+        "input#upload-photos",
         "input[type='file']",
         "input[data-testid='file-upload']",
         "input[accept*='image']",
-        "input[accept*='application']",
     ]
 
     # Attach / upload button (opens file picker)
     ATTACH_BUTTON = [
+        "button[data-testid='composer-plus-btn']",
+        "button[aria-label='Add files and more']",
         "button[aria-label='Attach files']",
-        "button[data-testid='upload-button']",
-        "button[aria-label='Upload file']",
+    ]
+
+    # ── Thread deletion (sidebar context menu → Delete → confirm) ──
+    # Sidebar conversation item — bring up its context/overflow menu.
+    SIDEBAR_THREAD_ITEM = [
+        "nav a[href^='/c/']",
+        "a[href^='/c/']",
+    ]
+    # Three-dot / overflow menu button on a sidebar conversation row.
+    SIDEBAR_THREAD_MENU_BUTTON = [
+        "button[data-testid='thread-menu-button']",
+        "button[aria-label='More options']",
+        "button[aria-label*='menu' i]",
+        "button[aria-label*='actions' i]",
+        "button[aria-haspopup='menu']",
+    ]
+    # "Delete" choice in the conversation context menu.
+    THREAD_DELETE_OPTION = [
+        "button:has-text('Delete')",
+        "[role='menuitem']:has-text('Delete')",
+        "div[role='menu'] button:has-text('Delete')",
+        "div button:has-text('Delete')",
+    ]
+    # Confirm-delete action in the modal dialog.
+    THREAD_CONFIRM_DELETE_BUTTON = [
+        "button[data-testid='confirm-delete-button']",
+        "button[data-testid='delete-confirm-button']",
+        "button:has-text('Delete conversation')",
+        "button:has-text('Delete chat')",
+        "button:has-text('Delete thread')",
+        "button[aria-label='Delete conversation']",
+        "div[role='alertdialog'] button.bg-red-700",
+        "div[role='alertdialog'] button:has-text('Delete')",
+        "div[role='dialog'] button:has-text('Delete')",
     ]

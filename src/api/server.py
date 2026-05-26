@@ -25,6 +25,7 @@ from starlette.responses import JSONResponse
 from src.browser.manager import BrowserManager
 from src.browser.auto_login import ensure_logged_in
 from src.chatgpt.client import ChatGPTClient
+from src.claude.client import ClaudeClient
 from src.config import Config
 from src.api.ollama_routes import ollama_router
 from src.api.routes import router, set_client
@@ -60,7 +61,7 @@ _install_uvicorn_access_filters()
 
 # Global instances — needed for lifespan
 _browser: BrowserManager | None = None
-_client: ChatGPTClient | None = None
+_client: ChatGPTClient | ClaudeClient | None = None
 
 
 @asynccontextmanager
@@ -71,13 +72,16 @@ async def lifespan(app: FastAPI):
     log.info("Starting browser for API server...")
     _browser = BrowserManager()
     page = await _browser.start()
+    target_url = Config.provider_url()
+    provider_name = "Claude" if Config.PROVIDER == "claude" else "ChatGPT"
+    log.info(f"Provider: {provider_name} ({target_url})")
 
     # Navigate with retries (DNS can be slow in Docker)
     max_retries = 5
     for attempt in range(1, max_retries + 1):
         try:
-            log.info(f"Navigation attempt {attempt}/{max_retries} to {Config.CHATGPT_URL}")
-            await _browser.navigate(Config.CHATGPT_URL)
+            log.info(f"Navigation attempt {attempt}/{max_retries} to {target_url}")
+            await _browser.navigate(target_url)
             break
         except Exception as e:
             log.warning(f"Navigation attempt {attempt} failed: {e}")
@@ -103,11 +107,14 @@ async def lifespan(app: FastAPI):
         logged_in = await ensure_logged_in(_browser, has_session=session["exists"])
         if not logged_in:
             log.error("Login failed after auto-login attempt")
-            raise RuntimeError("Could not log in to ChatGPT")
+            raise RuntimeError(f"Could not log in to {provider_name}")
         # Refresh session info after login
         session = await _browser.get_session_info()
 
-    _client = ChatGPTClient(page)
+    if Config.PROVIDER == "claude":
+        _client = ClaudeClient(page)
+    else:
+        _client = ChatGPTClient(page)
     set_client(_client, _browser)
     set_openai_client(_client)
 
@@ -134,7 +141,8 @@ async def lifespan(app: FastAPI):
         f"  API token    : {token_masked}",
         f"  Headless     : {Config.HEADLESS}",
         f"  Log level    : {Config.LOG_LEVEL}",
-        f"  Chatgpt URL  : {Config.CHATGPT_URL}",
+        f"  Provider     : {provider_name}",
+        f"  Target URL   : {target_url}",
         f"  Resp timeout : {Config.RESPONSE_TIMEOUT} ms",
     ]
 
@@ -194,7 +202,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="CatGPT API",
+    title="CatGPT Gateway API",
     description=(
         "Browser automation API for ChatGPT. "
         "Sends messages via browser and returns responses."

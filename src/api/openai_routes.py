@@ -12,6 +12,7 @@ Playwright browser page is single-threaded.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import hashlib
 import json
 import re
@@ -30,6 +31,7 @@ from src.api.openai_schemas import (
     ChatMessage,
     Choice,
     ChoiceMessage,
+    AudioInfo,
     FunctionCallInfo,
     ImageData,
     ImageGenerationRequest,
@@ -47,6 +49,7 @@ from src.api.attachment_expander import (
 )
 from src.api.browser_gate import browser_access_lock
 from src.chatgpt.client import ChatGPTClient
+from src.claude.client import ClaudeClient
 from src.chatgpt.model_registry import (
     PUBLIC_BROWSER_MODEL_ID,
     is_supported_chat_model,
@@ -60,7 +63,8 @@ log = setup_logging("openai_routes")
 openai_router = APIRouter()
 
 # Global reference - set by server.py at startup
-_client: ChatGPTClient | None = None
+BrowserClient = ChatGPTClient | ClaudeClient
+_client: BrowserClient | None = None
 
 _jobs_lock = asyncio.Lock()
 _jobs: dict[str, ChatCompletionJobResponse] = {}
@@ -72,7 +76,16 @@ _thread_contracts: dict[str, tuple[float, str]] = {}
 _thread_user_contracts: dict[str, tuple[float, str, str]] = {}
 _thread_last_user_text: dict[str, tuple[float, str]] = {}
 _app_thread_lock = asyncio.Lock()
-_app_threads: dict[str, tuple[float, str]] = {}
+
+
+@dataclass(slots=True)
+class _AppThreadMapping:
+    last_used: float
+    thread_id: str
+    created_by_catgpt: bool = False
+
+
+_app_threads: dict[str, _AppThreadMapping] = {}
 
 MODEL_ID = PUBLIC_BROWSER_MODEL_ID
 _CACHE_TTL_SECONDS = 600
@@ -92,13 +105,13 @@ _thread_title_lock = asyncio.Lock()
 _thread_titles: dict[str, tuple[float, str]] = {}
 
 
-def set_openai_client(client: ChatGPTClient) -> None:
+def set_openai_client(client: BrowserClient) -> None:
     """Called by server.py to inject the ChatGPT client."""
     global _client
     _client = client
 
 
-def _get_client() -> ChatGPTClient:
+def _get_client() -> BrowserClient:
     if _client is None:
         raise HTTPException(status_code=503, detail="ChatGPT client not initialized")
     return _client
@@ -265,11 +278,53 @@ def _prune_thread_contracts(now: float) -> None:
         _thread_last_user_text.pop(tid, None)
 
 
-def _prune_app_threads(now: float) -> None:
-    """Drop expired app->thread mappings."""
-    expired = [app for app, (ts, _) in _app_threads.items() if now - ts > _APP_THREAD_TTL_SECONDS]
-    for app in expired:
+def _prune_app_threads(now: float) -> list[str]:
+    """Drop expired app->thread mappings. Return owned thread ids eligible for deletion."""
+    expired = [
+        (app, mapping.thread_id, mapping.created_by_catgpt)
+        for app, mapping in _app_threads.items()
+        if now - mapping.last_used > _APP_THREAD_TTL_SECONDS
+    ]
+    for app, _, _ in expired:
         _app_threads.pop(app, None)
+    # Deduplicate thread ids; one thread may be shared by multiple apps.
+    seen: set[str] = set()
+    expired_thread_ids: list[str] = []
+    for _, tid, created_by_catgpt in expired:
+        if created_by_catgpt and tid and tid not in seen:
+            seen.add(tid)
+            expired_thread_ids.append(tid)
+    return expired_thread_ids
+
+
+async def _maybe_delete_expired_app_threads(thread_ids: list[str]) -> None:
+    """Best-effort deletion of expired app-tracked ChatGPT threads via the web UI.
+
+    Acquires browser_access_lock to avoid racing active requests. Callers that
+    schedule this via asyncio.create_task should ensure they do NOT hold the
+    lock themselves (otherwise the task deadlocks).
+    """
+    if not thread_ids or not Config.API_APP_THREAD_DELETE_EXPIRED:
+        return
+    try:
+        client = _get_client()
+    except Exception:
+        return
+
+    if not isinstance(client, ChatGPTClient):
+        log.debug("App-thread deletion is only supported for ChatGPT provider")
+        return
+
+    async with browser_access_lock:
+        for tid in thread_ids:
+            try:
+                ok = await client.delete_thread(tid)
+                if ok:
+                    log.info(f"Deleted expired app-tracked thread: {tid}")
+                else:
+                    log.warning(f"Could not delete expired app-tracked thread: {tid}")
+            except Exception as e:
+                log.warning(f"Failed to delete app-tracked thread {tid}: {e}")
 
 
 def _prune_thread_titles(now: float) -> None:
@@ -730,7 +785,7 @@ def _build_prompt(messages: list[ChatMessage]) -> str:
 def _build_tool_system_prompt(tools: list[ToolDefinition]) -> str:
     """
     Build a system-level instruction that tells ChatGPT about available tools.
-    
+
     When the model decides to call a tool, it should respond with a specific
     JSON format that we can parse.
     """
@@ -775,7 +830,7 @@ def _parse_tool_calls(
     code_block_match = re.search(
         r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", response_text
     )
-    
+
     json_str = None
     if code_block_match:
         json_str = code_block_match.group(1)
@@ -1522,393 +1577,429 @@ async def _execute_chat_completion(
     """Shared sync/async executor for chat completions."""
     client = _get_client()
 
-    async with browser_access_lock:
-        start_time = time.time()
-        app_key = (app_key_override or "").strip()
-        app_name = _display_app_name(app_key)
-        explicit_thread_id = (request.thread_id or "").strip() if getattr(request, "thread_id", None) else ""
-        routing_action = "reuse-current"
-        if Config.API_APP_THREAD_MODE and app_key:
-            log.info("OpenAI app-thread key: %s", app_key)
+    # Track expired thread ids to delete *after* releasing browser_access_lock.
+    # Deletion must run under the lock itself, so we cannot inline it while this
+    # call holds the lock (it would deadlock or race).
+    _deletion_pending: list[str] = []
 
-        if explicit_thread_id:
-            current_tid = client._extract_thread_id()
-            if current_tid != explicit_thread_id:
-                log.info(f"OpenAI route: navigating to explicit thread {explicit_thread_id}")
-                await client.navigate_to_thread(explicit_thread_id)
-                routing_action = "explicit-thread"
-            else:
-                routing_action = "explicit-thread"
-        elif Config.API_APP_THREAD_MODE and app_key:
-            now_app = time.time()
-            mapped_thread = ""
-            async with _app_thread_lock:
-                _prune_app_threads(now_app)
-                mapped = _app_threads.get(app_key)
-                if mapped:
-                    mapped_thread = mapped[1]
-            if mapped_thread:
+    try:
+        async with browser_access_lock:
+            start_time = time.time()
+            app_key = (app_key_override or "").strip()
+            app_name = _display_app_name(app_key)
+            explicit_thread_id = (request.thread_id or "").strip() if getattr(request, "thread_id", None) else ""
+            routing_action = "reuse-current"
+            app_thread_created_by_catgpt = False
+            if Config.API_APP_THREAD_MODE and app_key:
+                log.info("OpenAI app-thread key: %s", app_key)
+
+            if explicit_thread_id:
                 current_tid = client._extract_thread_id()
-                if current_tid != mapped_thread:
-                    log.info(f"OpenAI app-thread mode: app='{app_key}' -> thread {mapped_thread}")
-                    await client.navigate_to_thread(mapped_thread)
-                    routing_action = "mapped-thread"
+                if current_tid != explicit_thread_id:
+                    log.info(f"OpenAI route: navigating to explicit thread {explicit_thread_id}")
+                    await client.navigate_to_thread(explicit_thread_id)
+                    routing_action = "explicit-thread"
                 else:
-                    routing_action = "mapped-thread"
-            else:
-                # First request from this app key: start a new chat so apps do not share context.
-                log.info(
-                    "OpenAI app-thread mode: app='%s' has no mapped thread. New chat will be created before prompt send.",
-                    app_name,
-                )
-                await client.new_chat()
-                routing_action = "new-chat-for-app"
-
-        # -- Extract attachments from messages --------------
-        image_paths: list[str] = []
-        file_paths: list[str] = []
-        for msg in request.messages:
-            if msg.role == "user" and isinstance(msg.content, list):
-                image_urls = _extract_image_urls(msg.content)
-                for url in image_urls:
-                    local_path = await _download_file(url)
-                    if local_path:
-                        image_paths.append(local_path)
-
-                file_attachments = _extract_file_attachments(msg.content)
-                for fa in file_attachments:
-                    local_path = await _download_file(fa)
-                    if local_path:
-                        file_paths.append(local_path)
-
-        all_attachment_paths = image_paths + file_paths
-        if all_attachment_paths:
-            log.info(f"Extracted {len(image_paths)} image(s) and {len(file_paths)} file(s) from request")
-
-        expansion = expand_attachments_for_chatgpt(image_paths, file_paths)
-        image_paths = expansion.image_paths
-        file_paths = expansion.file_paths
-        page_extraction_mode = _page_extraction_mode(request)
-        page_extraction_expected_count: int | None = None
-        effective_response_format = request.response_format
-        prompt_prefixes: list[str] = []
-
-        if expansion.notes:
-            prompt_prefixes.append(build_attachment_context_note(expansion.notes))
-            log.info(
-                "Attachment expansion: rendered %d page image(s), upload set now has %d image(s) and %d file(s)",
-                expansion.total_rendered_pages,
-                len(image_paths),
-                len(file_paths),
-            )
-
-        if page_extraction_mode == "structured":
-            if not expansion.page_descriptors:
-                raise HTTPException(
-                    status_code=400,
-                    detail="page_extraction.mode='structured' requires at least one image or file attachment.",
-                )
-            page_extraction_expected_count = len(expansion.page_descriptors)
-            effective_response_format = _build_page_extraction_response_format(expansion.page_descriptors)
-            prompt_prefixes.append(_build_page_extraction_note(expansion.page_descriptors))
-            log.info(
-                "Per-page extraction mode enabled: %d logical page item(s)",
-                page_extraction_expected_count,
-            )
-
-        attachment_prefix = "".join(prefix for prefix in prompt_prefixes if prefix)
-
-        # -- Build the prompt --------------------------------
-        messages = list(request.messages)
-
-        # If tools are provided, inject tool definitions as a system prompt
-        if request.tools:
-            tool_system = _build_tool_system_prompt(request.tools)
-            # Prepend as the first system message
-            messages.insert(0, ChatMessage(role="system", content=tool_system))
-
-        # If structured output is requested, force strict JSON response
-        response_format_system = _build_response_format_system_prompt(effective_response_format)
-        if response_format_system and not _has_equivalent_response_instruction(messages, response_format_system):
-            messages.insert(0, ChatMessage(role="system", content=response_format_system))
-
-        messages = _dedupe_system_messages(messages)
-        system_texts = [_extract_content_text(m.content) for m in messages if m.role == "system"]
-        system_lengths = [len(t) for t in system_texts]
-        system_previews = [_normalize_instruction_text(t)[:120] for t in system_texts]
-        non_system = [m for m in messages if m.role != "system"]
-        full_prompt = _build_prompt(messages)
-        prompt = full_prompt
-        used_thread_contract = False
-        used_user_contract = False
-        current_thread_id = client._extract_thread_id()
-        current_chat_name = await _lookup_thread_title(client, current_thread_id) if current_thread_id else ""
-        chat_display = current_chat_name or ("New chat" if not current_thread_id else "Unknown")
-        log.info(
-            "Request context: app=%s, route=%s, thread=%s, chat_name=%s",
-            app_name,
-            routing_action,
-            current_thread_id or "<new>",
-            chat_display,
-        )
-        contract_id = ""
-        user_contract_id = ""
-        user_text = _extract_content_text(non_system[0].content) if len(non_system) == 1 else ""
-
-        if (
-            Config.API_THREAD_CONTRACT_MODE
-            and system_texts
-            and len(non_system) == 1
-            and non_system[0].role == "user"
-        ):
-            contract_id = _contract_hash(system_texts)
-            if current_thread_id:
-                now_contract = time.time()
-                async with _contract_lock:
-                    _prune_thread_contracts(now_contract)
-                    known = _thread_contracts.get(current_thread_id)
-                    if known and known[1] == contract_id:
-                        prompt = _build_contract_reminder_prompt(user_text, contract_id)
-                        used_thread_contract = True
-                        _thread_contracts[current_thread_id] = (now_contract, contract_id)
-
-                    # Learn repeated user-instruction prefixes across turns.
-                    prev_user = _thread_last_user_text.get(current_thread_id)
-                    detected_prefix = None
-                    if prev_user:
-                        detected_prefix = _detect_user_prefix_contract(prev_user[1], user_text)
-                    if detected_prefix:
-                        prefix, tail = detected_prefix
-                        candidate_user_contract_id = _user_contract_hash(system_texts, prefix)
-                        known_user = _thread_user_contracts.get(current_thread_id)
-                        if known_user and known_user[1] == candidate_user_contract_id and effective_response_format:
-                            prompt = _build_user_contract_reminder_prompt(
-                                tail,
-                                contract_id,
-                                candidate_user_contract_id,
-                            )
-                            used_user_contract = True
-                            used_thread_contract = False
-                        # Store/refresh learned prefix contract for future turns.
-                        _thread_user_contracts[current_thread_id] = (
-                            now_contract,
-                            candidate_user_contract_id,
-                            prefix,
-                        )
-                        user_contract_id = candidate_user_contract_id
-
-                    _thread_last_user_text[current_thread_id] = (now_contract, user_text)
-
-        system_chars = sum(len(_extract_content_text(m.content)) for m in messages if m.role == "system")
-        user_chars = sum(len(_extract_content_text(m.content)) for m in messages if m.role == "user")
-        assistant_chars = sum(len(_extract_content_text(m.content)) for m in messages if m.role == "assistant")
-        tool_chars = sum(len(_extract_content_text(m.content)) for m in messages if m.role == "tool")
-        log.debug(
-            "System prompt breakdown: count=%d lengths=%s previews=%s",
-            len(system_texts),
-            system_lengths,
-            system_previews,
-        )
-        log.info(
-            f"POST /v1/chat/completions - model={request.model}, "
-            f"{len(request.messages)} messages, prompt={len(prompt)} chars "
-            f"(system={system_chars}, user={user_chars}, assistant={assistant_chars}, tool={tool_chars})"
-        )
-        if used_thread_contract:
-            log.info("Thread contract mode: compact prompt used for thread=%s", current_thread_id or "unknown")
-        if used_user_contract:
-            log.info(
-                "User prefix contract mode: compact prompt used for thread=%s contract=%s",
-                current_thread_id or "unknown",
-                user_contract_id[:12] if user_contract_id else "unknown",
-            )
-
-        if attachment_prefix:
-            prompt = f"{attachment_prefix}{prompt}" if prompt else attachment_prefix.strip()
-            full_prompt = f"{attachment_prefix}{full_prompt}" if full_prompt else attachment_prefix.strip()
-
-        cache_key = _cache_key_for_request_with_app(request, app_key)
-        now = time.time()
-        async with _cache_lock:
-            _prune_cache(now)
-            cached_entry = _response_cache.get(cache_key)
-            if cached_entry and now - cached_entry[0] <= _CACHE_TTL_SECONDS:
-                log.info("Response cache hit: returning cached completion")
-                return _clone_cached_response(cached_entry[1])
-
-        # -- Send to ChatGPT --------------------------------
-        try:
-            result = await client.send_message(
-                prompt,
-                image_paths=image_paths or None,
-                file_paths=file_paths or None,
-                model=request.model,
-            )
-        except Exception as e:
-            log.error(f"ChatGPT error: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=f"ChatGPT error: {str(e)}")
-
-        if Config.API_THREAD_CONTRACT_MODE and contract_id:
-            thread_for_contract = result.thread_id or current_thread_id or client._extract_thread_id()
-            if thread_for_contract:
-                async with _contract_lock:
-                    _prune_thread_contracts(time.time())
-                    _thread_contracts[thread_for_contract] = (time.time(), contract_id)
-                    # Refresh user text tracking on resolved thread id too.
-                    if user_text:
-                        _thread_last_user_text[thread_for_contract] = (time.time(), user_text)
-
-        if Config.API_APP_THREAD_MODE and app_key:
-            thread_for_app = result.thread_id or client._extract_thread_id()
-            if thread_for_app:
+                    routing_action = "explicit-thread"
+            elif Config.API_APP_THREAD_MODE and app_key:
+                now_app = time.time()
+                mapped_thread = ""
+                expired_tids: list[str] = []
                 async with _app_thread_lock:
-                    _prune_app_threads(time.time())
-                    _app_threads[app_key] = (time.time(), thread_for_app)
-                thread_title = await _lookup_thread_title(client, thread_for_app)
+                    expired_tids = _prune_app_threads(now_app)
+                    mapped = _app_threads.get(app_key)
+                    if mapped:
+                        mapped_thread = mapped.thread_id
+                        app_thread_created_by_catgpt = mapped.created_by_catgpt
+                # Defer deletion until after we release browser_access_lock
+                if expired_tids:
+                    _deletion_pending.extend(expired_tids)
+                if mapped_thread:
+                    current_tid = client._extract_thread_id()
+                    if current_tid != mapped_thread:
+                        log.info(f"OpenAI app-thread mode: app='{app_key}' -> thread {mapped_thread}")
+                        await client.navigate_to_thread(mapped_thread)
+                        routing_action = "mapped-thread"
+                    else:
+                        routing_action = "mapped-thread"
+                else:
+                    # First request from this app key: start a new chat so apps do not share context.
+                    log.info(
+                        "OpenAI app-thread mode: app='%s' has no mapped thread. New chat will be created before prompt send.",
+                        app_name,
+                    )
+                    await client.new_chat()
+                    routing_action = "new-chat-for-app"
+                    app_thread_created_by_catgpt = True
+
+            # -- Extract attachments from messages --------------
+            image_paths: list[str] = []
+            file_paths: list[str] = []
+            for msg in request.messages:
+                if msg.role == "user" and isinstance(msg.content, list):
+                    image_urls = _extract_image_urls(msg.content)
+                    for url in image_urls:
+                        local_path = await _download_file(url)
+                        if local_path:
+                            image_paths.append(local_path)
+
+                    file_attachments = _extract_file_attachments(msg.content)
+                    for fa in file_attachments:
+                        local_path = await _download_file(fa)
+                        if local_path:
+                            file_paths.append(local_path)
+
+            all_attachment_paths = image_paths + file_paths
+            if all_attachment_paths:
+                log.info(f"Extracted {len(image_paths)} image(s) and {len(file_paths)} file(s) from request")
+
+            expansion = expand_attachments_for_chatgpt(image_paths, file_paths)
+            image_paths = expansion.image_paths
+            file_paths = expansion.file_paths
+            page_extraction_mode = _page_extraction_mode(request)
+            page_extraction_expected_count: int | None = None
+            effective_response_format = request.response_format
+            prompt_prefixes: list[str] = []
+
+            if expansion.notes:
+                prompt_prefixes.append(build_attachment_context_note(expansion.notes))
                 log.info(
-                    "App-thread mapping updated: app=%s -> thread=%s (%s)",
-                    app_name,
-                    thread_for_app,
-                    thread_title or "title unavailable",
+                    "Attachment expansion: rendered %d page image(s), upload set now has %d image(s) and %d file(s)",
+                    expansion.total_rendered_pages,
+                    len(image_paths),
+                    len(file_paths),
                 )
 
-        response_text = result.message
-        elapsed_ms = int((time.time() - start_time) * 1000)
+            if page_extraction_mode == "structured":
+                if not expansion.page_descriptors:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="page_extraction.mode='structured' requires at least one image or file attachment.",
+                    )
+                page_extraction_expected_count = len(expansion.page_descriptors)
+                effective_response_format = _build_page_extraction_response_format(expansion.page_descriptors)
+                prompt_prefixes.append(_build_page_extraction_note(expansion.page_descriptors))
+                log.info(
+                    "Per-page extraction mode enabled: %d logical page item(s)",
+                    page_extraction_expected_count,
+                )
 
-        if (used_thread_contract or used_user_contract) and effective_response_format and _extract_json_payload(response_text) is None:
-            mode_name = "user-prefix contract" if used_user_contract else "thread contract"
-            log.warning("%s mode produced non-JSON content. Retrying once with full prompt.", mode_name.capitalize())
+            attachment_prefix = "".join(prefix for prefix in prompt_prefixes if prefix)
+
+            # -- Build the prompt --------------------------------
+            messages = list(request.messages)
+
+            # If tools are provided, inject tool definitions as a system prompt
+            if request.tools:
+                tool_system = _build_tool_system_prompt(request.tools)
+                # Prepend as the first system message
+                messages.insert(0, ChatMessage(role="system", content=tool_system))
+
+            # If structured output is requested, force strict JSON response
+            response_format_system = _build_response_format_system_prompt(effective_response_format)
+            if response_format_system and not _has_equivalent_response_instruction(messages, response_format_system):
+                messages.insert(0, ChatMessage(role="system", content=response_format_system))
+
+            messages = _dedupe_system_messages(messages)
+            system_texts = [_extract_content_text(m.content) for m in messages if m.role == "system"]
+            system_lengths = [len(t) for t in system_texts]
+            system_previews = [_normalize_instruction_text(t)[:120] for t in system_texts]
+            non_system = [m for m in messages if m.role != "system"]
+            full_prompt = _build_prompt(messages)
+            prompt = full_prompt
+            used_thread_contract = False
+            used_user_contract = False
+            current_thread_id = client._extract_thread_id()
+            current_chat_name = await _lookup_thread_title(client, current_thread_id) if current_thread_id else ""
+            chat_display = current_chat_name or ("New chat" if not current_thread_id else "Unknown")
+            log.info(
+                "Request context: app=%s, route=%s, thread=%s, chat_name=%s",
+                app_name,
+                routing_action,
+                current_thread_id or "<new>",
+                chat_display,
+            )
+            contract_id = ""
+            user_contract_id = ""
+            user_text = _extract_content_text(non_system[0].content) if len(non_system) == 1 else ""
+
+            if (
+                Config.API_THREAD_CONTRACT_MODE
+                and system_texts
+                and len(non_system) == 1
+                and non_system[0].role == "user"
+            ):
+                contract_id = _contract_hash(system_texts)
+                if current_thread_id:
+                    now_contract = time.time()
+                    async with _contract_lock:
+                        _prune_thread_contracts(now_contract)
+                        known = _thread_contracts.get(current_thread_id)
+                        if known and known[1] == contract_id:
+                            prompt = _build_contract_reminder_prompt(user_text, contract_id)
+                            used_thread_contract = True
+                            _thread_contracts[current_thread_id] = (now_contract, contract_id)
+
+                        # Learn repeated user-instruction prefixes across turns.
+                        prev_user = _thread_last_user_text.get(current_thread_id)
+                        detected_prefix = None
+                        if prev_user:
+                            detected_prefix = _detect_user_prefix_contract(prev_user[1], user_text)
+                        if detected_prefix:
+                            prefix, tail = detected_prefix
+                            candidate_user_contract_id = _user_contract_hash(system_texts, prefix)
+                            known_user = _thread_user_contracts.get(current_thread_id)
+                            if known_user and known_user[1] == candidate_user_contract_id and effective_response_format:
+                                prompt = _build_user_contract_reminder_prompt(
+                                    tail,
+                                    contract_id,
+                                    candidate_user_contract_id,
+                                )
+                                used_user_contract = True
+                                used_thread_contract = False
+                            # Store/refresh learned prefix contract for future turns.
+                            _thread_user_contracts[current_thread_id] = (
+                                now_contract,
+                                candidate_user_contract_id,
+                                prefix,
+                            )
+                            user_contract_id = candidate_user_contract_id
+
+                        _thread_last_user_text[current_thread_id] = (now_contract, user_text)
+
+            system_chars = sum(len(_extract_content_text(m.content)) for m in messages if m.role == "system")
+            user_chars = sum(len(_extract_content_text(m.content)) for m in messages if m.role == "user")
+            assistant_chars = sum(len(_extract_content_text(m.content)) for m in messages if m.role == "assistant")
+            tool_chars = sum(len(_extract_content_text(m.content)) for m in messages if m.role == "tool")
+            log.debug(
+                "System prompt breakdown: count=%d lengths=%s previews=%s",
+                len(system_texts),
+                system_lengths,
+                system_previews,
+            )
+            log.info(
+                f"POST /v1/chat/completions - model={request.model}, "
+                f"{len(request.messages)} messages, prompt={len(prompt)} chars "
+                f"(system={system_chars}, user={user_chars}, assistant={assistant_chars}, tool={tool_chars})"
+            )
+            if used_thread_contract:
+                log.info("Thread contract mode: compact prompt used for thread=%s", current_thread_id or "unknown")
+            if used_user_contract:
+                log.info(
+                    "User prefix contract mode: compact prompt used for thread=%s contract=%s",
+                    current_thread_id or "unknown",
+                    user_contract_id[:12] if user_contract_id else "unknown",
+                )
+
+            if attachment_prefix:
+                prompt = f"{attachment_prefix}{prompt}" if prompt else attachment_prefix.strip()
+                full_prompt = f"{attachment_prefix}{full_prompt}" if full_prompt else attachment_prefix.strip()
+
+            cache_key = _cache_key_for_request_with_app(request, app_key)
+            now = time.time()
+            async with _cache_lock:
+                _prune_cache(now)
+                cached_entry = _response_cache.get(cache_key)
+                if cached_entry and now - cached_entry[0] <= _CACHE_TTL_SECONDS:
+                    log.info("Response cache hit: returning cached completion")
+                    return _clone_cached_response(cached_entry[1])
+
+            # -- Send to ChatGPT --------------------------------
             try:
-                full_retry = await client.send_message(
-                    full_prompt,
+                result = await client.send_message(
+                    prompt,
                     image_paths=image_paths or None,
                     file_paths=file_paths or None,
                     model=request.model,
+                    read_aloud=bool(request.read_aloud),
                 )
-                response_text = full_retry.message
-                elapsed_ms = int((time.time() - start_time) * 1000)
             except Exception as e:
-                log.warning(f"Full-prompt fallback after contract mode failed: {e}")
+                log.error(f"ChatGPT error: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=f"ChatGPT error: {str(e)}")
 
-        # -- Detect echo (extraction grabbed sent prompt instead of reply) --
-        if response_text and "[System instruction:" in response_text and request.tools:
-            log.warning("Response appears to echo the sent prompt - retrying extraction")
-            try:
-                await asyncio.sleep(3)
-                from src.chatgpt.detector import extract_last_response_via_copy
+            if Config.API_THREAD_CONTRACT_MODE and contract_id:
+                thread_for_contract = result.thread_id or current_thread_id or client._extract_thread_id()
+                if thread_for_contract:
+                    async with _contract_lock:
+                        _prune_thread_contracts(time.time())
+                        _thread_contracts[thread_for_contract] = (time.time(), contract_id)
+                        # Refresh user text tracking on resolved thread id too.
+                        if user_text:
+                            _thread_last_user_text[thread_for_contract] = (time.time(), user_text)
 
-                retry_text = await extract_last_response_via_copy(client.page)
-                if retry_text and "[System instruction:" not in retry_text:
-                    response_text = retry_text
-                    log.info(f"Retry extraction succeeded: {len(response_text)} chars")
-                else:
-                    log.warning("Retry extraction still echoed - stripping system prefix")
-                    idx = response_text.rfind("\n\n")
-                    if idx > 0:
-                        tail = response_text[idx:].strip()
-                        if tail and not tail.startswith("["):
-                            response_text = tail
-            except Exception as e:
-                log.warning(f"Retry extraction failed: {e}")
-
-        # -- Check for tool calls ----------------------------
-        tool_calls = None
-        finish_reason = "stop"
-
-        if effective_response_format and response_text:
-            response_text = _normalize_structured_content(response_text, effective_response_format)
-            mismatch = _structured_cardinality_mismatch(
-                request.messages,
-                response_text,
-                expected_count=page_extraction_expected_count,
-            )
-            if mismatch:
-                expected, actual = mismatch
-                log.warning(
-                    "Structured cardinality mismatch detected (expected=%d, actual=%d). Retrying once.",
-                    expected,
-                    actual,
-                )
-                retry_prompt = _build_cardinality_retry_prompt(
-                    prompt,
-                    expected,
-                    actual,
-                    expectation_reason="the numbered page map" if page_extraction_expected_count is not None else "input line count",
-                    correction_rule=(
-                        "Return valid JSON only, with exactly one output item per numbered page-map entry, "
-                        "preserving `page_index`, `source_name`, and `page_number` exactly and keeping the same order. "
-                        "Do not merge, drop, or add pages."
+            if Config.API_APP_THREAD_MODE and app_key:
+                thread_for_app = result.thread_id or client._extract_thread_id()
+                if thread_for_app:
+                    post_prune_expired: list[str] = []
+                    async with _app_thread_lock:
+                        post_prune_expired = _prune_app_threads(time.time())
+                        _app_threads[app_key] = _AppThreadMapping(
+                            time.time(),
+                            thread_for_app,
+                            created_by_catgpt=app_thread_created_by_catgpt,
+                        )
+                    # Best-effort deletion is scheduled after this request releases
+                    # browser_access_lock, so cleanup cannot navigate mid-request.
+                    if post_prune_expired:
+                        _deletion_pending.extend(post_prune_expired)
+                    thread_title = await _lookup_thread_title(client, thread_for_app)
+                    log.info(
+                        "App-thread mapping updated: app=%s -> thread=%s (%s)",
+                        app_name,
+                        thread_for_app,
+                        thread_title or "title unavailable",
                     )
-                    if page_extraction_expected_count is not None
-                    else None,
-                )
+
+            response_text = result.message
+            elapsed_ms = int((time.time() - start_time) * 1000)
+
+            if (used_thread_contract or used_user_contract) and effective_response_format and _extract_json_payload(response_text) is None:
+                mode_name = "user-prefix contract" if used_user_contract else "thread contract"
+                log.warning("%s mode produced non-JSON content. Retrying once with full prompt.", mode_name.capitalize())
                 try:
-                    retry_result = await client.send_message(
-                        retry_prompt,
+                    full_retry = await client.send_message(
+                        full_prompt,
                         image_paths=image_paths or None,
                         file_paths=file_paths or None,
                         model=request.model,
                     )
-                    retry_text = retry_result.message
-                    retry_text = _normalize_structured_content(retry_text, effective_response_format)
-                    retry_mismatch = _structured_cardinality_mismatch(
-                        request.messages,
-                        retry_text,
-                        expected_count=page_extraction_expected_count,
-                    )
-                    if not retry_mismatch:
-                        response_text = retry_text
-                        elapsed_ms = int((time.time() - start_time) * 1000)
-                        log.info("Structured cardinality retry succeeded")
-                    else:
-                        log.warning(
-                            "Structured cardinality retry still mismatched (expected=%d, actual=%d)",
-                            retry_mismatch[0],
-                            retry_mismatch[1],
-                        )
+                    response_text = full_retry.message
+                    elapsed_ms = int((time.time() - start_time) * 1000)
                 except Exception as e:
-                    log.warning(f"Structured cardinality retry failed: {e}")
+                    log.warning(f"Full-prompt fallback after contract mode failed: {e}")
 
-        if request.tools:
-            tool_calls = _parse_tool_calls(response_text, request.tools)
-            if tool_calls:
-                finish_reason = "tool_calls"
-                response_text = None
+            # -- Detect echo (extraction grabbed sent prompt instead of reply) --
+            if response_text and "[System instruction:" in response_text and request.tools:
+                log.warning("Response appears to echo the sent prompt - retrying extraction")
+                try:
+                    await asyncio.sleep(3)
+                    from src.chatgpt.detector import extract_last_response_via_copy
 
-        # -- Build response ----------------------------------
-        prompt_tokens = _estimate_tokens(prompt)
-        completion_tokens = _estimate_tokens(response_text or "")
+                    retry_text = await extract_last_response_via_copy(client.page)
+                    if retry_text and "[System instruction:" not in retry_text:
+                        response_text = retry_text
+                        log.info(f"Retry extraction succeeded: {len(response_text)} chars")
+                    else:
+                        log.warning("Retry extraction still echoed - stripping system prefix")
+                        idx = response_text.rfind("\n\n")
+                        if idx > 0:
+                            tail = response_text[idx:].strip()
+                            if tail and not tail.startswith("["):
+                                response_text = tail
+                except Exception as e:
+                    log.warning(f"Retry extraction failed: {e}")
 
-        response = ChatCompletionResponse(
-            model=request.model,
-            choices=[
-                Choice(
-                    index=0,
-                    message=ChoiceMessage(
-                        role="assistant",
-                        content=response_text,
-                        tool_calls=tool_calls,
-                    ),
-                    finish_reason=finish_reason,
+            # -- Check for tool calls ----------------------------
+            tool_calls = None
+            finish_reason = "stop"
+
+            if effective_response_format and response_text:
+                response_text = _normalize_structured_content(response_text, effective_response_format)
+                mismatch = _structured_cardinality_mismatch(
+                    request.messages,
+                    response_text,
+                    expected_count=page_extraction_expected_count,
                 )
-            ],
-            usage=UsageInfo(
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=prompt_tokens + completion_tokens,
-            ),
-        )
+                if mismatch:
+                    expected, actual = mismatch
+                    log.warning(
+                        "Structured cardinality mismatch detected (expected=%d, actual=%d). Retrying once.",
+                        expected,
+                        actual,
+                    )
+                    retry_prompt = _build_cardinality_retry_prompt(
+                        prompt,
+                        expected,
+                        actual,
+                        expectation_reason="the numbered page map" if page_extraction_expected_count is not None else "input line count",
+                        correction_rule=(
+                            "Return valid JSON only, with exactly one output item per numbered page-map entry, "
+                            "preserving `page_index`, `source_name`, and `page_number` exactly and keeping the same order. "
+                            "Do not merge, drop, or add pages."
+                        )
+                        if page_extraction_expected_count is not None
+                        else None,
+                    )
+                    try:
+                        retry_result = await client.send_message(
+                            retry_prompt,
+                            image_paths=image_paths or None,
+                            file_paths=file_paths or None,
+                            model=request.model,
+                        )
+                        retry_text = retry_result.message
+                        retry_text = _normalize_structured_content(retry_text, effective_response_format)
+                        retry_mismatch = _structured_cardinality_mismatch(
+                            request.messages,
+                            retry_text,
+                            expected_count=page_extraction_expected_count,
+                        )
+                        if not retry_mismatch:
+                            response_text = retry_text
+                            elapsed_ms = int((time.time() - start_time) * 1000)
+                            log.info("Structured cardinality retry succeeded")
+                        else:
+                            log.warning(
+                                "Structured cardinality retry still mismatched (expected=%d, actual=%d)",
+                                retry_mismatch[0],
+                                retry_mismatch[1],
+                            )
+                    except Exception as e:
+                        log.warning(f"Structured cardinality retry failed: {e}")
 
-        log.info(
-            f"Response: {elapsed_ms}ms, finish_reason={finish_reason}, "
-            f"tokens~{response.usage.total_tokens}"
-        )
+            if request.tools:
+                tool_calls = _parse_tool_calls(response_text, request.tools)
+                if tool_calls:
+                    finish_reason = "tool_calls"
+                    response_text = None
 
-        async with _cache_lock:
-            _prune_cache(time.time())
-            _response_cache[cache_key] = (time.time(), response.model_copy(deep=True))
+            # -- Build response ----------------------------------
+            prompt_tokens = _estimate_tokens(prompt)
+            completion_tokens = _estimate_tokens(response_text or "")
 
-        return response
+            response = ChatCompletionResponse(
+                model=request.model,
+                choices=[
+                    Choice(
+                        index=0,
+                        message=ChoiceMessage(
+                            role="assistant",
+                            content=response_text,
+                            tool_calls=tool_calls,
+                            audio=(
+                                AudioInfo(
+                                    url=result.audio.url,
+                                    local_path=result.audio.local_path,
+                                    mime_type=result.audio.mime_type,
+                                    size_bytes=result.audio.size_bytes,
+                                )
+                                if result.audio
+                                else None
+                            ),
+                        ),
+                        finish_reason=finish_reason,
+                    )
+                ],
+                usage=UsageInfo(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=prompt_tokens + completion_tokens,
+                ),
+            )
+
+            log.info(
+                f"Response: {elapsed_ms}ms, finish_reason={finish_reason}, "
+                f"tokens~{response.usage.total_tokens}"
+            )
+
+            async with _cache_lock:
+                _prune_cache(time.time())
+                _response_cache[cache_key] = (time.time(), response.model_copy(deep=True))
+
+            return response
+    finally:
+        if _deletion_pending:
+            asyncio.create_task(_maybe_delete_expired_app_threads(_deletion_pending))
 
 
 async def _run_async_chat_job(job_id: str, request: ChatCompletionRequest, app_key: str = "") -> None:

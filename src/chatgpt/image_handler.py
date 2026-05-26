@@ -15,17 +15,13 @@ This module:
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import re
 import time
-from pathlib import Path
-from urllib.parse import urlparse
 
 from patchright.async_api import Page
 
 from src.config import Config
-from src.selectors import Selectors
 from src.chatgpt.models import ImageInfo
 from src.log import setup_logging
 
@@ -46,10 +42,10 @@ async def detect_images_in_response(page: Page) -> list[dict]:
     """
     result = await page.evaluate("""
         () => {
-            const articles = document.querySelectorAll('article');
-            if (articles.length === 0) return [];
+            const turns = document.querySelectorAll('section[data-testid^="conversation-turn-"]');
+            if (turns.length === 0) return [];
 
-            const lastTurn = articles[articles.length - 1];
+            const lastTurn = turns[turns.length - 1];
 
             // Find generated images — primary: alt="Generated image"
             let images = lastTurn.querySelectorAll('img[alt="Generated image"]');

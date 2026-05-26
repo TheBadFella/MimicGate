@@ -1,30 +1,35 @@
 """
-CATGPT — Control · Agitate · Test
+CATGPT — OpenAI-Compatible Terminal Chat
 
-Full-screen Textual TUI for ChatGPT browser automation.
-GitHub Dark theme with animated splash, scrollable chat, keyboard shortcuts.
+A beautiful full-screen TUI that talks to CatGPT Gateway (or any OpenAI-compatible API).
+Uses the standard openai Python SDK — no browser management, no Playwright.
+
+Configuration (env vars or CLI flags):
+  CATGPT_API_URL    API base URL  (default: http://localhost:8000/v1)
+  CATGPT_API_KEY    Bearer token  (default: dummy123)
+  CATGPT_MODEL      Model name    (default: catgpt-browser)
 
 Commands:
-  /new          Start a new conversation
-  /threads      List recent threads from the sidebar
-  /thread <id>  Switch to a specific thread
-  /images       List downloaded DALL-E images
-  /status       Show connection & session info
-  /clear        Clear the chat display
-  /help         Show available commands
-  /exit, /quit  Close browser and exit
+  /help              Show this help
+  /new               Start a fresh conversation (clears history)
+  /clear             Clear the display (history preserved)
+  /system <text>     Set a system prompt for the session
+  /model <name>      Switch to a different model
+  /history           Show all conversation turns
+  /export [file]     Export conversation to a markdown file
+  /status            Show API config and session info
+  /exit              Quit
 
 Shortcuts:
-  Ctrl+N   New chat        Ctrl+T   List threads
-  Ctrl+L   Clear chat      Ctrl+C   Quit
+  Ctrl+N   New conversation    Ctrl+E   Export
+  Ctrl+L   Clear display       Ctrl+C   Quit
 """
 
 from __future__ import annotations
 
-import asyncio
 import os
-import threading
 from datetime import datetime
+from pathlib import Path
 
 import typer
 from rich.markdown import Markdown
@@ -33,60 +38,60 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Center, ScrollableContainer, Vertical
+from textual.reactive import reactive
 from textual.screen import Screen
 from textual.widget import Widget
 from textual.widgets import Footer, Header, Input, Static
 
-# -- Suppress console logs BEFORE any other src imports ----------
 from src.log import suppress_console_logs
 
 suppress_console_logs()
 
-from src.browser.manager import BrowserManager
-from src.chatgpt.client import ChatGPTClient
-from src.chatgpt.models import ChatResponse, ImageInfo
-from src.config import Config
 from src.log import setup_logging
 
 log = setup_logging("cli", log_file="cli.log")
 cli = typer.Typer(no_args_is_help=False, add_completion=False)
 
-# -- Constants ---------------------------------------------------
-VERSION = "2.1.0"
+# ── Constants ────────────────────────────────────────────────────
+VERSION = "3.0.0"
 APP_NAME = "CATGPT"
-APP_TAGLINE = "Control · Agitate · Test"
+APP_TAGLINE = "OpenAI-Compatible Terminal Chat"
 
-CAT_ART = """
+THINKING_FRAMES = ["◐", "◓", "◑", "◒"]
+
+CAT_ART = """\
       /\\_/\\
      ( ● . ● )
       > △ <
      /|   |\\
-    (_|   |_)
-"""
+    (_|   |_)"""
 
-LOGO_TEXT = """
+LOGO_TEXT = """\
  ██████╗  █████╗ ████████╗ ██████╗ ██████╗ ████████╗
 ██╔════╝ ██╔══██╗╚══██╔══╝██╔════╝ ██╔══██╗╚══██╔══╝
-██║     ███████║   ██║   ██║  ███╗██████╔╝   ██║
-██║     ██╔══██║   ██║   ██║   ██║██╔═══╝    ██║
-╚██████╗██║  ██║   ██║   ╚██████╔╝██║        ██║
- ╚═════╝╚═╝  ╚═╝   ╚═╝    ╚═════╝ ╚═╝        ╚═╝
-"""
+██║      ███████║   ██║   ██║  ███╗██████╔╝   ██║
+██║      ██╔══██║   ██║   ██║   ██║██╔═══╝    ██║
+╚██████╗ ██║  ██║   ██║   ╚██████╔╝██║        ██║
+ ╚═════╝ ╚═╝  ╚═╝   ╚═╝    ╚═════╝ ╚═╝        ╚═╝"""
 
-WELCOME_TEXT = """[bold #58a6ff]─── Welcome to CATGPT ───[/]
+WELCOME_TEMPLATE = """\
+[bold #58a6ff]─── Welcome to CATGPT v{version} ───[/]
 
-[#8b949e]ChatGPT browser automation powered by Playwright.[/]
-[#8b949e]Type a message below or use commands to get started.[/]
+[#8b949e]Talking to:[/]  [#e6edf3]{url}[/]
+[#8b949e]Model:[/]       [#58a6ff]{model}[/]
 
-[bold #e6edf3]Quick Start[/]
-  [#58a6ff]/help[/]     [#8b949e]│[/] Show all commands
-  [#58a6ff]/new[/]      [#8b949e]│[/] Start fresh conversation
-  [#58a6ff]/threads[/]  [#8b949e]│[/] Browse recent chats
-  [#58a6ff]/status[/]   [#8b949e]│[/] Connection details
+[bold #e6edf3]Commands[/]
+  [#58a6ff]/help[/]              [#8b949e]│[/] Show all commands
+  [#58a6ff]/new[/]               [#8b949e]│[/] Start fresh conversation
+  [#58a6ff]/system <text>[/]     [#8b949e]│[/] Set a system prompt
+  [#58a6ff]/model <name>[/]      [#8b949e]│[/] Switch model
+  [#58a6ff]/history[/]           [#8b949e]│[/] View conversation turns
+  [#58a6ff]/export [file][/]     [#8b949e]│[/] Export to markdown
+  [#58a6ff]/status[/]            [#8b949e]│[/] API config & session info
 
 [bold #e6edf3]Shortcuts[/]
-  [bold #6e7681]Ctrl+N[/]  New chat   [bold #6e7681]Ctrl+T[/]  Threads
-  [bold #6e7681]Ctrl+L[/]  Clear      [bold #6e7681]Ctrl+C[/]  Quit
+  [bold #6e7681]Ctrl+N[/]  New chat    [bold #6e7681]Ctrl+E[/]  Export
+  [bold #6e7681]Ctrl+L[/]  Clear       [bold #6e7681]Ctrl+C[/]  Quit
 """
 
 
@@ -96,92 +101,108 @@ WELCOME_TEXT = """[bold #58a6ff]─── Welcome to CATGPT ───[/]
 
 
 class UserMessage(Widget):
-    """User message with blue accent bar."""
+    """User message bubble with blue left bar."""
 
     DEFAULT_CLASSES = "user-msg"
 
-    def __init__(self, text: str, msg_num: int) -> None:
+    def __init__(self, text: str, turn: int) -> None:
         super().__init__()
         self._text = text
-        self._num = msg_num
+        self._turn = turn
+        self._time = datetime.now().strftime("%H:%M:%S")
 
     def compose(self) -> ComposeResult:
-        display = self._text if len(self._text) <= 500 else self._text[:497] + "\u2026"
-        yield Static(f"  You  \u00b7  #{self._num}", classes="user-msg-header")
-        yield Static(display, classes="user-msg-body")
+        display = self._text if len(self._text) <= 600 else self._text[:597] + "…"
+        words = len(self._text.split())
+        yield Static(
+            f"  You  ·  turn #{self._turn}  ·  {self._time}",
+            classes="msg-header user-msg-header",
+        )
+        yield Static(display, classes="msg-body")
+        yield Static(
+            f"  {words} word{'s' if words != 1 else ''}",
+            classes="msg-footer",
+        )
 
 
 class AssistantMessage(Widget):
-    """Assistant response with green accent bar and markdown rendering."""
+    """Assistant response with green left bar and markdown rendering."""
 
     DEFAULT_CLASSES = "assistant-msg"
 
-    def __init__(self, text: str, time_ms: int) -> None:
+    def __init__(self, text: str, model: str, time_ms: int) -> None:
         super().__init__()
         self._text = text
+        self._model = model
         self._time_ms = time_ms
+        self._time = datetime.now().strftime("%H:%M:%S")
 
     def compose(self) -> ComposeResult:
         time_str = (
-            f"{self._time_ms / 1000:.1f}s"
-            if self._time_ms >= 1000
-            else f"{self._time_ms}ms"
+            f"{self._time_ms / 1000:.1f}s" if self._time_ms >= 1000 else f"{self._time_ms}ms"
         )
-        yield Static(f"  {APP_NAME}", classes="assistant-msg-header")
-        if self._text.strip():
-            yield Static(Markdown(self._text), classes="assistant-msg-body")
-        else:
-            yield Static("[dim]No text content[/]", classes="assistant-msg-body")
+        words = len(self._text.split())
         yield Static(
-            f"{len(self._text)} chars \u00b7 {time_str}",
-            classes="assistant-msg-footer",
+            f"  {APP_NAME}  ·  {self._model}  ·  {self._time}",
+            classes="msg-header assistant-msg-header",
+        )
+        if self._text.strip():
+            yield Static(Markdown(self._text), classes="msg-body")
+        else:
+            yield Static("[dim]Empty response[/]", classes="msg-body")
+        yield Static(
+            f"  {words} word{'s' if words != 1 else ''}  ·  {time_str}",
+            classes="msg-footer",
         )
 
 
-class ImageCard(Widget):
-    """DALL-E image metadata card with purple accent."""
+class SystemPromptCard(Widget):
+    """Displays the active system prompt."""
 
-    DEFAULT_CLASSES = "image-card"
+    DEFAULT_CLASSES = "system-prompt-card"
 
-    def __init__(self, img: ImageInfo, index: int = 1) -> None:
+    def __init__(self, text: str) -> None:
         super().__init__()
-        self._img = img
-        self._index = index
+        self._text = text
 
     def compose(self) -> ComposeResult:
-        title = self._img.prompt_title or self._img.alt or "Generated Image"
-        yield Static(f"  \U0001f5bc  Image #{self._index}", classes="image-card-header")
-
-        parts: list[str] = [f"[bold]{title}[/]", ""]
-        if self._img.local_path:
-            parts.append(f"  Saved:  {self._img.local_path}")
-            try:
-                size = os.path.getsize(self._img.local_path)
-                size_str = (
-                    f"{size / 1024 / 1024:.1f} MB"
-                    if size >= 1024 * 1024
-                    else f"{size / 1024:.1f} KB"
-                )
-                parts.append(f"  Size:   {size_str}")
-            except OSError:
-                pass
-        else:
-            parts.append("  [#f85149]Download failed[/]")
-
-        if self._img.url:
-            short = self._img.url[:60] + "\u2026" if len(self._img.url) > 60 else self._img.url
-            parts.append(f"  URL:    [dim]{short}[/]")
-
-        yield Static("\n".join(parts), classes="image-card-body")
+        display = self._text if len(self._text) <= 300 else self._text[:297] + "…"
+        yield Static("  ⚙  System Prompt Active", classes="msg-header system-prompt-header")
+        yield Static(f"  {display}", classes="msg-body")
 
 
-class ThinkingIndicator(Static):
-    """Shown while waiting for ChatGPT response."""
+class ThinkingIndicator(Widget):
+    """Animated spinner while waiting for the API response."""
 
-    DEFAULT_CLASSES = "thinking"
+    DEFAULT_CLASSES = "thinking-widget"
 
-    def __init__(self) -> None:
-        super().__init__(f"\u25cf  {APP_NAME} is thinking \u2026")
+    frame: reactive[int] = reactive(0)
+
+    def compose(self) -> ComposeResult:
+        yield Static(
+            f"  {THINKING_FRAMES[0]}  {APP_NAME} is thinking …",
+            classes="thinking-label",
+        )
+
+    def on_mount(self) -> None:
+        self._timer = self.set_interval(0.12, self._tick)
+
+    def _tick(self) -> None:
+        self.frame = (self.frame + 1) % len(THINKING_FRAMES)
+
+    def watch_frame(self, frame: int) -> None:
+        try:
+            self.query_one(".thinking-label", Static).update(
+                f"  {THINKING_FRAMES[frame]}  {APP_NAME} is thinking …"
+            )
+        except Exception:
+            pass
+
+    def stop_animation(self) -> None:
+        try:
+            self._timer.stop()
+        except Exception:
+            pass
 
 
 # ================================================================
@@ -190,33 +211,27 @@ class ThinkingIndicator(Static):
 
 
 class SplashScreen(Screen):
-    """Animated splash with cat art and CATGPT logo. Auto-transitions 3s."""
+    """Animated splash screen. Auto-transitions after 2.5 s or on keypress."""
 
     def compose(self) -> ComposeResult:
         with Center():
             with Vertical(id="splash-container"):
                 yield Static(CAT_ART, id="splash-cat")
                 yield Static(LOGO_TEXT, id="splash-logo")
+                yield Static(f"───  {APP_TAGLINE}  ───", id="splash-tagline")
                 yield Static(
-                    f"\u2500\u2500\u2500  {APP_TAGLINE}  \u2500\u2500\u2500",
-                    id="splash-tagline",
-                )
-                yield Static(
-                    f"v{VERSION} \u00b7 browser automation \u00b7 playwright",
+                    f"v{VERSION}  ·  OpenAI-compatible  ·  any provider",
                     id="splash-version",
                 )
-                yield Static(
-                    "press any key to continue",
-                    id="splash-hint",
-                )
+                yield Static("press any key to skip", id="splash-hint")
 
     def on_mount(self) -> None:
-        self.set_timer(3.0, self._go_to_chat)
+        self.set_timer(2.5, self._go)
 
-    def on_key(self, _event: object) -> None:
-        self._go_to_chat()
+    def on_key(self, _: object) -> None:
+        self._go()
 
-    def _go_to_chat(self) -> None:
+    def _go(self) -> None:
         if self.app.screen is self:
             self.app.switch_screen("chat")
 
@@ -227,130 +242,104 @@ class SplashScreen(Screen):
 
 
 class ChatScreen(Screen):
-    """Main chat interface \u2014 messages, input, keybindings."""
+    """Main chat interface — messages, input, keybindings."""
 
     BINDINGS = [
-        Binding("ctrl+n", "new_chat", "New Chat", key_display="^N"),
-        Binding("ctrl+t", "threads", "Threads", key_display="^T"),
-        Binding("ctrl+l", "clear_chat", "Clear", key_display="^L"),
-        Binding("ctrl+c", "quit_app", "Quit", key_display="^C", priority=True),
+        Binding("ctrl+n", "new_chat",   "New Chat", key_display="^N"),
+        Binding("ctrl+e", "export",     "Export",   key_display="^E"),
+        Binding("ctrl+l", "clear_chat", "Clear",    key_display="^L"),
+        Binding("ctrl+c", "quit_app",   "Quit",     key_display="^C", priority=True),
     ]
 
-    # -- State ---------------------------------------------------
+    # ── State ────────────────────────────────────────────────────
 
     def __init__(self) -> None:
         super().__init__()
-        self.browser: BrowserManager | None = None
-        self.client: ChatGPTClient | None = None
-        self.connected: bool = False
-        self.thread_id: str = ""
-        self.msg_count: int = 0
-        self.last_time_ms: int = 0
-        self.total_images: int = 0
-        self.session_start: datetime = datetime.now()
-        self._is_busy: bool = False
-
-        # Single event loop for ALL Playwright operations
-        self._browser_loop: asyncio.AbstractEventLoop = asyncio.new_event_loop()
-        self._loop_thread = threading.Thread(
-            target=self._run_browser_loop, daemon=True
+        self.api_url = (
+            os.getenv("CATGPT_API_URL")
+            or os.getenv("OPENAI_API_BASE")
+            or "http://localhost:8000/v1"
         )
-        self._loop_thread.start()
+        self.api_key = (
+            os.getenv("CATGPT_API_KEY")
+            or os.getenv("OPENAI_API_KEY")
+            or "dummy123"
+        )
+        self.model = os.getenv("CATGPT_MODEL") or "catgpt-browser"
 
-    def _run_browser_loop(self) -> None:
-        """Run the shared browser event loop forever in a daemon thread."""
-        asyncio.set_event_loop(self._browser_loop)
-        self._browser_loop.run_forever()
+        self.messages: list[dict] = []       # full OpenAI-format conversation history
+        self.system_prompt: str | None = None
+        self.turn_count = 0
+        self.last_time_ms = 0
+        self.session_start = datetime.now()
+        self._is_busy = False
+        self._openai = None                  # openai.AsyncOpenAI — set in on_mount
 
-    def _run_async(self, coro: object) -> object:
-        """Submit a coroutine to the shared browser loop and block until done."""
-        future = asyncio.run_coroutine_threadsafe(coro, self._browser_loop)  # type: ignore[arg-type]
-        return future.result()
+    def on_mount(self) -> None:
+        import openai
 
-    # -- Layout --------------------------------------------------
+        self._openai = openai.AsyncOpenAI(
+            base_url=self.api_url,
+            api_key=self.api_key,
+        )
+        self.app.title = APP_NAME
+        self.app.sub_title = f"{self.model}  ·  {self.api_url}"
+        self.query_one("#chat-container", Vertical).border_title = f" 🐱  {APP_NAME} "
+        self._show_welcome()
+        self._check_connection()
+        self.query_one("#chat-input", Input).focus()
+
+    # ── Layout ───────────────────────────────────────────────────
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        yield Static(self._build_status_text(), id="status-bar")
+        yield Static(self._status_text(), id="status-bar")
         with Vertical(id="chat-container"):
             with ScrollableContainer(id="chat-log"):
-                yield Static(
-                    "\u25cf  Connecting to ChatGPT \u2026", classes="system-msg"
-                )
+                pass
         yield Input(
-            placeholder="Message CATGPT \u2026  (/help for commands)",
+            placeholder="Message CATGPT …  (/help for commands)",
             id="chat-input",
         )
         yield Footer()
 
-    def on_mount(self) -> None:
-        self.app.title = APP_NAME
-        self.app.sub_title = APP_TAGLINE
-        container = self.query_one("#chat-container", Vertical)
-        container.border_title = f" \U0001f431  {APP_NAME} "
-        self._connect()
-
     @property
     def chat_log(self) -> ScrollableContainer:
-        """Cached access to the chat log container."""
         return self.query_one("#chat-log", ScrollableContainer)
 
-    # -- Browser Connection (async worker) -----------------------
+    # ── Welcome & connection check ───────────────────────────────
 
-    @work(exclusive=True, thread=True, name="connect")
-    def _connect(self) -> None:
-        """Launch browser and connect to ChatGPT in a background thread."""
+    def _show_welcome(self) -> None:
+        text = WELCOME_TEMPLATE.format(
+            version=VERSION,
+            url=self.api_url,
+            model=self.model,
+        )
+        self.chat_log.mount(Static(text, classes="welcome-card"))
 
-        async def _do_connect() -> tuple[BrowserManager, ChatGPTClient, str]:
-            from src.browser.auto_login import ensure_logged_in
-
-            browser = BrowserManager()
-            page = await browser.start()
-            await browser.navigate(Config.CHATGPT_URL)
-            # Apply stealth AFTER navigation (avoids DNS failure in Docker)
-            await browser.apply_stealth_patches()
-            await asyncio.sleep(3)
-            if not await browser.is_logged_in():
-                logged_in = await ensure_logged_in(browser)
-                if not logged_in:
-                    raise RuntimeError(
-                        "Could not log in to ChatGPT"
-                    )
-            client = ChatGPTClient(page)
-            tid = client._extract_thread_id()
-            return browser, client, tid
-
+    @work(exclusive=False, name="check_conn")
+    async def _check_connection(self) -> None:
         try:
-            browser, client, tid = self._run_async(_do_connect())
-            self.browser = browser
-            self.client = client
-            self.thread_id = tid
-            self.connected = True
-            self.app.call_from_thread(self._on_connected)
-        except Exception as exc:
-            log.error(f"Connection failed: {exc}", exc_info=True)
-            self.app.call_from_thread(self._on_connect_error, str(exc))
-
-    def _on_connected(self) -> None:
-        chat_log = self.chat_log
-        chat_log.remove_children()
-        if self.thread_id:
-            chat_log.mount(
-                Static(
-                    f"[#3fb950]\u2713[/]  Connected \u2014 resuming thread [#58a6ff]{self.thread_id[:12]}\u2026[/]",
-                    classes="system-success",
-                )
+            result = await self._openai.models.list()
+            names = [m.id for m in result.data]
+            if names and self.model not in names:
+                self.model = names[0]
+                self.app.sub_title = f"{self.model}  ·  {self.api_url}"
+            model_list = "  ".join(f"[#58a6ff]{n}[/]" for n in names[:5])
+            self._mount_system(
+                f"[#3fb950]✓[/]  Connected to [#58a6ff]{self.api_url}[/]\n"
+                f"  Available: {model_list}",
+                "system-success",
             )
-        chat_log.mount(Static(WELCOME_TEXT, classes="welcome-card"))
+        except Exception as exc:
+            self._mount_system(
+                f"[#f85149]✗[/]  Cannot reach [#58a6ff]{self.api_url}[/]\n"
+                f"  Is the server running?  [#6e7681]{exc}[/]",
+                "system-error",
+            )
         self._refresh_status()
-        self.query_one("#chat-input", Input).focus()
 
-    def _on_connect_error(self, error: str) -> None:
-        chat_log = self.chat_log
-        chat_log.remove_children()
-        chat_log.mount(Static(f"[#f85149]\u2717[/]  {error}", classes="system-error"))
-
-    # -- Input Handling ------------------------------------------
+    # ── Input handling ───────────────────────────────────────────
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
@@ -359,336 +348,300 @@ class ChatScreen(Screen):
             return
         if text.startswith("/"):
             parts = text.split(maxsplit=1)
-            cmd = parts[0].lower()
-            args = parts[1] if len(parts) > 1 else ""
-            self._dispatch_command(cmd, args)
+            self._dispatch_command(parts[0].lower(), parts[1] if len(parts) > 1 else "")
         else:
-            self._send_user_message(text)
+            self._send(text)
 
-    # -- Send Message --------------------------------------------
+    # ── Send message ─────────────────────────────────────────────
 
-    def _send_user_message(self, text: str) -> None:
+    def _send(self, text: str) -> None:
         if self._is_busy:
-            self._mount_system("[#d29922]\u26a0[/]  Please wait for the current response \u2026", "system-error")
-            return
-        if not self.connected or not self.client:
-            self._mount_system("[#d29922]\u26a0[/]  Not connected yet \u2014 please wait \u2026", "system-error")
+            self._mount_system("⚠  Please wait for the current response …", "system-warn")
             return
 
-        self.msg_count += 1
-        chat_log = self.chat_log
-        chat_log.mount(UserMessage(text, self.msg_count))
+        self.turn_count += 1
+        self.chat_log.mount(UserMessage(text, self.turn_count))
         thinking = ThinkingIndicator()
-        chat_log.mount(thinking)
-        chat_log.scroll_end(animate=False)
-
+        self.chat_log.mount(thinking)
+        self.chat_log.scroll_end(animate=False)
         self._is_busy = True
+        self._refresh_status()
         self._do_send(text, thinking)
 
-    @work(exclusive=True, thread=True, name="send")
-    def _do_send(self, text: str, thinking: ThinkingIndicator) -> None:
-        async def _send() -> ChatResponse:
-            assert self.client is not None
-            return await self.client.send_message(text)
+    @work(exclusive=True, name="send")
+    async def _do_send(self, text: str, thinking: ThinkingIndicator) -> None:
+        self.messages.append({"role": "user", "content": text})
+
+        payload: list[dict] = []
+        if self.system_prompt:
+            payload.append({"role": "system", "content": self.system_prompt})
+        payload.extend(self.messages)
 
         try:
-            response = self._run_async(_send())
-            self.app.call_from_thread(self._on_response, response, thinking)
+            t0 = datetime.now()
+            resp = await self._openai.chat.completions.create(
+                model=self.model,
+                messages=payload,
+            )
+            elapsed_ms = int((datetime.now() - t0).total_seconds() * 1000)
+            content = resp.choices[0].message.content or ""
+            self.messages.append({"role": "assistant", "content": content})
+            self.last_time_ms = elapsed_ms
+            thinking.stop_animation()
+            thinking.remove()
+            self.chat_log.mount(AssistantMessage(content, self.model, elapsed_ms))
+
         except Exception as exc:
-            log.error(f"Send failed: {exc}", exc_info=True)
-            self.app.call_from_thread(self._on_send_error, str(exc), thinking)
+            log.error(f"API call failed: {exc}", exc_info=True)
+            self.messages.pop()
+            self.turn_count = max(0, self.turn_count - 1)
+            thinking.stop_animation()
+            thinking.remove()
+            self._mount_system(f"[#f85149]✗[/]  {exc}", "system-error")
 
-    def _on_response(self, response: ChatResponse, thinking: ThinkingIndicator) -> None:
-        thinking.remove()
-        chat_log = self.chat_log
-
-        # Images
-        if response.has_images:
-            for i, img in enumerate(response.images, 1):
-                chat_log.mount(ImageCard(img, index=i))
-                self.total_images += 1
-
-        # Text
-        if response.message.strip():
-            chat_log.mount(
-                AssistantMessage(response.message, response.response_time_ms)
-            )
-        elif not response.has_images:
-            chat_log.mount(
-                AssistantMessage("[No response text]", response.response_time_ms)
-            )
-
-        self.last_time_ms = response.response_time_ms
-        self.thread_id = response.thread_id or self.thread_id
         self._is_busy = False
         self._refresh_status()
-        chat_log.scroll_end(animate=False)
+        self.chat_log.scroll_end(animate=False)
 
-    def _on_send_error(self, error: str, thinking: ThinkingIndicator) -> None:
-        thinking.remove()
-        self.msg_count = max(0, self.msg_count - 1)
-        self._is_busy = False
-        self._mount_system(f"[#f85149]\u2717[/]  {error}", "system-error")
-
-    # -- Command Dispatch ----------------------------------------
+    # ── Command dispatch ─────────────────────────────────────────
 
     def _dispatch_command(self, cmd: str, args: str) -> None:
-        commands: dict[str, object] = {
-            "/exit": lambda: self.action_quit_app(),
-            "/quit": lambda: self.action_quit_app(),
-            "/q": lambda: self.action_quit_app(),
-            "/help": lambda: self._show_help(),
-            "/clear": lambda: self.action_clear_chat(),
-            "/new": lambda: self.action_new_chat(),
-            "/threads": lambda: self.action_threads(),
-            "/images": lambda: self._show_images(),
-            "/status": lambda: self._show_status(),
-            "/thread": lambda: self._switch_thread(args),
+        dispatch: dict[str, object] = {
+            "/exit":    lambda: self.action_quit_app(),
+            "/quit":    lambda: self.action_quit_app(),
+            "/q":       lambda: self.action_quit_app(),
+            "/help":    lambda: self._show_help(),
+            "/clear":   lambda: self.action_clear_chat(),
+            "/new":     lambda: self.action_new_chat(),
+            "/history": lambda: self._show_history(),
+            "/export":  lambda: self._export_command(args),
+            "/status":  lambda: self._show_status(),
+            "/system":  lambda: self._set_system(args),
+            "/model":   lambda: self._set_model(args),
         }
-        handler = commands.get(cmd)
+        handler = dispatch.get(cmd)
         if handler:
-            handler()
+            handler()  # type: ignore[operator]
         else:
-            self._mount_system(f"[#f85149]\u2717[/]  Unknown command: {cmd} \u2014 type /help", "system-error")
+            self._mount_system(
+                f"[#f85149]✗[/]  Unknown command: [bold]{cmd}[/] — type /help",
+                "system-error",
+            )
 
-    # -- /help ---------------------------------------------------
+    # ── /help ────────────────────────────────────────────────────
 
     def _show_help(self) -> None:
         lines = [
-            "[bold #58a6ff]\u2500\u2500\u2500 CATGPT Commands \u2500\u2500\u2500[/]\n",
-            "  [bold #3fb950]/new[/]            Start a fresh conversation",
-            "  [bold #3fb950]/threads[/]        List recent threads from sidebar",
-            "  [bold #3fb950]/thread <id>[/]    Switch to an existing thread",
-            "  [bold #3fb950]/images[/]         List all downloaded DALL-E images",
-            "  [bold #3fb950]/status[/]         Show connection & session details",
-            "  [bold #3fb950]/clear[/]          Clear the chat display",
-            "  [bold #3fb950]/help[/]           Show this help panel",
-            "  [bold #3fb950]/exit[/]           Close browser and exit",
+            "[bold #58a6ff]─── CATGPT Commands ───[/]\n",
+            "  [#58a6ff]/new[/]               Start fresh (clears history & system prompt)",
+            "  [#58a6ff]/clear[/]             Clear the display  (history preserved)",
+            "  [#58a6ff]/system <text>[/]     Set a system prompt for this session",
+            "  [#58a6ff]/model <name>[/]      Switch model  (e.g. /model gpt-4o)",
+            "  [#58a6ff]/history[/]           Show all conversation turns",
+            "  [#58a6ff]/export [file][/]     Export conversation to markdown",
+            "  [#58a6ff]/status[/]            API config & session info",
+            "  [#58a6ff]/help[/]              Show this help",
+            "  [#58a6ff]/exit[/]              Quit",
             "",
-            "[bold #58a6ff]\u2500\u2500\u2500 Keyboard Shortcuts \u2500\u2500\u2500[/]\n",
-            "  [bold #6e7681]Ctrl+N[/]  New chat       [bold #6e7681]Ctrl+T[/]  Threads",
-            "  [bold #6e7681]Ctrl+L[/]  Clear chat     [bold #6e7681]Ctrl+C[/]  Quit",
+            "[bold #58a6ff]─── Shortcuts ───[/]\n",
+            "  [bold #6e7681]Ctrl+N[/]  New chat     [bold #6e7681]Ctrl+E[/]  Export markdown",
+            "  [bold #6e7681]Ctrl+L[/]  Clear        [bold #6e7681]Ctrl+C[/]  Quit",
             "",
-            "[dim italic]  Tip: Ask ChatGPT to 'generate an image of ...' for DALL-E",
-            "  Tip: Images auto-download to downloads/images/",
-            "  Tip: All logs saved to logs/ (clean TUI, full debug in files)[/]",
+            "[dim italic]  Tip: /system 'You are a senior Python engineer' sets a persistent persona",
+            "  Tip: /clear keeps history — the model still remembers previous turns",
+            "  Tip: Set CATGPT_API_URL / CATGPT_API_KEY / CATGPT_MODEL as env vars[/]",
         ]
         self._mount_system("\n".join(lines), "system-info-block")
 
-    # -- /images -------------------------------------------------
-
-    def _show_images(self) -> None:
-        images_dir = Config.IMAGES_DIR
-        if not images_dir.exists():
-            self._mount_system("[#8b949e]No images downloaded yet.[/]", "system-msg")
-            return
-
-        files = sorted(
-            images_dir.glob("*.*"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-        if not files:
-            self._mount_system("[#8b949e]No images downloaded yet.[/]", "system-msg")
-            return
-
-        lines = [f"[bold #bc8cff]\u2500\u2500\u2500 Downloaded Images ({len(files)}) \u2500\u2500\u2500[/]\n"]
-        for i, f in enumerate(files[:20], 1):
-            size = f.stat().st_size
-            size_str = (
-                f"{size / 1024 / 1024:.1f} MB"
-                if size >= 1024 * 1024
-                else f"{size / 1024:.1f} KB"
-            )
-            mtime = datetime.fromtimestamp(f.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
-            lines.append(f"  [#6e7681]{i:>2}.[/] [#58a6ff]{f.name}[/]  [#3fb950]{size_str:>8}[/]  [#6e7681]{mtime}[/]")
-
-        lines.append(f"\n[#6e7681]  Folder: {images_dir}[/]")
-        self._mount_system("\n".join(lines), "system-info-block")
-
-    # -- /status -------------------------------------------------
+    # ── /status ──────────────────────────────────────────────────
 
     def _show_status(self) -> None:
         elapsed = datetime.now() - self.session_start
-        elapsed_str = f"{int(elapsed.total_seconds() // 60)}m {int(elapsed.total_seconds() % 60)}s"
-        conn = "[#3fb950]\u25cf Connected[/]" if self.connected else "[#f85149]\u25cf Disconnected[/]"
-
+        m, s = divmod(int(elapsed.total_seconds()), 60)
+        masked_key = (
+            self.api_key[:4] + "•" * max(0, len(self.api_key) - 4)
+            if len(self.api_key) > 4
+            else "•" * len(self.api_key)
+        )
+        sys_display = (
+            f"[#d29922]{self.system_prompt[:60]}{'…' if len(self.system_prompt) > 60 else ''}[/]"
+            if self.system_prompt
+            else "[#6e7681]not set[/]"
+        )
         lines = [
-            "[bold #58a6ff]\u2500\u2500\u2500 CATGPT Status \u2500\u2500\u2500[/]\n",
-            f"  Connection   {conn}",
-            f"  Thread       [#58a6ff]{self.thread_id or '(new chat)'}[/]",
-            f"  Messages     {self.msg_count}",
-            f"  Images       {self.total_images}",
-            f"  Session      {elapsed_str}",
-            f"  Browser      [#6e7681]{Config.BROWSER_DATA_DIR}[/]",
-            f"  Logs         [#6e7681]{Config.LOG_DIR}[/]",
-            f"  Images Dir   [#6e7681]{Config.IMAGES_DIR}[/]",
+            "[bold #58a6ff]─── CATGPT Status ───[/]\n",
+            f"  API URL         [#58a6ff]{self.api_url}[/]",
+            f"  Model           [#58a6ff]{self.model}[/]",
+            f"  Auth token      [#6e7681]{masked_key}[/]",
+            f"  Turns           {self.turn_count}",
+            f"  History msgs    {len(self.messages)}",
+            f"  System prompt   {sys_display}",
+            (
+                f"  Last response   [#3fb950]{self.last_time_ms}ms[/]"
+                if self.last_time_ms
+                else "  Last response   [#6e7681]—[/]"
+            ),
+            f"  Session uptime  {m}m {s}s",
         ]
         self._mount_system("\n".join(lines), "system-info-block")
 
-    # -- /threads ------------------------------------------------
+    # ── /history ─────────────────────────────────────────────────
 
-    def action_threads(self) -> None:
-        if not self.connected or not self.client:
-            self._mount_system("[#d29922]\u26a0[/]  Not connected yet", "system-error")
+    def _show_history(self) -> None:
+        if not self.messages:
+            self._mount_system("[#8b949e]No conversation history yet.[/]", "system-msg")
             return
-        self._mount_system("\u25cf  Loading threads \u2026", "system-msg")
-        self._do_list_threads()
-
-    @work(exclusive=True, thread=True, name="threads")
-    def _do_list_threads(self) -> None:
-        async def _list() -> list[dict]:
-            assert self.client is not None
-            return await self.client.list_threads()
-
-        try:
-            threads = self._run_async(_list())
-            self.app.call_from_thread(self._on_threads_loaded, threads)
-        except Exception as exc:
-            log.error(f"List threads failed: {exc}", exc_info=True)
-            self.app.call_from_thread(
-                self._mount_system, f"[#f85149]\u2717[/]  {exc}", "system-error"
+        lines = [
+            f"[bold #58a6ff]─── Conversation History ({len(self.messages)} messages) ───[/]\n"
+        ]
+        for i, msg in enumerate(self.messages, 1):
+            role = msg["role"]
+            content = str(msg.get("content") or "")
+            preview = content[:90].replace("\n", " ")
+            if len(content) > 90:
+                preview += "…"
+            color, icon = {
+                "user":      ("#58a6ff", "▶"),
+                "assistant": ("#3fb950", "◀"),
+            }.get(role, ("#d29922", "⚙"))
+            lines.append(
+                f"  [{color}]{i:>2}. {icon} {role:<10}[/]  [#8b949e]{preview}[/]"
             )
-
-    def _on_threads_loaded(self, threads: list[dict]) -> None:
-        if not threads:
-            self._mount_system("[#8b949e]No threads found in sidebar.[/]", "system-msg")
-            return
-        lines = [f"[bold #58a6ff]\u2500\u2500\u2500 Recent Threads ({len(threads)}) \u2500\u2500\u2500[/]\n"]
-        for i, t in enumerate(threads[:15], 1):
-            lines.append(f"  [#6e7681]{i:>2}.[/] [#58a6ff]{t['id'][:24]}[/]  {t['title']}")
-        lines.append("\n[#6e7681]  Use /thread <id> to switch[/]")
+        lines.append("\n[#6e7681]  Use /new to clear history, /export to save it[/]")
         self._mount_system("\n".join(lines), "system-info-block")
 
-    # -- /new ----------------------------------------------------
+    # ── /system ──────────────────────────────────────────────────
+
+    def _set_system(self, text: str) -> None:
+        text = text.strip()
+        if not text:
+            self.system_prompt = None
+            self._mount_system("[#8b949e]System prompt cleared.[/]", "system-msg")
+            self._refresh_status()
+            return
+        self.system_prompt = text
+        self.chat_log.mount(SystemPromptCard(text))
+        self.chat_log.scroll_end(animate=False)
+        self._mount_system(
+            "[#3fb950]✓[/]  System prompt set — applies to all future messages.",
+            "system-success",
+        )
+        self._refresh_status()
+
+    # ── /model ───────────────────────────────────────────────────
+
+    def _set_model(self, name: str) -> None:
+        name = name.strip()
+        if not name:
+            self._mount_system(
+                f"[#8b949e]Current model: [#58a6ff]{self.model}[/]  "
+                "[#6e7681]Use /model <name> to switch[/]",
+                "system-msg",
+            )
+            return
+        old = self.model
+        self.model = name
+        self.app.sub_title = f"{self.model}  ·  {self.api_url}"
+        self._refresh_status()
+        self._mount_system(
+            f"[#3fb950]✓[/]  Switched: [#6e7681]{old}[/] → [#58a6ff]{name}[/]",
+            "system-success",
+        )
+
+    # ── /export ──────────────────────────────────────────────────
+
+    def _export_command(self, filename: str) -> None:
+        if not self.messages:
+            self._mount_system("[#8b949e]Nothing to export yet.[/]", "system-msg")
+            return
+        self._do_export(filename.strip())
+
+    @work(exclusive=False, name="export")
+    async def _do_export(self, filename: str) -> None:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        name = filename or f"catgpt-export-{ts}.md"
+        if not name.endswith(".md"):
+            name += ".md"
+        path = Path(name) if ("/" in name or "\\" in name) else Path.cwd() / name
+
+        lines = [
+            f"# CATGPT Export — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n",
+            f"**Model:** `{self.model}`  ",
+            f"**API:** `{self.api_url}`  ",
+            f"**Turns:** {self.turn_count}  ",
+        ]
+        if self.system_prompt:
+            lines += [f"\n**System Prompt:**\n> {self.system_prompt}\n"]
+        lines.append("\n---\n")
+        for msg in self.messages:
+            role = msg["role"].title()
+            content = msg.get("content") or ""
+            lines.append(f"\n### {role}\n\n{content}\n")
+
+        try:
+            path.write_text("\n".join(lines), encoding="utf-8")
+            self._mount_system(
+                f"[#3fb950]✓[/]  Exported {len(self.messages)} messages → [#58a6ff]{path}[/]",
+                "system-success",
+            )
+        except Exception as exc:
+            self._mount_system(f"[#f85149]✗[/]  Export failed: {exc}", "system-error")
+
+    # ── Actions (keybindings) ────────────────────────────────────
 
     def action_new_chat(self) -> None:
-        if not self.connected or not self.client:
-            self._mount_system("[#d29922]\u26a0[/]  Not connected yet", "system-error")
-            return
-        self._mount_system("\u25cf  Starting new chat \u2026", "system-msg")
-        self._do_new_chat()
-
-    @work(exclusive=True, thread=True, name="new_chat")
-    def _do_new_chat(self) -> None:
-        async def _new() -> None:
-            assert self.client is not None
-            await self.client.new_chat()
-
-        try:
-            self._run_async(_new())
-            self.msg_count = 0
-            self.last_time_ms = 0
-            self.thread_id = ""
-            self.app.call_from_thread(self._on_new_chat)
-        except Exception as exc:
-            log.error(f"New chat failed: {exc}", exc_info=True)
-            self.app.call_from_thread(
-                self._mount_system, f"[#f85149]\u2717[/]  {exc}", "system-error"
+        self.messages.clear()
+        self.turn_count = 0
+        self.last_time_ms = 0
+        self.system_prompt = None
+        self.chat_log.remove_children()
+        self.chat_log.mount(
+            Static(
+                "[#3fb950]✓[/]  New conversation — history cleared.",
+                classes="system-success",
             )
-
-    def _on_new_chat(self) -> None:
-        chat_log = self.chat_log
-        chat_log.remove_children()
-        chat_log.mount(
-            Static("[#3fb950]\u2713[/]  New conversation started \u2014 type a message", classes="system-success")
         )
         self._refresh_status()
-
-    # -- /thread <id> --------------------------------------------
-
-    def _switch_thread(self, tid: str) -> None:
-        tid = tid.strip()
-        if not tid:
-            self._mount_system("[#f85149]\u2717[/]  Usage: /thread <thread-id>", "system-error")
-            return
-        if not self.connected or not self.client:
-            self._mount_system("[#d29922]\u26a0[/]  Not connected yet", "system-error")
-            return
-        self._mount_system(f"\u25cf  Switching to {tid[:12]}\u2026", "system-msg")
-        self._do_switch_thread(tid)
-
-    @work(exclusive=True, thread=True, name="switch_thread")
-    def _do_switch_thread(self, tid: str) -> None:
-        async def _switch() -> None:
-            assert self.client is not None
-            await self.client.navigate_to_thread(tid)
-
-        try:
-            self._run_async(_switch())
-            self.msg_count = 0
-            self.last_time_ms = 0
-            self.thread_id = tid
-            self.app.call_from_thread(self._on_thread_switched, tid)
-        except Exception as exc:
-            log.error(f"Switch thread failed: {exc}", exc_info=True)
-            self.app.call_from_thread(
-                self._mount_system, f"[#f85149]\u2717[/]  {exc}", "system-error"
-            )
-
-    def _on_thread_switched(self, tid: str) -> None:
-        self._mount_system(f"[#3fb950]\u2713[/]  Switched to thread [#58a6ff]{tid[:12]}\u2026[/]", "system-success")
-        self._refresh_status()
-
-    # -- /clear & Ctrl+L ----------------------------------------
 
     def action_clear_chat(self) -> None:
-        chat_log = self.chat_log
-        chat_log.remove_children()
-        chat_log.mount(Static("[#8b949e]Chat cleared.[/]", classes="system-msg"))
+        self.chat_log.remove_children()
+        self.chat_log.mount(
+            Static(
+                "[#8b949e]Display cleared.  "
+                "[dim]History still active — use /new to fully reset.[/]",
+                classes="system-msg",
+            )
+        )
 
-    # -- Quit (Ctrl+C) ------------------------------------------
+    def action_export(self) -> None:
+        if not self.messages:
+            self._mount_system("[#8b949e]Nothing to export yet.[/]", "system-msg")
+            return
+        self._do_export("")
 
     def action_quit_app(self) -> None:
-        self._do_quit()
+        self.app.exit()
 
-    @work(exclusive=True, thread=True, name="quit")
-    def _do_quit(self) -> None:
-        async def _close() -> None:
-            if self.browser:
-                await self.browser.close()
-
-        try:
-            self._run_async(_close())
-        except Exception as exc:
-            log.error(f"Browser close error: {exc}")
-        finally:
-            self._browser_loop.call_soon_threadsafe(self._browser_loop.stop)
-            self.app.call_from_thread(self.app.exit)
-
-    # -- Helpers -------------------------------------------------
+    # ── Helpers ──────────────────────────────────────────────────
 
     def _mount_system(self, text: str, css_class: str = "system-msg") -> None:
-        """Mount a system message into the chat log."""
-        chat_log = self.chat_log
-        chat_log.mount(Static(text, classes=css_class))
-        chat_log.scroll_end(animate=False)
+        self.chat_log.mount(Static(text, classes=css_class))
+        self.chat_log.scroll_end(animate=False)
 
-    def _build_status_text(self) -> str:
-        """Build the single-line status bar string."""
-        if self.connected:
-            conn = "[#3fb950]\u25cf[/] connected"
-        else:
-            conn = "[#f85149]\u25cf[/] connecting\u2026"
-        tid = (
-            f"[#58a6ff]{self.thread_id[:8]}\u2026[/]"
-            if self.thread_id
-            else "[#6e7681]new chat[/]"
-        )
-        msg = f"msgs: {self.msg_count}"
+    def _status_text(self) -> str:
+        conn = "[#d29922]● thinking[/]" if self._is_busy else "[#3fb950]● ready[/]"
+        model = f"[#58a6ff]{self.model}[/]"
+        turns = f"turn {self.turn_count}"
+        msgs = f"[#6e7681]{len(self.messages)} msgs[/]"
         time_str = (
-            f"[#3fb950]{self.last_time_ms}ms[/]" if self.last_time_ms > 0 else "[#6e7681]\u2014[/]"
+            f"[#3fb950]{self.last_time_ms}ms[/]" if self.last_time_ms else "[#6e7681]—[/]"
         )
-        parts = [conn, tid, msg, time_str]
-        if self.total_images > 0:
-            parts.append(f"[#bc8cff]\U0001f5bc {self.total_images}[/]")
-        return "  \u2502  ".join(parts)
+        sys_ind = "  [#d29922]⚙ system[/]" if self.system_prompt else ""
+        return f"  {conn}  │  {model}  │  {turns}  │  {msgs}  │  {time_str}{sys_ind}"
 
     def _refresh_status(self) -> None:
-        """Update the status bar widget."""
         try:
-            bar = self.query_one("#status-bar", Static)
-            bar.update(self._build_status_text())
+            self.query_one("#status-bar", Static).update(self._status_text())
         except Exception:
             pass
 
@@ -699,7 +652,7 @@ class ChatScreen(Screen):
 
 
 class CatGPTApp(App):
-    """CATGPT \u2014 Full-screen TUI for ChatGPT browser automation."""
+    """CATGPT — OpenAI-Compatible Terminal Chat."""
 
     TITLE = APP_NAME
     SUB_TITLE = APP_TAGLINE
@@ -717,8 +670,18 @@ class CatGPTApp(App):
 
 
 @cli.command()
-def chat() -> None:
-    """Start an interactive CATGPT session."""
+def chat(
+    api_url: str = typer.Option(None, "--api-url", "-u", help="API base URL"),
+    api_key: str = typer.Option(None, "--api-key", "-k", help="Bearer token"),
+    model: str = typer.Option(None, "--model", "-m", help="Model name"),
+) -> None:
+    """Start an interactive CATGPT terminal session."""
+    if api_url:
+        os.environ["CATGPT_API_URL"] = api_url
+    if api_key:
+        os.environ["CATGPT_API_KEY"] = api_key
+    if model:
+        os.environ["CATGPT_MODEL"] = model
     CatGPTApp().run()
 
 

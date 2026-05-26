@@ -1,11 +1,15 @@
 services:
-  # CatGPT Gateway - Enhanced Container Mock for Chat Apps
   catgpt:
-    image: g
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: catgpt-gateway
     container_name: catgpt
+    restart: unless-stopped
     security_opt:
       - seccomp=unconfined
-    restart: unless-stopped
+    shm_size: "2gb"
+    command: ["/entrypoint.sh"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
       interval: 30s
@@ -15,46 +19,48 @@ services:
     networks:
       - catgpt
     ports:
-      - "8650:8000" # API Port
-      - "6080:6080" # noVNC web UI
-    command: ["/entrypoint.sh"]
-    shm_size: "2gb"
+      - "8650:8000"
+      - "6080:6080"
     environment:
-      # Browser (headed on virtual display)
       HEADLESS: "false"
       SLOW_MO: 50
       DISPLAY: ":99"
       DISPLAY_WIDTH: 1366
       DISPLAY_HEIGHT: 768
       DISPLAY_DEPTH: 24
-      # ChatGPT
+      PROVIDER: "chatgpt"
       CHATGPT_URL: "https://chatgpt.com"
-      # Timeouts
+      CLAUDE_URL: "https://claude.ai"
       RESPONSE_TIMEOUT: 120000
       SELECTOR_TIMEOUT: 10000
-      # Human simulation
+      CHATGPT_MODEL_SWITCH_TIMEOUT: 10000
+      CHATGPT_MODEL_SWITCH_STRICT: "false"
       TYPING_SPEED_MIN: 50
       TYPING_SPEED_MAX: 150
       THINKING_PAUSE_MIN: 1000
       THINKING_PAUSE_MAX: 3000
-      # API
       API_HOST: "0.0.0.0"
       API_PORT: 8000
       API_TOKEN: ${CATGPT_API_KEY}
       API_TOKEN_OPTIONAL: "true"
-      # Optional: keep large system instructions in thread context and send compact reminders
       API_THREAD_CONTRACT_MODE: "true"
       API_THREAD_CONTRACT_TTL_SECONDS: 3600
-      # Optional: map request.user to dedicated chat threads for app-level isolation
       API_APP_THREAD_MODE: "true"
       API_APP_THREAD_TTL_SECONDS: 86400
-      # Optional: merge header-only rows into the next item's note/context in structured JSON outputs
+      API_APP_THREAD_DELETE_EXPIRED: "false"
       API_HEADER_ROW_MERGE_MODE: "true"
-      # VNC Authentication
+      OLLAMA_EMBEDDING_MODELS: "nomic-embed-text"
+      OLLAMA_EMBEDDING_DIMENSIONS: 768
+      OLLAMA_ACTIVE_MODEL_TTL_SECONDS: 900
+      AUDIO_DIR: "/app/downloads/audio"
       VNC_PASSWORD: ${CATGPT_VNC_PASSWORD}
-      # Logging (verbose for Docker)
       LOG_LEVEL: "DEBUG"
       VERBOSE: "true"
     volumes:
       - ${DOCKERDIR}/appdata/catgpt/browser:/app/browser_data
       - ${DOCKERDIR}/appdata/catgpt/logs:/app/logs
+      - ${DOCKERDIR}/appdata/catgpt/downloads:/app/downloads
+
+networks:
+  catgpt:
+    name: catgpt

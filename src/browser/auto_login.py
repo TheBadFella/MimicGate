@@ -48,11 +48,13 @@ async def ensure_logged_in(browser: BrowserManager, has_session: bool = False) -
         print("  🔐 ChatGPT Login Required — First-Time Setup")
         print("=" * 60)
 
+    provider_name = "Claude" if Config.PROVIDER == "claude" else "ChatGPT"
+    target_url = Config.provider_url()
     print(f"\n  Browser data dir: {Config.BROWSER_DATA_DIR}")
-    print(f"  Target: {Config.CHATGPT_URL}")
+    print(f"  Target: {target_url}")
     print("\n  A Chrome window is open. Please:")
-    print("  1. Sign in to ChatGPT with your account")
-    print("  2. Complete any CAPTCHA / Cloudflare checks")
+    print(f"  1. Sign in to {provider_name} with your account")
+    print("  2. Complete any CAPTCHA / verification checks")
     print("  3. Wait until you see the chat interface")
     print("  4. Come back here and press Enter")
     print("\n" + "=" * 60 + "\n")

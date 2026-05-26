@@ -60,6 +60,19 @@ CatGPT automates a real browser session with ChatGPT, letting you:
 - **Evade bot detection** — human-like typing, mouse movements, stealth patches, viewport jitter
 
 All without needing an OpenAI API key — it uses your existing ChatGPT login session.
+| Feature | Claude | ChatGPT |
+|---|:---:|:---:|
+| Chat completions | Yes | Yes |
+| Multi-turn conversations | Yes | Yes |
+| Tool / function calling | Yes | Yes |
+| Image input (vision) | Yes | Yes |
+| File attachments (PDF, DOCX, etc.) | Yes | Yes |
+| Image generation (DALL-E) | -- | Yes |
+| Read-aloud audio download | -- | Yes |
+| Interactive TUI (terminal chat) | Yes | Yes |
+| OpenAI SDK compatible | Yes | Yes |
+| LangChain compatible | Yes | Yes |
+| Docker deployment | Yes | Yes |
 
 ---
 
@@ -251,9 +264,13 @@ Change it with `VNC_PASSWORD` in `docker-compose.yml`.
 model id like `gpt-5.5`, `gpt-5.5-pro`, `gpt-5.4`, `gpt-5.4-pro`, `gpt-5.4-mini`,
 `gpt-5.4-nano`, `gpt-5-mini`, `gpt-5-nano`, `gpt-5`, `gpt-5.3`, `o3`, `o4-mini`,
 `gpt-4.5`, `gpt-4.1`, `gpt-4.1-mini`, or `gpt-4o`, CatGPT will try to switch
-the ChatGPT web UI to that model before sending the prompt. If you want
-`catgpt-browser` itself to auto-switch, set `CHATGPT_DEFAULT_MODEL` to one of
-the configured ids.
+the ChatGPT web UI to that model before sending the prompt. Current ChatGPT
+Plus composer labels map `gpt-5.5` to `Instant` and `gpt-5.5-thinking` to
+`Thinking`. If you want `catgpt-browser` itself to auto-switch, set
+`CHATGPT_DEFAULT_MODEL` to one of the configured ids. If the requested model is
+configured but not visible in your ChatGPT account's picker, CatGPT logs the
+visible picker labels and continues with the currently selected browser model
+by default. Set `CHATGPT_MODEL_SWITCH_STRICT=true` to return an error instead.
 
 Base URL: `http://localhost:8000/v1` — **Model ID:** `catgpt-browser`
 
@@ -706,8 +723,9 @@ All settings are loaded from environment variables (`.env` file or `docker-compo
 | `SLOW_MO`            | `0`                   | Playwright slow-motion delay (ms) for debugging          |
 | `CHATGPT_URL`        | `https://chatgpt.com` | Target ChatGPT URL                                       |
 | `CHATGPT_DEFAULT_MODEL` | ``                  | Optional model id to auto-apply when requests use `catgpt-browser` |
-| `CHATGPT_MODEL_ALIASES` | `gpt-5.3=GPT-5.3,...` | Comma-separated `public_id=UI label` map for browser model switching |
+| `CHATGPT_MODEL_ALIASES` | `gpt-5.5=Instant,...` | Comma-separated `public_id=UI label` map for browser model switching |
 | `CHATGPT_MODEL_SWITCH_TIMEOUT` | `10000`     | Max wait time (ms) to confirm the ChatGPT UI switched models |
+| `CHATGPT_MODEL_SWITCH_STRICT` | `false`      | If `true`, return an error when a requested ChatGPT UI model cannot be selected |
 | `ATTACHMENT_EXPAND_MULTIPAGE` | `true`      | If `true`, expands multi-page PDFs and multi-frame images into ordered page images before upload |
 | `ATTACHMENT_MAX_PAGES` | `24`                | Maximum pages/frames rendered from a single attachment |
 | `ATTACHMENT_RENDER_DPI` | `144`              | DPI used when rendering PDF pages to images |
@@ -730,6 +748,7 @@ All settings are loaded from environment variables (`.env` file or `docker-compo
 | `API_THREAD_CONTRACT_TTL_SECONDS` | `3600`    | TTL for per-thread instruction contracts in memory       |
 | `API_APP_THREAD_MODE` | `false`               | If `true`, routes requests to app-specific threads keyed by app identity (`user` first, then built-in app-name headers) |
 | `API_APP_THREAD_TTL_SECONDS` | `86400`       | TTL for app-to-thread mappings in memory                 |
+| `API_APP_THREAD_DELETE_EXPIRED` | `false`  | If `true`, best-effort deletion of expired CatGPT-created app threads from the web UI |
 | `API_HEADER_ROW_MERGE_MODE` | `false`        | If `true`, merges header-only rows (note/context only) into the next item's note/context |
 | `VNC_PASSWORD`       | `catgpt`              | Password for noVNC browser UI                            |
 | `RATE_LIMIT_SECONDS` | `5`                   | Min seconds between API requests                         |
@@ -984,6 +1003,24 @@ Incoming request
 This prevents multiple apps sharing one browser session from contaminating each
 other's context.
 
+##### Expired App-Thread Cleanup
+
+`API_APP_THREAD_TTL_SECONDS` controls how long an app identity can reuse the same
+mapped ChatGPT thread. The default is `86400` seconds (24 hours), and CatGPT
+enforces a minimum of 300 seconds.
+
+Cleanup is opportunistic, not a background timer: expired mappings are checked
+when an app-thread request is handled. If `API_APP_THREAD_DELETE_EXPIRED=false`
+(the default), CatGPT only drops the expired in-memory mapping. If
+`API_APP_THREAD_DELETE_EXPIRED=true`, CatGPT also schedules a best-effort browser
+UI deletion after the current request finishes and releases the shared browser
+lock.
+
+Only threads that CatGPT created for app-thread isolation are eligible for UI
+deletion. Threads supplied through `request.thread_id`, manually-created ChatGPT
+threads, and pre-existing chats are not marked delete-owned; when those mappings
+expire, CatGPT forgets the mapping but does not delete the ChatGPT conversation.
+
 #### 3) Thread Contract Compression (Large Instruction Prompts)
 
 When `API_THREAD_CONTRACT_MODE=true`, repeated long instructions are compacted:
@@ -1096,6 +1133,13 @@ python scripts/test_langchain_tools.py
 
 # Image generation tests
 python scripts/test_image_generation.py
+# Run individual test suites
+python scripts/test_phase1.py           # Basic send/receive
+python scripts/test_multi_turn.py       # Multi-turn conversations
+python scripts/test_robust.py           # Tables, code blocks, long responses
+python scripts/test_images.py           # Image detection
+python scripts/test_read_aloud.py       # ChatGPT read-aloud audio capture
+python scripts/test_langchain_tools.py  # LangChain + tool calling (needs server running)
 ```
 
 ### Test Categories

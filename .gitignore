@@ -1,16 +1,16 @@
-# Chrome/Playwright browser profiles
-chrome-profile/
-# Browser profile data (contains cookies, session)
+# ── Browser Profiles (contain cookies, login sessions) ──
 browser_data/
+browser_data_claude/
+chrome-profile/
 
-# Logs
+# ── Logs ──
 logs/
 docker-logs/
 
-# Downloads (test assets, generated images)
+# ── Downloads (test assets, generated images) ──
 downloads/
 
-# Python
+# ── Python ──
 __pycache__/
 *.py[cod]
 *$py.class
@@ -21,24 +21,29 @@ dist/
 *.egg-info/
 *.egg
 
-# Virtual environment
+# ── Virtual Environment ──
 .venv/
 venv/
 env/
 
-# Environment variables
+# ── Environment Variables (contains tokens) ──
 .env
 
-# Cookie data (sensitive session tokens)
+# ── Sensitive Data ──
 cookies.json
+*.pem
+*.key
 
-# IDE
+# ── IDE ──
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# OS
+# ── OS ──
 .DS_Store
 Thumbs.db
+
+# ── Nix ──
+result

@@ -10,6 +10,7 @@ __pycache__/
 
 # Browser data (will be mounted as volume)
 browser_data/
+browser_data_claude/
 chrome-profile/
 
 # Logs (will be mounted as volume)

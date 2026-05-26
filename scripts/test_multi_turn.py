@@ -19,14 +19,18 @@ import asyncio
 import json
 import sys
 import os
-import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.browser.manager import BrowserManager
-from src.chatgpt.client import ChatGPTClient
 from src.config import Config
 from src.log import setup_logging
+
+# Provider-aware client import
+if Config.PROVIDER == "claude":
+    from src.claude.client import ClaudeClient as ProviderClient
+else:
+    from src.chatgpt.client import ChatGPTClient as ProviderClient
 
 log = setup_logging("test_multi_turn", log_file="test_multi_turn.log")
 
@@ -64,7 +68,7 @@ def print_result(idx: int, msg: str, response: str, time_ms: int, thread_id: str
 
 
 async def run_round(
-    client: ChatGPTClient,
+    client: ProviderClient,
     round_name: str,
     messages: list[str],
     results: list[dict],
@@ -120,7 +124,7 @@ async def main():
     results: list[dict] = []
 
     try:
-        print_header("Multi-Turn Test — ChatGPT Automation")
+        print_header(f"Multi-Turn Test — {Config.PROVIDER.title()} Automation")
         print("  This test will:")
         print("  1. Open a NEW chat and send 5 follow-up messages")
         print("  2. Open ANOTHER new chat and send 5 more messages")
@@ -129,7 +133,7 @@ async def main():
         # Launch browser
         print("  Starting browser...")
         page = await browser.start()
-        await browser.navigate(Config.CHATGPT_URL)
+        await browser.navigate(Config.provider_url())
         await asyncio.sleep(3)
 
         # Verify login
@@ -138,7 +142,7 @@ async def main():
             return
 
         print("  ✅ Logged in\n")
-        client = ChatGPTClient(page)
+        client = ProviderClient(page)
 
         # ── Round 1: New chat + 5 messages ──────────────────────
         print("  Starting new chat for Round 1...")

@@ -6,21 +6,27 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from dotenv import load_dotenv
+
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:
+    def load_dotenv(*_args, **_kwargs) -> bool:
+        return False
 
 _CODE_ROOT = Path(__file__).resolve().parent.parent
 _CWD = Path.cwd()
 
-# Prefer the invocation directory as project root when running from a checkout
-# (for example `nix run .#proxy` from repo root). Fall back to the code location
-# when running from packaged/store execution.
+# Prefer the invocation directory as project root when running from
+# a checkout (e.g. `nix run .#proxy` from repo root). Fall back to the
+# code location (used for packaged/store execution).
 if (_CWD / "src").exists() and (_CWD / "scripts").exists():
     _PROJECT_ROOT = _CWD
 else:
     _PROJECT_ROOT = _CODE_ROOT
 
-# Load .env from current working directory first, then from the resolved project
-# root. Environment variables already set by the shell/systemd still win.
+# Load .env from current working directory first, then from the
+# resolved project root. Environment variables already set by the shell/systemd
+# still win.
 load_dotenv(_CWD / ".env")
 load_dotenv(_PROJECT_ROOT / ".env")
 
@@ -33,23 +39,36 @@ class Config:
     BROWSER_DATA_DIR: Path = _PROJECT_ROOT / os.getenv("BROWSER_DATA_DIR", "browser_data")
     LOG_DIR: Path = _PROJECT_ROOT / os.getenv("LOG_DIR", "logs")
     IMAGES_DIR: Path = _PROJECT_ROOT / os.getenv("IMAGES_DIR", "downloads/images")
+    AUDIO_DIR: Path = _PROJECT_ROOT / os.getenv("AUDIO_DIR", "downloads/audio")
 
     # Browser
     HEADLESS: bool = os.getenv("HEADLESS", "false").lower() == "true"
     SLOW_MO: int = int(os.getenv("SLOW_MO", "50"))
     CHATGPT_URL: str = os.getenv("CHATGPT_URL", "https://chatgpt.com")
+    CLAUDE_URL: str = os.getenv("CLAUDE_URL", "https://claude.ai")
     CHATGPT_DEFAULT_MODEL: str = os.getenv("CHATGPT_DEFAULT_MODEL", "")
     CHATGPT_MODEL_ALIASES: str = os.getenv(
         "CHATGPT_MODEL_ALIASES",
-        "gpt-5.5=GPT-5.5,gpt-5.5-pro=GPT-5.5 pro,gpt-5.4=GPT-5.4,gpt-5.4-pro=GPT-5.4 pro,gpt-5.4-mini=GPT-5.4 mini,gpt-5.4-nano=GPT-5.4 nano,gpt-5-mini=GPT-5 mini,gpt-5-nano=GPT-5 nano,gpt-5=GPT-5,gpt-5.3=GPT-5.3,o3=o3,o4-mini=o4-mini,gpt-4.5=GPT-4.5,gpt-4.1=GPT-4.1,gpt-4.1-mini=GPT-4.1 mini,gpt-4o=GPT-4o",
+        "gpt-5.5=Instant|Latest 5.5|5.5|GPT-5.5,gpt-5.5-thinking=Thinking|5.5 Thinking|GPT-5.5 Thinking,gpt-5.4=5.4|GPT-5.4,gpt-5.3=5.3|GPT-5.3,gpt-5.2=5.2|GPT-5.2,gpt-5.1=5.1|GPT-5.1,gpt-5=GPT-5,gpt-5-mini=GPT-5 mini,gpt-5-nano=GPT-5 nano,o3=o3,o4-mini=o4-mini,gpt-4.5=GPT-4.5,gpt-4.1=GPT-4.1,gpt-4.1-mini=GPT-4.1 mini,gpt-4o=GPT-4o",
     )
     CHATGPT_MODEL_SWITCH_TIMEOUT: int = int(os.getenv("CHATGPT_MODEL_SWITCH_TIMEOUT", "10000"))
+    CHATGPT_MODEL_SWITCH_STRICT: bool = os.getenv("CHATGPT_MODEL_SWITCH_STRICT", "false").lower() == "true"
     ATTACHMENT_EXPAND_MULTIPAGE: bool = os.getenv("ATTACHMENT_EXPAND_MULTIPAGE", "true").lower() == "true"
     ATTACHMENT_MAX_PAGES: int = int(os.getenv("ATTACHMENT_MAX_PAGES", "24"))
     ATTACHMENT_RENDER_DPI: int = int(os.getenv("ATTACHMENT_RENDER_DPI", "144"))
     OLLAMA_EMBEDDING_MODELS: str = os.getenv("OLLAMA_EMBEDDING_MODELS", "nomic-embed-text")
     OLLAMA_EMBEDDING_DIMENSIONS: int = int(os.getenv("OLLAMA_EMBEDDING_DIMENSIONS", "768"))
     OLLAMA_ACTIVE_MODEL_TTL_SECONDS: int = int(os.getenv("OLLAMA_ACTIVE_MODEL_TTL_SECONDS", "900"))
+
+    # Provider selection: "chatgpt" or "claude"
+    PROVIDER: str = os.getenv("PROVIDER", "chatgpt").lower()
+
+    @classmethod
+    def provider_url(cls) -> str:
+        """Return the target URL for the active provider."""
+        if cls.PROVIDER == "claude":
+            return cls.CLAUDE_URL
+        return cls.CHATGPT_URL
 
     # Timeouts (ms)
     RESPONSE_TIMEOUT: int = int(os.getenv("RESPONSE_TIMEOUT", "120000"))
@@ -58,8 +77,10 @@ class Config:
     # Human simulation (ms)
     TYPING_SPEED_MIN: int = int(os.getenv("TYPING_SPEED_MIN", "50"))
     TYPING_SPEED_MAX: int = int(os.getenv("TYPING_SPEED_MAX", "150"))
-    THINKING_PAUSE_MIN: int = int(os.getenv("THINKING_PAUSE_MIN", "1000"))
-    THINKING_PAUSE_MAX: int = int(os.getenv("THINKING_PAUSE_MAX", "3000"))
+    THINKING_PAUSE_MIN: int = int(os.getenv("THINKING_PAUSE_MIN", "500"))
+    THINKING_PAUSE_MAX: int = int(os.getenv("THINKING_PAUSE_MAX", "1500"))
+    # Completion poll interval — how often to check if response is ready (ms)
+    POLL_INTERVAL_MS: int = int(os.getenv("POLL_INTERVAL_MS", "500"))
 
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "DEBUG")
@@ -76,6 +97,8 @@ class Config:
     # If true, route OpenAI requests to app-specific threads using request.user as app key
     API_APP_THREAD_MODE: bool = os.getenv("API_APP_THREAD_MODE", "false").lower() == "true"
     API_APP_THREAD_TTL_SECONDS: int = int(os.getenv("API_APP_THREAD_TTL_SECONDS", "86400"))
+    # If true, delete expired app-thread ChatGPT conversations from the browser UI
+    API_APP_THREAD_DELETE_EXPIRED: bool = os.getenv("API_APP_THREAD_DELETE_EXPIRED", "false").lower() == "true"
     # If true, merge header-only rows (null fields + note/context text) into next item note/context
     API_HEADER_ROW_MERGE_MODE: bool = os.getenv("API_HEADER_ROW_MERGE_MODE", "false").lower() == "true"
     RATE_LIMIT_SECONDS: int = int(os.getenv("RATE_LIMIT_SECONDS", "5"))
@@ -94,3 +117,4 @@ class Config:
         cls.BROWSER_DATA_DIR.mkdir(parents=True, exist_ok=True)
         cls.LOG_DIR.mkdir(parents=True, exist_ok=True)
         cls.IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+        cls.AUDIO_DIR.mkdir(parents=True, exist_ok=True)

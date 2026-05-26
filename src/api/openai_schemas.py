@@ -93,6 +93,7 @@ class ChatCompletionRequest(BaseModel):
     response_format: Optional[Any] = None
     # CatGPT extension: force structured page-by-page extraction for attachments.
     page_extraction: Optional[PageExtractionOptions] = None
+    read_aloud: Optional[bool] = False
 
 
 # ── Response ────────────────────────────────────────────────────
@@ -110,6 +111,15 @@ class ChoiceMessage(BaseModel):
     role: str = "assistant"
     content: Optional[str] = None
     tool_calls: Optional[list[ToolCall]] = None
+    audio: Optional["AudioInfo"] = None
+
+
+class AudioInfo(BaseModel):
+    """Metadata for browser-generated read-aloud audio."""
+    url: str = ""
+    local_path: str = ""
+    mime_type: str = ""
+    size_bytes: int = 0
 
 
 class Choice(BaseModel):

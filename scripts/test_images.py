@@ -22,9 +22,14 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.browser.manager import BrowserManager
-from src.chatgpt.client import ChatGPTClient
 from src.config import Config
 from src.log import setup_logging
+
+# Provider-aware client import
+if Config.PROVIDER == "claude":
+    from src.claude.client import ClaudeClient as ProviderClient
+else:
+    from src.chatgpt.client import ChatGPTClient as ProviderClient
 
 log = setup_logging("test_images", log_file="test_images.log")
 
@@ -108,7 +113,7 @@ async def main():
         # Launch browser
         print("  Starting browser...")
         page = await browser.start()
-        await browser.navigate(Config.CHATGPT_URL)
+        await browser.navigate(Config.provider_url())
         await asyncio.sleep(3)
 
         if not await browser.is_logged_in():
@@ -116,19 +121,36 @@ async def main():
             return
 
         print("  ✅ Logged in\n")
-        client = ChatGPTClient(page)
+        client = ProviderClient(page)
 
         # Start fresh
         print("  Starting new chat...")
         await client.new_chat()
 
         for i, test in enumerate(TESTS, 1):
+            # Skip image generation tests for Claude (no DALL-E equivalent)
+            if Config.PROVIDER == "claude" and test.get("expect_image"):
+                print(f"\n  {'─' * 60}")
+                print(f"  Test {i}/{len(TESTS)}: {test['name']}")
+                print("  ⏭️  SKIPPED — image generation not supported by Claude")
+                results.append({
+                    "test": test["name"],
+                    "passed": True,
+                    "reason": "Skipped — not supported by Claude",
+                    "response_time_ms": 0,
+                    "has_images": False,
+                    "image_count": 0,
+                    "response_length": 0,
+                    "response_preview": "",
+                })
+                continue
+
             print(f"\n  {'─' * 60}")
             print(f"  Test {i}/{len(TESTS)}: {test['name']}")
             print(f"  Prompt: {test['prompt'][:65]}...")
             expects = "image" if test.get("expect_image") else "text only"
             print(f"  Expects: {expects}")
-            print(f"  ⏳ Sending...")
+            print("  ⏳ Sending...")
 
             try:
                 response = await client.send_message(test["prompt"])

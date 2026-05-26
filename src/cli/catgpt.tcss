@@ -1,25 +1,23 @@
 /* ════════════════════════════════════════════════════════════════
    CATGPT — GitHub Dark Theme
    Palette:
-     bg-canvas    #0d1117    (main background)
-     bg-overlay   #161b22    (panels, cards, header)
-     bg-subtle    #1c2128    (hover / secondary surfaces)
-     bg-inset     #010409    (inset areas)
-     border-default  #30363d
-     border-muted    #21262d
-     fg-default   #e6edf3    (primary text)
-     fg-muted     #8b949e    (secondary text)
-     fg-subtle    #6e7681    (tertiary text)
-     accent-blue  #58a6ff    (links, primary accent)
-     accent-green #3fb950    (success, connected)
-     accent-red   #f85149    (errors)
-     accent-orange #d29922   (warnings)
-     accent-purple #bc8cff   (images, special)
-     accent-pink  #f778ba    (decorative)
+     bg-canvas    #0d1117    main background
+     bg-overlay   #161b22    panels, cards, header
+     bg-subtle    #1c2128    hover / secondary surfaces
+     border       #30363d    default borders
+     border-muted #21262d
+     fg-default   #e6edf3    primary text
+     fg-muted     #8b949e    secondary text
+     fg-subtle    #6e7681    tertiary text
+     blue         #58a6ff    user accent / links
+     green        #3fb950    success / assistant accent
+     red          #f85149    errors
+     orange       #d29922    warnings / system prompt
+     purple       #bc8cff    special
    ════════════════════════════════════════════════════════════════ */
 
 
-/* ── Global ─────────────────────────────────────────────────── */
+/* ── Global ──────────────────────────────────────────────────── */
 
 Screen {
     background: #0d1117;
@@ -34,7 +32,7 @@ Screen {
 }
 
 
-/* ── Splash Screen ──────────────────────────────────────────── */
+/* ── Splash Screen ───────────────────────────────────────────── */
 
 SplashScreen {
     align: center middle;
@@ -89,7 +87,7 @@ SplashScreen {
 }
 
 
-/* ── Chat Screen Layout ─────────────────────────────────────── */
+/* ── Chat Screen Layout ──────────────────────────────────────── */
 
 ChatScreen {
     layout: vertical;
@@ -103,7 +101,6 @@ ChatScreen {
     background: #161b22;
     color: #8b949e;
     padding: 0 2;
-    margin: 0 0;
 }
 
 #chat-container {
@@ -124,7 +121,7 @@ ChatScreen {
 }
 
 
-/* ── Input ──────────────────────────────────────────────────── */
+/* ── Input ───────────────────────────────────────────────────── */
 
 #chat-input {
     width: 100%;
@@ -138,7 +135,6 @@ ChatScreen {
 
 #chat-input:focus {
     border: round #58a6ff;
-    background: #0d1117;
 }
 
 #chat-input > .input--cursor {
@@ -156,7 +152,32 @@ ChatScreen {
 }
 
 
-/* ── User Messages ──────────────────────────────────────────── */
+/* ── Shared message structure ────────────────────────────────── */
+
+.msg-header {
+    text-style: bold;
+    width: 100%;
+    height: 1;
+}
+
+.msg-body {
+    color: #e6edf3;
+    width: 100%;
+    height: auto;
+    margin-top: 0;
+    padding-top: 0;
+}
+
+.msg-footer {
+    color: #6e7681;
+    text-style: italic;
+    width: 100%;
+    height: 1;
+    margin-top: 0;
+}
+
+
+/* ── User Messages ───────────────────────────────────────────── */
 
 .user-msg {
     margin: 1 0 0 0;
@@ -169,20 +190,10 @@ ChatScreen {
 
 .user-msg-header {
     color: #58a6ff;
-    text-style: bold;
-    width: 100%;
-    height: 1;
-}
-
-.user-msg-body {
-    color: #e6edf3;
-    width: 100%;
-    height: auto;
-    margin-top: 0;
 }
 
 
-/* ── Assistant Messages ─────────────────────────────────────── */
+/* ── Assistant Messages ──────────────────────────────────────── */
 
 .assistant-msg {
     margin: 1 0 0 0;
@@ -195,55 +206,48 @@ ChatScreen {
 
 .assistant-msg-header {
     color: #3fb950;
-    text-style: bold;
-    width: 100%;
-    height: 1;
-}
-
-.assistant-msg-body {
-    color: #e6edf3;
-    width: 100%;
-    height: auto;
-    margin-top: 0;
-}
-
-.assistant-msg-footer {
-    color: #6e7681;
-    text-style: italic;
-    text-align: right;
-    width: 100%;
-    height: 1;
-    margin-top: 0;
 }
 
 
-/* ── Image Cards ────────────────────────────────────────────── */
+/* ── System Prompt Card ──────────────────────────────────────── */
 
-.image-card {
+.system-prompt-card {
     margin: 1 0 0 0;
     padding: 1 2;
-    background: #161b22;
-    border-left: thick #bc8cff;
+    background: #1c1a10;
+    border-left: thick #d29922;
     width: 100%;
     height: auto;
 }
 
-.image-card-header {
-    color: #bc8cff;
-    text-style: bold;
+.system-prompt-header {
+    color: #d29922;
+}
+
+.system-prompt-card .msg-body {
+    color: #e6c97a;
+    text-style: italic;
+}
+
+
+/* ── Thinking Indicator ──────────────────────────────────────── */
+
+.thinking-widget {
+    margin: 1 0;
+    padding: 0 2;
+    width: 100%;
+    height: auto;
+}
+
+.thinking-label {
+    color: #58a6ff;
+    text-style: bold italic;
     width: 100%;
     height: 1;
 }
 
-.image-card-body {
-    color: #e6edf3;
-    width: 100%;
-    height: auto;
-    margin-top: 0;
-}
 
-
-/* ── System Messages ────────────────────────────────────────── */
+/* ── System Messages ─────────────────────────────────────────── */
 
 .system-msg {
     text-align: center;
@@ -256,7 +260,6 @@ ChatScreen {
 }
 
 .system-success {
-    text-align: center;
     color: #3fb950;
     margin: 1 0;
     padding: 0 2;
@@ -265,8 +268,17 @@ ChatScreen {
 }
 
 .system-error {
-    text-align: center;
     color: #f85149;
+    text-style: bold;
+    margin: 1 0;
+    padding: 0 2;
+    width: 100%;
+    height: auto;
+}
+
+.system-warn {
+    text-align: center;
+    color: #d29922;
     text-style: bold;
     margin: 1 0;
     padding: 0 2;
@@ -285,20 +297,7 @@ ChatScreen {
 }
 
 
-/* ── Thinking Indicator ─────────────────────────────────────── */
-
-.thinking {
-    text-align: center;
-    color: #58a6ff;
-    text-style: bold italic;
-    margin: 1 0;
-    padding: 0 2;
-    width: 100%;
-    height: auto;
-}
-
-
-/* ── Welcome Card (shown on connect) ────────────────────────── */
+/* ── Welcome Card ────────────────────────────────────────────── */
 
 .welcome-card {
     margin: 2 4;
@@ -308,12 +307,10 @@ ChatScreen {
     width: 100%;
     height: auto;
     color: #e6edf3;
-    content-align: center middle;
-    text-align: center;
 }
 
 
-/* ── Header / Footer ────────────────────────────────────────── */
+/* ── Header / Footer ─────────────────────────────────────────── */
 
 Header {
     background: #161b22;
