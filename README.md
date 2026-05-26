@@ -60,6 +60,19 @@ CatGPT automates a real browser session with ChatGPT, letting you:
 - **Evade bot detection** — human-like typing, mouse movements, stealth patches, viewport jitter
 
 All without needing an OpenAI API key — it uses your existing ChatGPT login session.
+| Feature | Claude | ChatGPT |
+|---|:---:|:---:|
+| Chat completions | Yes | Yes |
+| Multi-turn conversations | Yes | Yes |
+| Tool / function calling | Yes | Yes |
+| Image input (vision) | Yes | Yes |
+| File attachments (PDF, DOCX, etc.) | Yes | Yes |
+| Image generation (DALL-E) | -- | Yes |
+| Read-aloud audio download | -- | Yes |
+| Interactive TUI (terminal chat) | Yes | Yes |
+| OpenAI SDK compatible | Yes | Yes |
+| LangChain compatible | Yes | Yes |
+| Docker deployment | Yes | Yes |
 
 ---
 
@@ -1096,6 +1109,13 @@ python scripts/test_langchain_tools.py
 
 # Image generation tests
 python scripts/test_image_generation.py
+# Run individual test suites
+python scripts/test_phase1.py           # Basic send/receive
+python scripts/test_multi_turn.py       # Multi-turn conversations
+python scripts/test_robust.py           # Tables, code blocks, long responses
+python scripts/test_images.py           # Image detection
+python scripts/test_read_aloud.py       # ChatGPT read-aloud audio capture
+python scripts/test_langchain_tools.py  # LangChain + tool calling (needs server running)
 ```
 
 ### Test Categories

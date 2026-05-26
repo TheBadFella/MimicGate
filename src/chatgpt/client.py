@@ -20,7 +20,7 @@ from src.chatgpt.model_registry import (
 )
 from src.config import Config
 from src.selectors import Selectors
-from src.browser.human import human_type, human_click, thinking_pause, random_delay
+from src.browser.human import human_type, human_click, random_delay
 from src.chatgpt.detector import (
     wait_for_response_complete,
     extract_last_response_via_copy,
@@ -29,6 +29,7 @@ from src.chatgpt.detector import (
     is_incomplete_response_text,
 )
 from src.chatgpt.image_handler import extract_images_from_response
+from src.chatgpt.audio_handler import generate_read_aloud_audio
 from src.chatgpt.models import ChatResponse
 from src.log import setup_logging
 
@@ -58,6 +59,7 @@ class ChatGPTClient:
         image_paths: list[str] | None = None,
         file_paths: list[str] | None = None,
         model: str | None = None,
+        read_aloud: bool = False,
     ) -> ChatResponse:
         """
         Send a message to ChatGPT and wait for the complete response.
@@ -66,6 +68,7 @@ class ChatGPTClient:
             text: The message text to send.
             image_paths: Optional list of local file paths to images to attach.
             file_paths: Optional list of local file paths to non-image files (PDF, etc.).
+            read_aloud: If True, trigger ChatGPT's "Read aloud" action and save audio.
 
         Steps:
         1. Simulate thinking pause
@@ -180,10 +183,18 @@ class ChatGPTClient:
 
         elapsed_ms = int((time.time() - start_time) * 1000)
         thread_id = self._extract_thread_id()
+        audio = None
+
+        if read_aloud and response_text:
+            audio = await generate_read_aloud_audio(
+                self._page,
+                previous_turn_signature=pre_turn_signature,
+            )
 
         log.info(
             f"Response received ({elapsed_ms}ms, {len(response_text)} chars"
-            f"{f', {len(images)} images' if has_images else ''}): "
+            f"{f', {len(images)} images' if has_images else ''}"
+            f"{', audio' if audio else ''}): "
             f"{response_text[:80]}..."
         )
 
@@ -193,6 +204,8 @@ class ChatGPTClient:
             response_time_ms=elapsed_ms,
             images=images,
             has_images=has_images,
+            audio=audio,
+            has_audio=audio is not None,
         )
 
     async def ensure_model(self, requested_model: str) -> None:

@@ -50,12 +50,14 @@ services:
       OLLAMA_EMBEDDING_MODELS: "nomic-embed-text"
       OLLAMA_EMBEDDING_DIMENSIONS: 768
       OLLAMA_ACTIVE_MODEL_TTL_SECONDS: 900
+      AUDIO_DIR: "/app/downloads/audio"
       VNC_PASSWORD: ${CATGPT_VNC_PASSWORD}
       LOG_LEVEL: "DEBUG"
       VERBOSE: "true"
     volumes:
       - ${DOCKERDIR}/appdata/catgpt/browser:/app/browser_data
       - ${DOCKERDIR}/appdata/catgpt/logs:/app/logs
+      - ${DOCKERDIR}/appdata/catgpt/downloads:/app/downloads
 
 networks:
   catgpt:
