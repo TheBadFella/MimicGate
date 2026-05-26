@@ -216,7 +216,7 @@ class ChatGPTClient:
             return
 
         current_label = await self._detect_current_model_label()
-        if current_label and normalize_model_token(current_label) == normalize_model_token(target.ui_label):
+        if current_label and self._label_matches_model_option(current_label, target):
             self._last_model_label = target.ui_label
             log.debug(f"ChatGPT model already selected: {target.ui_label}")
             return
@@ -234,20 +234,34 @@ class ChatGPTClient:
 
         await asyncio.sleep(0.4)
 
-        switched = await self._click_model_option(target.ui_label)
+        switched = await self._click_model_option(target.ui_labels)
         if not switched:
             more_models_opened = await self._click_menu_text("More models")
             if more_models_opened:
                 await asyncio.sleep(0.3)
-                switched = await self._click_model_option(target.ui_label)
+                switched = await self._click_model_option(target.ui_labels)
+
+        if not switched:
+            configure_opened = await self._click_menu_text("Configure")
+            if configure_opened:
+                await asyncio.sleep(0.5)
+                switched = await self._click_model_option(target.ui_labels)
+
+        if not switched and await self._menu_contains_any_text(target.ui_labels):
+            log.info(
+                "ChatGPT model family is visible in the Pro composer menu: %s",
+                target.ui_label,
+            )
+            self._last_model_label = target.ui_label
+            return
 
         if not switched:
             raise RuntimeError(f"Could not find ChatGPT model option '{target.ui_label}' in the model picker")
 
-        confirmed = await self._wait_for_model_label(target.ui_label)
+        confirmed = await self._wait_for_model_label(target.ui_labels)
         if not confirmed:
             current_after = await self._detect_current_model_label()
-            if normalize_model_token(current_after) != normalize_model_token(target.ui_label):
+            if not self._label_matches_model_option(current_after, target):
                 raise RuntimeError(f"Model switch to '{target.ui_label}' could not be confirmed")
 
         self._last_model_label = target.ui_label
@@ -421,7 +435,7 @@ class ChatGPTClient:
 
     async def _detect_current_model_label(self) -> str:
         """Best-effort detection of the currently selected ChatGPT model label."""
-        known_labels = [option.ui_label for option in list_switchable_models()]
+        known_labels = [label for option in list_switchable_models() for label in option.ui_labels]
         if self._last_model_label and self._last_model_label not in known_labels:
             known_labels.append(self._last_model_label)
         if not known_labels:
@@ -502,7 +516,19 @@ class ChatGPTClient:
             except Exception:
                 continue
 
-        hints = [current_label, self._last_model_label, target_label, "model", "GPT", "o3", "o4"]
+        hints = [
+            current_label,
+            self._last_model_label,
+            target_label,
+            "Instant",
+            "Thinking",
+            "Latest",
+            "Configure",
+            "model",
+            "GPT",
+            "o3",
+            "o4",
+        ]
         if await self._click_top_button_by_text(hints):
             return True
 
@@ -580,9 +606,49 @@ class ChatGPTClient:
         )
         return bool(clicked)
 
-    async def _click_model_option(self, target_label: str) -> bool:
+    async def _click_model_option(self, target_labels: tuple[str, ...]) -> bool:
         """Click a visible model option in an open picker/menu by its label."""
-        return await self._click_menu_text(target_label)
+        for target_label in target_labels:
+            if await self._click_menu_text(target_label):
+                return True
+        return False
+
+    async def _menu_contains_any_text(self, target_labels: tuple[str, ...]) -> bool:
+        """Return whether an open model menu contains any target label."""
+        return await self._page.evaluate(
+            r"""
+            (targetLabels) => {
+                const normalize = (value) =>
+                    (value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+                const targets = (targetLabels || []).map(normalize).filter(Boolean);
+                if (!targets.length) return false;
+                const selectors = [
+                    "[role='menu']",
+                    "[role='listbox']",
+                    "[data-radix-popper-content-wrapper]",
+                    "div",
+                ];
+                for (const selector of selectors) {
+                    for (const el of document.querySelectorAll(selector)) {
+                        const rect = el.getBoundingClientRect();
+                        const style = window.getComputedStyle(el);
+                        if (rect.width <= 0 ||
+                            rect.height <= 0 ||
+                            style.visibility === "hidden" ||
+                            style.display === "none") {
+                            continue;
+                        }
+                        const text = normalize(el.innerText || el.textContent || "");
+                        if (targets.some((target) => text.includes(target))) {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            }
+            """,
+            list(target_labels),
+        )
 
     async def _click_menu_text(self, target_text: str) -> bool:
         """Click a visible menu-style element whose text matches the target."""
@@ -650,16 +716,21 @@ class ChatGPTClient:
         )
         return bool(clicked)
 
-    async def _wait_for_model_label(self, target_label: str) -> bool:
+    async def _wait_for_model_label(self, target_labels: tuple[str, ...]) -> bool:
         """Wait briefly until the current-model button reflects the requested label."""
         deadline = time.time() + (Config.CHATGPT_MODEL_SWITCH_TIMEOUT / 1000.0)
-        target_normalized = normalize_model_token(target_label)
         while time.time() < deadline:
             current_label = await self._detect_current_model_label()
-            if normalize_model_token(current_label) == target_normalized:
+            current_normalized = normalize_model_token(current_label)
+            if current_normalized in {normalize_model_token(label) for label in target_labels}:
                 return True
             await asyncio.sleep(0.25)
         return False
+
+    def _label_matches_model_option(self, label: str, option) -> bool:
+        """Return whether a visible UI label matches a configured model option."""
+        normalized = normalize_model_token(label)
+        return bool(normalized and normalized in {normalize_model_token(item) for item in option.ui_labels})
 
     async def _upload_files(self, file_paths: list[str]) -> None:
         """

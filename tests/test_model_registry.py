@@ -14,9 +14,18 @@ class ModelRegistryTests(unittest.TestCase):
                 ["catgpt-browser", "gpt-5.3", "o3"],
             )
 
-    def test_default_models_do_not_include_unavailable_future_aliases(self) -> None:
-        self.assertNotIn("gpt-5.5", model_registry.list_public_chat_models())
-        self.assertFalse(model_registry.is_supported_chat_model("gpt-5.5"))
+    def test_default_models_include_pro_composer_latest_alias(self) -> None:
+        self.assertIn("gpt-5.5", model_registry.list_public_chat_models())
+        self.assertTrue(model_registry.is_supported_chat_model("Latest 5.5"))
+        self.assertTrue(model_registry.is_supported_chat_model("GPT-5.5"))
+
+    def test_alias_parser_supports_alternate_ui_labels(self) -> None:
+        with patch.object(model_registry.Config, "CHATGPT_MODEL_ALIASES", "gpt-5.5=Latest 5.5|GPT-5.5"):
+            resolved = model_registry.resolve_requested_model("gpt-5.5")
+            self.assertIsNotNone(resolved)
+            assert resolved is not None
+            self.assertEqual(resolved.ui_label, "Latest 5.5")
+            self.assertEqual(resolved.alternate_labels, ("GPT-5.5",))
 
     def test_supported_model_accepts_public_id_and_ui_label(self) -> None:
         with patch.object(model_registry.Config, "CHATGPT_MODEL_ALIASES", "gpt-4.1-mini=GPT-4.1 mini"):

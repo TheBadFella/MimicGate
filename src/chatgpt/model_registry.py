@@ -27,6 +27,12 @@ class BrowserModelOption:
 
     public_id: str
     ui_label: str
+    alternate_labels: tuple[str, ...] = ()
+
+    @property
+    def ui_labels(self) -> tuple[str, ...]:
+        """All visible labels that may identify this model in ChatGPT's UI."""
+        return (self.ui_label, *self.alternate_labels)
 
 
 def normalize_model_token(value: str) -> str:
@@ -45,17 +51,25 @@ def _parse_model_aliases(raw: str) -> list[BrowserModelOption]:
             continue
 
         if "=" in item:
-            public_id, ui_label = item.split("=", 1)
+            public_id, labels = item.split("=", 1)
         else:
-            public_id, ui_label = item, item
+            public_id, labels = item, item
 
         public_id = public_id.strip()
-        ui_label = ui_label.strip()
+        parsed_labels = tuple(label.strip() for label in labels.split("|") if label.strip())
+        ui_label = parsed_labels[0] if parsed_labels else ""
+        alternate_labels = parsed_labels[1:]
         normalized = normalize_model_token(public_id)
         if not public_id or not ui_label or not normalized or normalized in seen:
             continue
 
-        options.append(BrowserModelOption(public_id=public_id, ui_label=ui_label))
+        options.append(
+            BrowserModelOption(
+                public_id=public_id,
+                ui_label=ui_label,
+                alternate_labels=alternate_labels,
+            )
+        )
         seen.add(normalized)
 
     return options
@@ -80,10 +94,8 @@ def is_supported_chat_model(model: str) -> bool:
         return True
 
     for option in list_switchable_models():
-        if normalized in {
-            normalize_model_token(option.public_id),
-            normalize_model_token(option.ui_label),
-        }:
+        labels = {normalize_model_token(label) for label in option.ui_labels}
+        if normalized in {normalize_model_token(option.public_id), *labels}:
             return True
 
     return False
@@ -104,10 +116,8 @@ def resolve_requested_model(model: str) -> BrowserModelOption | None:
         normalized = normalize_model_token(default_model)
 
     for option in list_switchable_models():
-        if normalized in {
-            normalize_model_token(option.public_id),
-            normalize_model_token(option.ui_label),
-        }:
+        labels = {normalize_model_token(label) for label in option.ui_labels}
+        if normalized in {normalize_model_token(option.public_id), *labels}:
             return option
 
     return None
