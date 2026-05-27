@@ -277,11 +277,13 @@ Base URL: `http://localhost:8000/v1` — **Model ID:** `catgpt-browser`
 | Method | Path                     | Description                                                                     |
 | ------ | ------------------------ | ------------------------------------------------------------------------------- |
 | `POST` | `/v1/chat/completions`   | Chat completions — tools, images, file attachments supported. **No streaming.** |
+| `POST` | `/v1/responses`          | Responses API (Codex CLI/Desktop compatibility). **No streaming.**             |
 | `POST` | `/v1/chat/completions/async` | Submit async chat job (poll with job ID). Structured output supported.      |
 | `GET`  | `/v1/chat/completions/async/{job_id}` | Get async job status/result (`queued/running/completed/failed`). |
 | `POST` | `/v1/images/generations` | Generate images via DALL-E                                                      |
 | `GET`  | `/v1/models`             | List available browser-backed chat model ids (`catgpt-browser` + configured models) |
 | `POST` | `/{app_name}/v1/chat/completions` | App-scoped chat completions (derives app from URL path)             |
+| `POST` | `/{app_name}/v1/responses` | App-scoped Responses API                                            |
 | `POST` | `/{app_name}/v1/chat/completions/async` | App-scoped async chat submit                                      |
 | `GET`  | `/{app_name}/v1/chat/completions/async/{job_id}` | App-scoped async status/result                           |
 | `POST` | `/{app_name}/v1/images/generations` | App-scoped image generation                                        |
@@ -369,6 +371,23 @@ curl -X POST http://localhost:8000/v1/chat/completions \
     "model": "catgpt-browser",
     "messages": [{"role": "user", "content": "What is quantum computing?"}]
   }'
+```
+
+---
+
+### Responses API
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="dummy123")
+
+response = client.responses.create(
+    model="catgpt-browser",
+    input="Say hello in one sentence.",
+    instructions="Be concise."
+)
+print(response.output[0].content[0].text)
 ```
 
 ---

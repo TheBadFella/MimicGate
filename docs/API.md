@@ -423,6 +423,86 @@ curl http://localhost:8000/v1/models -H "Authorization: Bearer dummy123"
 
 ---
 
+### Responses API
+
+**`POST /v1/responses`**
+
+OpenAI Responses API endpoint for Codex CLI/Desktop compatibility. Translates to the chat completion flow internally.
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="dummy123")
+
+response = client.responses.create(
+    model="claude-browser",
+    input="What is quantum computing?",
+    instructions="You are a helpful assistant.",
+)
+print(response.output[0].content[0].text)
+```
+
+```bash
+curl -X POST http://localhost:8000/v1/responses \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer dummy123" \
+  -d '{
+    "model": "claude-browser",
+    "input": "Hello!",
+    "instructions": "Be concise."
+  }'
+```
+
+**Request body:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `model` | string | yes | `claude-browser` or `catgpt-browser` |
+| `input` | string or array | yes | User input as a string or array of input items with `role` and `content` |
+| `instructions` | string | no | System instructions (converted to a system message) |
+| `tools` | array | no | Tool/function definitions (same format as chat completions) |
+| `tool_choice` | string/object | no | `auto`, `none`, `required`, or specific function |
+| `temperature` | float | no | Ignored |
+| `max_output_tokens` | int | no | Ignored |
+| `stream` | bool | no | Must be `false` (streaming not supported) |
+| `read_aloud` | bool | no | ChatGPT only (same as chat completions) |
+
+**Response:**
+
+```json
+{
+  "id": "resp_abc123...",
+  "object": "response",
+  "created": 1716025800,
+  "model": "claude-browser",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_...",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "Quantum computing uses quantum bits...",
+          "annotations": []
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "input_tokens": 10,
+    "output_tokens": 150,
+    "total_tokens": 160
+  }
+}
+```
+
+**App-scoped (with app name in URL):**
+
+Both `/v1/responses` and `/{app_name}/v1/responses` are supported.
+
+---
+
 ## Custom REST API
 
 In addition to the OpenAI-compatible endpoints, CatGPT exposes a simpler custom API:

@@ -47,12 +47,30 @@ from src.api.openai_routes import (
     _structured_cardinality_mismatch,
     _should_use_line_cardinality_fallback,
     _validate_chat_request,
+    _responses_input_to_messages,
+    _responses_request_to_chat_request,
+    _responses_response_from_chat,
+    _validate_responses_request,
 )
 from src.api.browser_gate import browser_access_lock
 from src.api import routes as native_routes
 from src.api import openai_routes as openai_routes_module
 from src.api.attachment_expander import AttachmentPageDescriptor
-from src.api.openai_schemas import ChatCompletionRequest, ChatMessage
+from src.api.openai_schemas import (
+    ChatCompletionRequest,
+    ChatMessage,
+    ResponsesRequest,
+    ResponsesResponse,
+    ChatCompletionResponse,
+    UsageInfo,
+    Choice,
+    ChoiceMessage,
+    ResponseOutputMessage,
+    ResponseOutputText,
+    ResponsesUsageInfo,
+    ToolCall,
+    FunctionCallInfo,
+)
 
 
 def _make_request(headers: dict[str, str] | None = None, client_host: str = "127.0.0.1") -> Request:
@@ -262,6 +280,166 @@ class OpenAIRoutesHelpersTests(unittest.TestCase):
         self.assertIsNone(_structured_cardinality_mismatch(messages, response_text, expected_count=1))
         mismatch = _structured_cardinality_mismatch(messages, '{"pages":[]}', expected_count=1)
         self.assertEqual(mismatch, (1, 0))
+
+
+
+class ResponsesAPITests(unittest.TestCase):
+    def test_responses_input_to_messages_string_form(self) -> None:
+        """String input becomes a single user message."""
+        messages = _responses_input_to_messages("Hello")
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0].role, "user")
+        self.assertEqual(messages[0].content, "Hello")
+
+    def test_responses_input_to_messages_with_instructions(self) -> None:
+        """Instructions prepended as system message."""
+        messages = _responses_input_to_messages("Hello", instructions="Be concise")
+        self.assertEqual(len(messages), 2)
+        self.assertEqual(messages[0].role, "system")
+        self.assertEqual(messages[0].content, "Be concise")
+        self.assertEqual(messages[1].role, "user")
+        self.assertEqual(messages[1].content, "Hello")
+
+    def test_responses_input_to_messages_list_form(self) -> None:
+        """List of input items maps by role/content."""
+        from src.api.openai_schemas import ResponseInputItem
+        items = [
+            ResponseInputItem(role="user", content="Hi"),
+            ResponseInputItem(role="assistant", content="Hello!"),
+            ResponseInputItem(role="user", content="How are you?"),
+        ]
+        messages = _responses_input_to_messages(items)
+        self.assertEqual(len(messages), 3)
+        self.assertEqual(messages[0].role, "user")
+        self.assertEqual(messages[0].content, "Hi")
+        self.assertEqual(messages[1].role, "assistant")
+        self.assertEqual(messages[1].content, "Hello!")
+
+    def test_responses_input_to_messages_content_parts(self) -> None:
+        """Input content parts map to OpenAI chat content parts."""
+        items = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Hello"},
+                ],
+            }
+        ]
+        messages = _responses_input_to_messages(items)
+        self.assertEqual(len(messages), 1)
+        self.assertIsInstance(messages[0].content, list)
+        assert isinstance(messages[0].content, list)
+        self.assertEqual(messages[0].content[0]["type"], "text")
+        self.assertEqual(messages[0].content[0]["text"], "Hello")
+
+    def test_responses_request_to_chat_request_basic(self) -> None:
+        """ResponsesRequest translates to ChatCompletionRequest."""
+        req = ResponsesRequest(
+            model="catgpt-browser",
+            input="Hello",
+            instructions="Be concise",
+            temperature=0.5,
+            max_output_tokens=100,
+        )
+        chat_req = _responses_request_to_chat_request(req)
+        self.assertEqual(chat_req.model, "catgpt-browser")
+        self.assertEqual(len(chat_req.messages), 2)
+        self.assertEqual(chat_req.messages[0].role, "system")
+        self.assertEqual(chat_req.temperature, 0.5)
+        self.assertEqual(chat_req.max_tokens, 100)
+
+    def test_responses_request_to_chat_request_with_tools(self) -> None:
+        """Tools are forwarded to ChatCompletionRequest."""
+        req = ResponsesRequest(
+            model="catgpt-browser",
+            input="What's the weather?",
+            tools=[
+                {"type": "function", "function": {"name": "get_weather", "description": "Get weather", "parameters": {}}}
+            ],
+            tool_choice="auto",
+        )
+        chat_req = _responses_request_to_chat_request(req)
+        self.assertEqual(len(chat_req.tools), 1)
+        self.assertEqual(chat_req.tool_choice, "auto")
+
+    def test_responses_request_to_chat_request_rejects_stream(self) -> None:
+        """Stream=true raises HTTPException."""
+        req = ResponsesRequest(
+            model="catgpt-browser",
+            input="Hello",
+            stream=True,
+        )
+        with self.assertRaises(HTTPException) as ctx:
+            _validate_responses_request(req)
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_responses_response_from_chat_converts_content(self) -> None:
+        """Chat completion response converts to Responses API format."""
+        chat_response = ChatCompletionResponse(
+            model="catgpt-browser",
+            choices=[
+                Choice(
+                    message=ChoiceMessage(
+                        role="assistant",
+                        content="Hello! How can I help?",
+                    ),
+                )
+            ],
+            usage=UsageInfo(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        )
+        resp = _responses_response_from_chat(chat_response, "catgpt-browser")
+        self.assertEqual(resp.object, "response")
+        self.assertEqual(len(resp.output), 1)
+        self.assertEqual(resp.output[0].role, "assistant")
+        self.assertEqual(len(resp.output[0].content), 1)
+        self.assertEqual(resp.output[0].content[0].text, "Hello! How can I help?")
+        self.assertEqual(resp.usage.input_tokens, 10)
+        self.assertEqual(resp.usage.output_tokens, 5)
+        self.assertEqual(resp.usage.total_tokens, 15)
+
+    def test_responses_response_from_chat_includes_tool_calls(self) -> None:
+        """Tool calls are added to Responses output items."""
+        chat_response = ChatCompletionResponse(
+            model="catgpt-browser",
+            choices=[
+                Choice(
+                    message=ChoiceMessage(
+                        role="assistant",
+                        content="Calling tool",
+                        tool_calls=[
+                            ToolCall(
+                                id="call_123",
+                                function=FunctionCallInfo(
+                                    name="get_weather",
+                                    arguments='{"city":"Paris"}',
+                                ),
+                            )
+                        ],
+                    ),
+                )
+            ],
+            usage=UsageInfo(prompt_tokens=3, completion_tokens=2, total_tokens=5),
+        )
+        resp = _responses_response_from_chat(chat_response, "catgpt-browser")
+        self.assertEqual(len(resp.output), 2)
+        self.assertEqual(resp.output[1].type, "tool_call")
+
+    def test_validate_responses_request_rejects_empty_input(self) -> None:
+        """Empty input raises HTTPException."""
+        req = ResponsesRequest(model="catgpt-browser", input="")
+        with self.assertRaises(HTTPException) as ctx:
+            _validate_responses_request(req)
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_validate_responses_request_rejects_unsupported_model(self) -> None:
+        """Unsupported model raises HTTPException."""
+        req = ResponsesRequest(model="gpt-42", input="Hello")
+        with self.assertRaises(HTTPException) as ctx:
+            _validate_responses_request(req)
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("Unsupported model", ctx.exception.detail)
+
 
 
 if __name__ == "__main__":

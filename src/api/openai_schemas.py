@@ -197,3 +197,76 @@ class ImagesResponse(BaseModel):
     """OpenAI-compatible image generation response."""
     created: int = Field(default_factory=lambda: int(time.time()))
     data: List[ImageData]
+
+
+# -- Responses API (OpenAI Responses /v1/responses) ----------------
+
+
+class ResponseInputItem(BaseModel):
+    """An input item for the Responses API.
+
+    Can be a message with role+content or other input types.
+    """
+    type: str = "message"
+    role: str = "user"
+    content: Optional[Union[str, List[Any]]] = None
+
+
+class ResponsesRequest(BaseModel):
+    """OpenAI Responses API request body (POST /v1/responses).
+
+    Minimal subset needed by Codex CLI/Desktop compatibility.
+    """
+    model: str = "catgpt-browser"
+    input: Union[str, List[ResponseInputItem]]
+    instructions: Optional[str] = None
+    max_output_tokens: Optional[int] = None
+    temperature: Optional[float] = None
+    top_p: Optional[float] = None
+    tools: Optional[list[ToolDefinition]] = None
+    tool_choice: Optional[Union[str, dict]] = None
+    stream: Optional[bool] = False
+    metadata: Optional[dict[str, Any]] = None
+    user: Optional[str] = None
+    # CatGPT extension
+    read_aloud: Optional[bool] = False
+
+
+class ResponseOutputText(BaseModel):
+    """A text content part in a Responses API output message."""
+    type: str = "output_text"
+    text: str = ""
+    annotations: list[Any] = Field(default_factory=list)
+
+
+class ResponseOutputMessage(BaseModel):
+    """An output message item in the Responses API response."""
+    type: str = "message"
+    id: str = Field(default_factory=lambda: f"msg_{uuid.uuid4().hex[:24]}")
+    role: str = "assistant"
+    content: list[ResponseOutputText] = Field(default_factory=list)
+
+
+class ResponseOutputToolCall(BaseModel):
+    """A tool call output item in the Responses API response."""
+    type: str = "tool_call"
+    id: str = Field(default_factory=lambda: f"call_{uuid.uuid4().hex[:24]}")
+    name: str = ""
+    arguments: str = ""
+
+
+class ResponsesUsageInfo(BaseModel):
+    """Token usage in Responses API format."""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+
+
+class ResponsesResponse(BaseModel):
+    """OpenAI Responses API response envelope."""
+    id: str = Field(default_factory=lambda: f"resp_{uuid.uuid4().hex[:24]}")
+    object: str = "response"
+    created: int = Field(default_factory=lambda: int(time.time()))
+    model: str = "catgpt-browser"
+    output: list[Union[ResponseOutputMessage, ResponseOutputToolCall]] = Field(default_factory=list)
+    usage: ResponsesUsageInfo = Field(default_factory=ResponsesUsageInfo)

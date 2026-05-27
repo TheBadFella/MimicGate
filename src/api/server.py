@@ -159,6 +159,8 @@ async def lifespan(app: FastAPI):
         ("POST", f"{host}/{{app_name}}/v1/images/generations", "App-scoped image generation"),
         ("GET ", f"{host}/v1/models", "List models"),
         ("GET ", f"{host}/{{app_name}}/v1/models", "App-scoped models"),
+        ("POST", f"{host}/v1/responses", "Responses API"),
+        ("POST", f"{host}/{{app_name}}/v1/responses", "App-scoped Responses API"),
         ("POST", f"{host}/api/chat", "Ollama-compatible chat"),
         ("POST", f"{host}/api/generate", "Ollama-compatible generation"),
         ("POST", f"{host}/api/embed", "Ollama-compatible embeddings"),

@@ -39,10 +39,16 @@ from src.api.openai_schemas import (
     ImagesResponse,
     ModelListResponse,
     ModelObject,
+    ResponseInputItem,
+    ResponseOutputMessage,
+    ResponseOutputText,
+    ResponseOutputToolCall,
+    ResponsesRequest,
+    ResponsesResponse,
+    ResponsesUsageInfo,
     ToolCall,
     ToolDefinition,
-    UsageInfo,
-)
+    UsageInfo,)
 from src.api.attachment_expander import (
     AttachmentPageDescriptor,
     build_attachment_context_note,
@@ -1642,6 +1648,34 @@ async def create_chat_completion(
     return await _execute_chat_completion(request, app_key_override=app_key)
 
 
+
+
+@openai_router.post("/v1/responses", response_model=ResponsesResponse)
+async def create_responses(
+    request: ResponsesRequest,
+    http_request: Request,
+) -> ResponsesResponse:
+    """OpenAI Responses API endpoint.
+
+    Translates the request to a chat completion, executes it, and returns
+    a Responses API format response. Reuses existing browser automation flow.
+    """
+    _validate_responses_request(request)
+    app_key = _resolve_app_key(request, http_request)
+    return await _execute_responses(request, app_key_override=app_key)
+
+
+@openai_router.post("/{app_name}/v1/responses", response_model=ResponsesResponse)
+async def create_responses_scoped(
+    app_name: str,
+    request: ResponsesRequest,
+    http_request: Request,
+) -> ResponsesResponse:
+    """App-scoped alias for Responses API (maps app name from URL path)."""
+    _validate_responses_request(request)
+    app_key = _resolve_app_key(request, http_request, endpoint_app_name=app_name)
+    return await _execute_responses(request, app_key_override=app_key)
+
 @openai_router.post("/{app_name}/v1/chat/completions", response_model=ChatCompletionResponse)
 async def create_chat_completion_scoped(
     app_name: str,
@@ -1653,6 +1687,153 @@ async def create_chat_completion_scoped(
     app_key = _resolve_app_key(request, http_request, endpoint_app_name=app_name)
     return await _execute_chat_completion(request, app_key_override=app_key)
 
+
+
+# -- Responses API translation helpers --------------------------
+
+
+def _responses_input_to_messages(
+    input_data: str | list,
+    instructions: str | None = None,
+) -> list:
+    """Convert Responses API input to ChatCompletionRequest messages list.
+
+    Supports both string and list-of-input-item formats.
+    Instructions field is prepended as a system message when present.
+    """
+    from src.api.openai_schemas import ChatMessage
+
+    messages = []
+
+    if instructions:
+        messages.append(ChatMessage(role="system", content=instructions))
+
+    def _normalize_content(content: Any):
+        if isinstance(content, list):
+            normalized_parts: list[dict[str, Any]] = []
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                part_type = part.get("type")
+                if part_type in {"input_text", "text"}:
+                    normalized_parts.append({"type": "text", "text": part.get("text", "")})
+                elif part_type in {"input_image", "image"}:
+                    image_url = part.get("image_url") or part.get("url")
+                    image_b64 = part.get("image_base64") or part.get("b64_json")
+                    if image_b64 and not image_url:
+                        image_url = f"data:image/png;base64,{image_b64}"
+                    if image_url:
+                        normalized_parts.append({"type": "image_url", "image_url": {"url": image_url}})
+            return normalized_parts if normalized_parts else content
+        return content
+
+    if isinstance(input_data, str):
+        messages.append(ChatMessage(role="user", content=input_data))
+    elif isinstance(input_data, list):
+        for item in input_data:
+            if isinstance(item, dict):
+                role = item.get("role") or "user"
+                content = _normalize_content(item.get("content"))
+            else:
+                role = getattr(item, "role", "user") or "user"
+                content = _normalize_content(getattr(item, "content", None))
+            messages.append(ChatMessage(role=role, content=content))
+    else:
+        messages.append(ChatMessage(role="user", content=str(input_data)))
+
+    return messages
+
+
+def _responses_request_to_chat_request(resp_req: ResponsesRequest) -> ChatCompletionRequest:
+    """Translate a ResponsesRequest into a ChatCompletionRequest for execution."""
+    messages = _responses_input_to_messages(resp_req.input, resp_req.instructions)
+
+    return ChatCompletionRequest(
+        model=resp_req.model,
+        messages=messages,
+        tools=resp_req.tools,
+        tool_choice=resp_req.tool_choice,
+        temperature=resp_req.temperature,
+        max_tokens=resp_req.max_output_tokens,
+        top_p=resp_req.top_p,
+        stream=resp_req.stream if resp_req.stream is not None else False,
+        user=resp_req.user,
+        read_aloud=bool(resp_req.read_aloud),
+    )
+
+
+def _responses_response_from_chat(
+    chat_response: ChatCompletionResponse,
+    model: str,
+) -> ResponsesResponse:
+    """Translate a ChatCompletionResponse into a Responses API response envelope.
+
+    Converts choices[0].message.content into response output items.
+    """
+    output_items: list[ResponseOutputMessage | ResponseOutputToolCall] = []
+
+    for choice in chat_response.choices:
+        msg_text = choice.message.content or ""
+        output_items.append(
+            ResponseOutputMessage(
+                content=[
+                    ResponseOutputText(text=msg_text),
+                ],
+            )
+        )
+        tool_calls = choice.message.tool_calls or []
+        for call in tool_calls:
+            output_items.append(
+                ResponseOutputToolCall(
+                    id=call.id,
+                    name=call.function.name,
+                    arguments=call.function.arguments,
+                )
+            )
+
+    return ResponsesResponse(
+        id=f"resp_{chat_response.id.split('-', 1)[-1]}" if "-" in chat_response.id else chat_response.id,
+        model=model,
+        output=output_items,
+        usage=ResponsesUsageInfo(
+            input_tokens=chat_response.usage.prompt_tokens,
+            output_tokens=chat_response.usage.completion_tokens,
+            total_tokens=chat_response.usage.total_tokens,
+        ),
+    )
+
+
+def _validate_responses_request(request: ResponsesRequest) -> None:
+    """Validate a Responses API request."""
+    if request.stream:
+        raise HTTPException(
+            status_code=400,
+            detail="Streaming is not supported. Set stream=false or omit it.",
+        )
+
+    if not request.input:
+        raise HTTPException(status_code=400, detail="input cannot be empty")
+
+    if not is_supported_chat_model(request.model):
+        supported = ", ".join(list_public_chat_models())
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported model '{request.model}'. Supported models: {supported}",
+        )
+
+
+async def _execute_responses(
+    request: ResponsesRequest,
+    app_key_override: str = "",
+) -> ResponsesResponse:
+    """Shared executor for Responses API requests.
+
+    Translates to ChatCompletionRequest, delegates to _execute_chat_completion,
+    and translates back to Responses API format.
+    """
+    chat_request = _responses_request_to_chat_request(request)
+    chat_response = await _execute_chat_completion(chat_request, app_key_override=app_key)
+    return _responses_response_from_chat(chat_response, request.model)
 
 async def _execute_chat_completion(
     request: ChatCompletionRequest,
