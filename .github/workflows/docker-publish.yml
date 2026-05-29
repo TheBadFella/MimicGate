@@ -1,14 +1,12 @@
 name: Docker Image CI
 
 on:
-  push:
-    branches:
-      - main
-    paths-ignore:
-      - "README.md"
-    tags:
-      - "v*"
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Image version tag to publish alongside latest"
+        required: true
+        type: string
 
 env:
   REGISTRY: ghcr.io
@@ -36,23 +34,26 @@ jobs:
           IMAGE_NAME="$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
           echo "name=${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
 
+      - name: Validate version tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ inputs.version }}"
+          if [[ "$VERSION" == "main" ]]; then
+            echo "The manual version tag cannot be 'main'." >&2
+            exit 1
+          fi
+          if [[ ! "$VERSION" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+            echo "Invalid Docker tag: $VERSION" >&2
+            exit 1
+          fi
+
       - name: Log in to registry
         uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract Docker metadata (tags, labels)
-        id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=ref,event=tag
-            type=sha,prefix=sha-
-            type=ref,event=branch
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v7
@@ -61,7 +62,8 @@ jobs:
           file: docker/Dockerfile
           platforms: linux/amd64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}:latest
+            ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}:${{ inputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
