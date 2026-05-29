@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 import types
 import unittest
@@ -424,6 +425,64 @@ class ResponsesAPITests(unittest.TestCase):
         resp = _responses_response_from_chat(chat_response, "catgpt-browser")
         self.assertEqual(len(resp.output), 2)
         self.assertEqual(resp.output[1].type, "tool_call")
+
+    def test_execute_responses_forwards_app_key_override(self) -> None:
+        """Responses execution preserves app-scoped routing keys."""
+        captured: dict[str, str] = {}
+
+        async def fake_execute_chat_completion(
+            request: ChatCompletionRequest,
+            app_key_override: str = "",
+        ) -> ChatCompletionResponse:
+            captured["app_key_override"] = app_key_override
+            return ChatCompletionResponse(
+                model=request.model,
+                choices=[Choice(message=ChoiceMessage(role="assistant", content="ok"))],
+                usage=UsageInfo(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            )
+
+        original = openai_routes_module._execute_chat_completion
+        openai_routes_module._execute_chat_completion = fake_execute_chat_completion
+        try:
+            req = ResponsesRequest(model="catgpt-browser", input="Hello")
+            resp = asyncio.run(
+                openai_routes_module._execute_responses(
+                    req,
+                    app_key_override="endpoint:n8n",
+                )
+            )
+        finally:
+            openai_routes_module._execute_chat_completion = original
+
+        self.assertEqual(captured["app_key_override"], "endpoint:n8n")
+        self.assertEqual(resp.output[0].content[0].text, "ok")
+
+    def test_execute_responses_accepts_streaming_clients_without_streaming_browser(self) -> None:
+        """Responses stream requests are executed as non-stream browser calls."""
+        captured: dict[str, bool] = {}
+
+        async def fake_execute_chat_completion(
+            request: ChatCompletionRequest,
+            app_key_override: str = "",
+        ) -> ChatCompletionResponse:
+            captured["stream"] = bool(request.stream)
+            return ChatCompletionResponse(
+                model=request.model,
+                choices=[Choice(message=ChoiceMessage(role="assistant", content="ok"))],
+                usage=UsageInfo(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            )
+
+        original = openai_routes_module._execute_chat_completion
+        openai_routes_module._execute_chat_completion = fake_execute_chat_completion
+        try:
+            req = ResponsesRequest(model="catgpt-browser", input="Hello", stream=True)
+            _validate_responses_request(req)
+            resp = asyncio.run(openai_routes_module._execute_responses(req))
+        finally:
+            openai_routes_module._execute_chat_completion = original
+
+        self.assertFalse(captured["stream"])
+        self.assertEqual(resp.output[0].content[0].text, "ok")
 
     def test_validate_responses_request_rejects_empty_input(self) -> None:
         """Empty input raises HTTPException."""

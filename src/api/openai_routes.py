@@ -23,6 +23,7 @@ from urllib.parse import urlparse
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 
 from src.api.openai_schemas import (
     ChatCompletionAsyncRequest,
@@ -1662,6 +1663,8 @@ async def create_responses(
     """
     _validate_responses_request(request)
     app_key = _resolve_app_key(request, http_request)
+    if request.stream:
+        return await _stream_responses(request, app_key_override=app_key)
     return await _execute_responses(request, app_key_override=app_key)
 
 
@@ -1674,6 +1677,8 @@ async def create_responses_scoped(
     """App-scoped alias for Responses API (maps app name from URL path)."""
     _validate_responses_request(request)
     app_key = _resolve_app_key(request, http_request, endpoint_app_name=app_name)
+    if request.stream:
+        return await _stream_responses(request, app_key_override=app_key)
     return await _execute_responses(request, app_key_override=app_key)
 
 @openai_router.post("/{app_name}/v1/chat/completions", response_model=ChatCompletionResponse)
@@ -1803,14 +1808,63 @@ def _responses_response_from_chat(
     )
 
 
+def _responses_sse_event(event: str, data: dict[str, Any]) -> str:
+    payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    return f"event: {event}\ndata: {payload}\n\n"
+
+
+async def _stream_responses(
+    request: ResponsesRequest,
+    app_key_override: str = "",
+) -> StreamingResponse:
+    """Return a Responses API SSE stream after the browser response completes.
+
+    Browser automation cannot provide token deltas, but some clients (notably chat
+    UIs) send stream=true and require an event-stream response. Emit one full-text
+    delta plus the completed response so those clients can consume the result.
+    """
+
+    async def _events():
+        response = await _execute_responses(request, app_key_override=app_key_override)
+        response_dict = _model_dump_compat(response, mode="json")
+        text = ""
+        for item in response.output:
+            if isinstance(item, ResponseOutputMessage):
+                text += "".join(part.text for part in item.content)
+
+        if text:
+            yield _responses_sse_event(
+                "response.output_text.delta",
+                {
+                    "type": "response.output_text.delta",
+                    "response_id": response.id,
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": text,
+                },
+            )
+
+        yield _responses_sse_event(
+            "response.completed",
+            {
+                "type": "response.completed",
+                "response": response_dict,
+            },
+        )
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        _events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 def _validate_responses_request(request: ResponsesRequest) -> None:
     """Validate a Responses API request."""
-    if request.stream:
-        raise HTTPException(
-            status_code=400,
-            detail="Streaming is not supported. Set stream=false or omit it.",
-        )
-
     if not request.input:
         raise HTTPException(status_code=400, detail="input cannot be empty")
 
@@ -1832,7 +1886,8 @@ async def _execute_responses(
     and translates back to Responses API format.
     """
     chat_request = _responses_request_to_chat_request(request)
-    chat_response = await _execute_chat_completion(chat_request, app_key_override=app_key)
+    chat_request.stream = False
+    chat_response = await _execute_chat_completion(chat_request, app_key_override=app_key_override)
     return _responses_response_from_chat(chat_response, request.model)
 
 async def _execute_chat_completion(
