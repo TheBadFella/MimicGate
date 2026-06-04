@@ -3,11 +3,13 @@ from __future__ import annotations
 import sys
 import types
 import unittest
+import importlib.util
+from pathlib import Path
 from unittest.mock import patch
 
 # Provide a minimal patchright stub so client tests can import browser modules
 # without requiring browser automation dependencies.
-if "patchright" not in sys.modules:
+if "patchright" not in sys.modules and importlib.util.find_spec("patchright.async_api") is None:
     patchright_mod = types.ModuleType("patchright")
     async_api_mod = types.ModuleType("patchright.async_api")
     async_api_mod.Page = object
@@ -37,6 +39,11 @@ if "pydantic" not in sys.modules:
 
 from src.chatgpt.client import ChatGPTClient
 from src.config import Config
+
+try:
+    from patchright.async_api import async_playwright
+except ImportError:
+    async_playwright = None
 
 
 async def _noop_sleep(*_args, **_kwargs) -> None:
@@ -123,6 +130,63 @@ class ChatGPTClientModelSwitchTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("Could not open ChatGPT model picker", str(ctx.exception))
         self.assertEqual(page.keyboard.presses, ["Escape", "Escape"])
+
+    async def test_model_picker_fallback_clicks_version_labeled_composer_button(self) -> None:
+        if async_playwright is None:
+            self.skipTest("patchright is not installed")
+
+        playwright_context = async_playwright()
+        chrome_path = Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe")
+        launch_options = {"headless": True}
+        if chrome_path.exists():
+            launch_options["executable_path"] = str(chrome_path)
+
+        playwright = await playwright_context.__aenter__()
+        try:
+            try:
+                browser = await playwright.chromium.launch(**launch_options)
+            except Exception as exc:
+                self.skipTest(f"browser runtime is not available: {exc}")
+
+            try:
+                page = await (await browser.new_context()).new_page()
+                await page.set_content(
+                    """
+                    <!doctype html>
+                    <main style="min-height: 720px">
+                      <nav>
+                        <button aria-haspopup="menu" style="position:absolute;left:6px;top:132px">Recents</button>
+                      </nav>
+                      <button id="model-picker" aria-haspopup="menu"
+                              style="position:absolute;left:910px;top:420px;width:90px;height:36px">5.1</button>
+                    </main>
+                    """
+                )
+                await page.evaluate(
+                    """
+                    () => {
+                      window.clicked = "";
+                      document.querySelector("#model-picker").addEventListener("click", () => {
+                        window.clicked = "model-picker";
+                        const menu = document.createElement("div");
+                        menu.setAttribute("role", "menuitem");
+                        menu.textContent = "Thinking";
+                        document.body.appendChild(menu);
+                      });
+                    }
+                    """
+                )
+                client = ChatGPTClient(page)  # type: ignore[arg-type]
+
+                clicked = await client._click_model_picker_button_by_text(["5.1", "Thinking", "model"])
+                selected = await page.evaluate("window.clicked")
+
+                self.assertTrue(clicked)
+                self.assertEqual(selected, "model-picker")
+            finally:
+                await browser.close()
+        finally:
+            await playwright_context.__aexit__(None, None, None)
 
 
 if __name__ == "__main__":

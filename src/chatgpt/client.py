@@ -367,8 +367,11 @@ class ChatGPTClient:
             current_after = await self._detect_current_model_label()
             if not self._label_matches_model_option(current_after, target):
                 await self._dismiss_model_picker()
-                self._handle_model_switch_failure(f"Model switch to '{target.ui_label}' could not be confirmed")
-                return
+                await asyncio.sleep(1.0)
+                current_after = await self._detect_current_model_label()
+                if not self._label_matches_model_option(current_after, target):
+                    self._handle_model_switch_failure(f"Model switch to '{target.ui_label}' could not be confirmed")
+                    return
 
         await self._dismiss_model_picker()
         self._last_model_label = target.ui_label
@@ -948,11 +951,111 @@ class ChatGPTClient:
             "o3",
             "o4",
         ]
-        if await self._click_top_button_by_text(hints):
+        if await self._click_model_picker_button_by_text(hints):
             await asyncio.sleep(0.25)
             return await self._model_picker_is_open()
 
         return False
+
+    async def _click_model_picker_button_by_text(self, hints: list[str]) -> bool:
+        """Click the ChatGPT model picker trigger by current/target model text."""
+        filtered_hints = [hint for hint in hints if (hint or "").strip()]
+        if not filtered_hints:
+            return False
+
+        candidate = await self._page.evaluate(
+            r"""
+            (hints) => {
+                const normalize = (value) =>
+                    (value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+                const wanted = (hints || []).map(normalize).filter(Boolean);
+                const modelish = /(gpt|o[0-9]|instant|thinking|latest|auto|model|mini|nano|5\.[0-9]|4\.[0-9])/i;
+                const isVisible = (el) => {
+                    if (!el) return false;
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    return rect.width > 0 &&
+                        rect.height > 0 &&
+                        style.visibility !== "hidden" &&
+                        style.display !== "none";
+                };
+                const isInsideSidebar = (el) => Boolean(el.closest(
+                    "nav, aside, [data-testid='sidebar'], [data-testid*='history' i]"
+                ));
+                const clickable = Array.from(document.querySelectorAll([
+                    "button",
+                    "[role='button']",
+                    "[aria-haspopup='menu']",
+                    "[data-testid*='model' i]",
+                ].join(",")));
+                const matches = [];
+                for (const el of clickable) {
+                    if (!isVisible(el)) continue;
+                    const rect = el.getBoundingClientRect();
+                    if (rect.top < 0 || rect.top > window.innerHeight - 40) continue;
+                    if (rect.left < 240 && isInsideSidebar(el)) continue;
+
+                    const primaryText = ((el.innerText || el.textContent || "")
+                        .split(/\n+/)
+                        .map((part) => part.trim())
+                        .filter(Boolean)[0] || "").trim();
+                    const text = [
+                        primaryText,
+                        el.innerText || "",
+                        el.textContent || "",
+                        el.getAttribute("aria-label") || "",
+                        el.getAttribute("title") || "",
+                        el.getAttribute("data-testid") || "",
+                    ].join(" ").trim();
+                    const normalizedText = normalize(text);
+                    const normalizedPrimary = normalize(primaryText);
+                    if (!normalizedText) continue;
+
+                    let score = 0;
+                    for (const hint of wanted) {
+                        if (!normalizedText.includes(hint)) continue;
+                        score = Math.max(
+                            score,
+                            normalizedPrimary === hint
+                                ? 90
+                                : normalizedText === hint
+                                  ? 75
+                                  : normalizedPrimary.startsWith(hint)
+                                    ? 60
+                                    : normalizedText.startsWith(hint)
+                                      ? 50
+                                      : 25,
+                        );
+                    }
+                    if (modelish.test(text)) score += 25;
+                    if ((el.getAttribute("aria-haspopup") || "").toLowerCase() === "menu") score += 40;
+                    if ((el.getAttribute("data-testid") || "").toLowerCase().includes("model")) score += 35;
+                    if (rect.left > 240) score += 15;
+                    if (rect.top < 120 || rect.top > window.innerHeight / 2) score += 10;
+
+                    if (score < 35) continue;
+                    matches.push({
+                        score,
+                        top: rect.top,
+                        left: rect.left,
+                        x: rect.left + rect.width / 2,
+                        y: rect.top + rect.height / 2,
+                        label: primaryText,
+                    });
+                }
+                matches.sort((a, b) => b.score - a.score || b.left - a.left || a.top - b.top);
+                return matches[0] || null;
+            }
+            """,
+            filtered_hints,
+        )
+        if not isinstance(candidate, dict) or "x" not in candidate or "y" not in candidate:
+            return False
+
+        await self._page.mouse.move(float(candidate["x"]), float(candidate["y"]), steps=8)
+        await asyncio.sleep(0.05)
+        await self._page.mouse.click(float(candidate["x"]), float(candidate["y"]))
+        return True
 
     async def _click_top_button_by_text(self, hints: list[str]) -> bool:
         """Click a visible top-of-page button whose label best matches the hints."""

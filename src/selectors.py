@@ -34,6 +34,8 @@ class Selectors:
         "button[aria-haspopup='menu']:has-text('Instant')",
         "button[aria-haspopup='menu']:has-text('Thinking')",
         "button[aria-haspopup='menu']:has-text('Auto')",
+        "button[aria-haspopup='menu']:has-text('5.')",
+        "button[aria-haspopup='menu']:has-text('GPT')",
     ]
 
     # ── Assistant response messages ─────────────────────────────
