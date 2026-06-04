@@ -56,6 +56,38 @@ _CONVERSATION_SNAPSHOT_JS = r"""
         '[role="button"][aria-label*="copy" i]'
     ].join(",");
 
+    const preferredTurnCopySelector = [
+        'button[data-testid="copy-turn-action-button"]',
+        'button[aria-label="Copy response" i]',
+        'button[aria-label="Copy message" i]',
+        '[role="button"][aria-label="Copy response" i]',
+        '[role="button"][aria-label="Copy message" i]'
+    ].join(",");
+
+    const isCodeCopyButton = (el) => {
+        if (!el) return false;
+        const label = [
+            el.getAttribute("aria-label") || "",
+            el.getAttribute("data-testid") || "",
+            textOf(el).slice(0, 80)
+        ].join(" ").toLowerCase();
+        return Boolean(el.closest("pre, code, .code-block, [data-testid*='code' i]")) ||
+            label.includes("copy code");
+    };
+
+    const findTurnCopyButton = (root) => {
+        const preferred = Array.from(root.querySelectorAll(preferredTurnCopySelector))
+            .filter((button) => !isCodeCopyButton(button));
+        const visiblePreferred = preferred.find(isVisible);
+        if (visiblePreferred) return visiblePreferred;
+        if (preferred.length) return preferred[preferred.length - 1];
+
+        const fallback = Array.from(root.querySelectorAll(copySelector))
+            .filter((button) => !isCodeCopyButton(button));
+        const visibleFallback = fallback.filter(isVisible);
+        return visibleFallback[visibleFallback.length - 1] || fallback[fallback.length - 1] || null;
+    };
+
     const stopSelector = [
         'button[data-testid="stop-button"]',
         'button[aria-label="Stop answering"]',
@@ -200,7 +232,7 @@ _CONVERSATION_SNAPSHOT_JS = r"""
         const rect = item.rect;
         const text = bestTextFor(root, role);
         const hasImage = hasGeneratedImage(root);
-        const hasCopyButton = Boolean(root.querySelector(copySelector));
+        const hasCopyButton = Boolean(findTurnCopyButton(root));
         if (role === "assistant" && !text && !hasImage && !hasCopyButton) continue;
         if (role === "user" && !text) continue;
 
@@ -293,6 +325,13 @@ _CLICK_LATEST_COPY_BUTTON_JS = r"""
         'button[aria-label*="copy" i]',
         '[role="button"][aria-label*="copy" i]'
     ].join(",");
+    const preferredTurnCopySelector = [
+        'button[data-testid="copy-turn-action-button"]',
+        'button[aria-label="Copy response" i]',
+        'button[aria-label="Copy message" i]',
+        '[role="button"][aria-label="Copy response" i]',
+        '[role="button"][aria-label="Copy message" i]'
+    ].join(",");
     const hasGeneratedImage = (root) => {
         if (!root) return false;
         if (root.querySelector('img[alt="Generated image"], img[alt*="generated" i], div[id^="image-"], div[class*="imagegen-image"]')) return true;
@@ -303,6 +342,28 @@ _CLICK_LATEST_COPY_BUTTON_JS = r"""
             if ((w > 180 || h > 180) && (src.includes("backend-api/estuary") || src.includes("files.oaiusercontent.com") || src.startsWith("blob:") || src.startsWith("data:image/"))) return true;
         }
         return false;
+    };
+    const isCodeCopyButton = (el) => {
+        if (!el) return false;
+        const label = [
+            el.getAttribute("aria-label") || "",
+            el.getAttribute("data-testid") || "",
+            textOf(el).slice(0, 80)
+        ].join(" ").toLowerCase();
+        return Boolean(el.closest("pre, code, .code-block, [data-testid*='code' i]")) ||
+            label.includes("copy code");
+    };
+    const findTurnCopyButton = (root) => {
+        const preferred = Array.from(root.querySelectorAll(preferredTurnCopySelector))
+            .filter((button) => !isCodeCopyButton(button));
+        const visiblePreferred = preferred.find(isVisible);
+        if (visiblePreferred) return visiblePreferred;
+        if (preferred.length) return preferred[preferred.length - 1];
+
+        const fallback = Array.from(root.querySelectorAll(copySelector))
+            .filter((button) => !isCodeCopyButton(button));
+        const visibleFallback = fallback.filter(isVisible);
+        return visibleFallback[visibleFallback.length - 1] || fallback[fallback.length - 1] || null;
     };
     const roleOf = (root) => {
         const ownRole = root.getAttribute("data-message-author-role") || root.getAttribute("data-turn") || "";
@@ -401,14 +462,14 @@ _CLICK_LATEST_COPY_BUTTON_JS = r"""
         return { clicked: false, reason: "stale-turn", signature: latest.signature };
     }
 
-    let btn = Array.from(latest.root.querySelectorAll(copySelector)).find(isVisible) ||
-        latest.root.querySelector(copySelector);
+    let btn = findTurnCopyButton(latest.root);
     if (!btn) {
         const rootRect = latest.root.getBoundingClientRect();
         const nearby = Array.from(document.querySelectorAll(copySelector))
             .filter((candidate) => {
                 const rect = candidate.getBoundingClientRect();
-                return rect.top >= rootRect.top - 10 &&
+                return !isCodeCopyButton(candidate) &&
+                    rect.top >= rootRect.top - 10 &&
                     rect.top <= rootRect.bottom + 120 &&
                     rect.left >= rootRect.left - 60 &&
                     rect.left <= rootRect.right + 60;
