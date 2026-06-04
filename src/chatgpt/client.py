@@ -339,7 +339,12 @@ class ChatGPTClient:
             configure_opened = await self._click_menu_text("Configure")
             if configure_opened:
                 await asyncio.sleep(0.5)
-                switched = await self._select_model_from_configure_dialog(target.ui_labels)
+                switched = await self._select_model_from_configure_dialog(
+                    target.ui_labels,
+                    target_version_label=target_version_label,
+                )
+                if switched and target_version_label:
+                    self._last_model_version_label = target_version_label
 
         if not switched:
             self._unavailable_model_keys.update(unavailable_keys)
@@ -361,14 +366,28 @@ class ChatGPTClient:
                 await self._dismiss_model_picker()
                 self._handle_model_switch_failure(detail)
                 return
+            self._last_model_version_label = target_version_label
 
-        confirmed = await self._wait_for_model_label(target.ui_labels)
-        if not confirmed:
-            current_after = await self._detect_current_model_label()
-            if not self._label_matches_model_option(current_after, target):
-                await self._dismiss_model_picker()
-                self._handle_model_switch_failure(f"Model switch to '{target.ui_label}' could not be confirmed")
+        if self._is_configure_only_version_option(target, target_version_label):
+            confirmed = self._model_version_is_current(target_version_label)
+            if not confirmed:
+                self._handle_model_switch_failure(
+                    f"Model switch to '{target.ui_label}' could not be confirmed via Configure"
+                )
                 return
+        else:
+            confirmed = await self._wait_for_model_label(target.ui_labels)
+            if not confirmed:
+                current_after = await self._detect_current_model_label()
+                if not self._label_matches_model_option(current_after, target):
+                    await self._dismiss_model_picker()
+                    await asyncio.sleep(1.0)
+                    current_after = await self._detect_current_model_label()
+                    if not self._label_matches_model_option(current_after, target):
+                        self._handle_model_switch_failure(
+                            f"Model switch to '{target.ui_label}' could not be confirmed"
+                        )
+                        return
 
         await self._dismiss_model_picker()
         self._last_model_label = target.ui_label
@@ -813,6 +832,18 @@ class ChatGPTClient:
         target_version = normalize_model_token(target_version_label)
         return primary != target_version
 
+    def _is_configure_only_version_option(self, option, target_version_label: str) -> bool:
+        """
+        Return whether the requested option is a version selected inside Configure.
+
+        ChatGPT can keep showing a top-level mode label after selecting a concrete
+        version from Configure, so pure version requests confirm by configured
+        version rather than by the composer button text.
+        """
+        target_version = normalize_model_token(target_version_label)
+        primary = normalize_model_token(getattr(option, "ui_label", ""))
+        return bool(target_version and primary == target_version)
+
     async def _dismiss_model_picker(self) -> None:
         """Close any open model picker menu/dialog before interacting with the composer."""
         for _ in range(2):
@@ -948,11 +979,111 @@ class ChatGPTClient:
             "o3",
             "o4",
         ]
-        if await self._click_top_button_by_text(hints):
+        if await self._click_model_picker_button_by_text(hints):
             await asyncio.sleep(0.25)
             return await self._model_picker_is_open()
 
         return False
+
+    async def _click_model_picker_button_by_text(self, hints: list[str]) -> bool:
+        """Click the ChatGPT model picker trigger by current/target model text."""
+        filtered_hints = [hint for hint in hints if (hint or "").strip()]
+        if not filtered_hints:
+            return False
+
+        candidate = await self._page.evaluate(
+            r"""
+            (hints) => {
+                const normalize = (value) =>
+                    (value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+                const wanted = (hints || []).map(normalize).filter(Boolean);
+                const modelish = /(gpt|o[0-9]|instant|thinking|latest|auto|model|mini|nano|5\.[0-9]|4\.[0-9])/i;
+                const isVisible = (el) => {
+                    if (!el) return false;
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    return rect.width > 0 &&
+                        rect.height > 0 &&
+                        style.visibility !== "hidden" &&
+                        style.display !== "none";
+                };
+                const isInsideSidebar = (el) => Boolean(el.closest(
+                    "nav, aside, [data-testid='sidebar'], [data-testid*='history' i]"
+                ));
+                const clickable = Array.from(document.querySelectorAll([
+                    "button",
+                    "[role='button']",
+                    "[aria-haspopup='menu']",
+                    "[data-testid*='model' i]",
+                ].join(",")));
+                const matches = [];
+                for (const el of clickable) {
+                    if (!isVisible(el)) continue;
+                    const rect = el.getBoundingClientRect();
+                    if (rect.top < 0 || rect.top > window.innerHeight - 40) continue;
+                    if (rect.left < 240 && isInsideSidebar(el)) continue;
+
+                    const primaryText = ((el.innerText || el.textContent || "")
+                        .split(/\n+/)
+                        .map((part) => part.trim())
+                        .filter(Boolean)[0] || "").trim();
+                    const text = [
+                        primaryText,
+                        el.innerText || "",
+                        el.textContent || "",
+                        el.getAttribute("aria-label") || "",
+                        el.getAttribute("title") || "",
+                        el.getAttribute("data-testid") || "",
+                    ].join(" ").trim();
+                    const normalizedText = normalize(text);
+                    const normalizedPrimary = normalize(primaryText);
+                    if (!normalizedText) continue;
+
+                    let score = 0;
+                    for (const hint of wanted) {
+                        if (!normalizedText.includes(hint)) continue;
+                        score = Math.max(
+                            score,
+                            normalizedPrimary === hint
+                                ? 90
+                                : normalizedText === hint
+                                  ? 75
+                                  : normalizedPrimary.startsWith(hint)
+                                    ? 60
+                                    : normalizedText.startsWith(hint)
+                                      ? 50
+                                      : 25,
+                        );
+                    }
+                    if (modelish.test(text)) score += 25;
+                    if ((el.getAttribute("aria-haspopup") || "").toLowerCase() === "menu") score += 40;
+                    if ((el.getAttribute("data-testid") || "").toLowerCase().includes("model")) score += 35;
+                    if (rect.left > 240) score += 15;
+                    if (rect.top < 120 || rect.top > window.innerHeight / 2) score += 10;
+
+                    if (score < 35) continue;
+                    matches.push({
+                        score,
+                        top: rect.top,
+                        left: rect.left,
+                        x: rect.left + rect.width / 2,
+                        y: rect.top + rect.height / 2,
+                        label: primaryText,
+                    });
+                }
+                matches.sort((a, b) => b.score - a.score || b.left - a.left || a.top - b.top);
+                return matches[0] || null;
+            }
+            """,
+            filtered_hints,
+        )
+        if not isinstance(candidate, dict) or "x" not in candidate or "y" not in candidate:
+            return False
+
+        await self._page.mouse.move(float(candidate["x"]), float(candidate["y"]), steps=8)
+        await asyncio.sleep(0.05)
+        await self._page.mouse.click(float(candidate["x"]), float(candidate["y"]))
+        return True
 
     async def _click_top_button_by_text(self, hints: list[str]) -> bool:
         """Click a visible top-of-page button whose label best matches the hints."""
@@ -1044,9 +1175,15 @@ class ChatGPTClient:
                 return True
         return False
 
-    async def _select_model_from_configure_dialog(self, target_labels: tuple[str, ...]) -> bool:
+    async def _select_model_from_configure_dialog(
+        self,
+        target_labels: tuple[str, ...],
+        target_version_label: str = "",
+    ) -> bool:
         """Select a model from the Pro Intelligence -> Model dropdown dialog."""
         target_tokens = {normalize_model_token(label) for label in target_labels}
+        if target_version_label:
+            target_tokens.add(normalize_model_token(target_version_label))
         version_tokens = {
             token
             for token in target_tokens
@@ -1059,16 +1196,43 @@ class ChatGPTClient:
                 return False
 
             await asyncio.sleep(0.4)
-            version_selected = await self._click_model_option(target_labels)
+            version_labels = self._configure_version_click_labels(target_labels, target_version_label)
+            version_selected = await self._click_model_option(version_labels)
             if not version_selected:
                 return False
 
             await asyncio.sleep(0.4)
-            target_version_label = next(iter(version_tokens))
-            radio_selected = await self._click_configure_radio_for_version(target_version_label)
+            radio_selected = await self._click_configure_radio_for_version(
+                target_version_label or version_labels[0]
+            )
             return radio_selected or version_selected
 
         return await self._click_model_option(target_labels)
+
+    def _configure_version_click_labels(
+        self,
+        target_labels: tuple[str, ...],
+        target_version_label: str = "",
+    ) -> tuple[str, ...]:
+        """Return labels to try when selecting a concrete model version."""
+        ordered: list[str] = []
+        if target_version_label:
+            ordered.append(target_version_label)
+        for label in target_labels:
+            match = re.search(r"(?:gpt[- ]*)?((?:[45]\.\d+)|o\d+)", label, flags=re.IGNORECASE)
+            if match:
+                ordered.append(match.group(1))
+            ordered.append(label)
+
+        seen: set[str] = set()
+        result: list[str] = []
+        for label in ordered:
+            normalized = normalize_model_token(label)
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            result.append(label)
+        return tuple(result)
 
     async def _ensure_configured_model_version(self, target_version_label: str) -> bool:
         """Open Configure and select the requested model-version label."""
@@ -1084,7 +1248,13 @@ class ChatGPTClient:
             return False
 
         await asyncio.sleep(0.5)
-        return await self._select_model_from_configure_dialog((target_version_label,))
+        version_configured = await self._select_model_from_configure_dialog(
+            (target_version_label,),
+            target_version_label=target_version_label,
+        )
+        if version_configured:
+            self._last_model_version_label = target_version_label
+        return version_configured
 
     async def _click_configure_model_combobox(self) -> bool:
         """Open the model-version combobox in ChatGPT's Configure dialog."""
@@ -1232,9 +1402,12 @@ class ChatGPTClient:
                     "[role='menuitem']",
                     "[role='option']",
                     "[role='radio']",
+                    "[role='button']",
                     "button",
                     "[data-radix-collection-item]",
+                    "[cmdk-item]",
                     "li",
+                    "div",
                 ];
                 const matches = [];
                 for (const selector of selectors) {
@@ -1269,12 +1442,13 @@ class ChatGPTClient:
                             score,
                             top: rect.top,
                             left: rect.left,
+                            area: rect.width * rect.height,
                             x: rect.left + rect.width / 2,
                             y: rect.top + rect.height / 2,
                         });
                     }
                 }
-                matches.sort((a, b) => b.score - a.score || a.top - b.top || a.left - b.left);
+                matches.sort((a, b) => b.score - a.score || a.area - b.area || a.top - b.top || a.left - b.left);
                 const best = matches[0];
                 return best || null;
             }
