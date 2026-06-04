@@ -8,12 +8,30 @@ first-time login when no existing session is found, instead of crashing.
 from __future__ import annotations
 
 import asyncio
+import os
+import sys
 
 from src.browser.manager import BrowserManager
 from src.config import Config
 from src.log import setup_logging
 
 log = setup_logging("auto_login")
+
+
+def can_prompt_for_login() -> bool:
+    """
+    Return true when this process can safely block for terminal input.
+
+    Docker/supervisor deployments expose the browser through noVNC, but the API
+    process itself is non-interactive. In that mode startup must not wait on
+    input(), because nobody can answer it.
+    """
+    override = os.getenv("AUTO_LOGIN_INTERACTIVE", "auto").strip().lower()
+    if override in {"1", "true", "yes", "on"}:
+        return True
+    if override in {"0", "false", "no", "off"}:
+        return False
+    return bool(sys.stdin and sys.stdin.isatty())
 
 
 async def ensure_logged_in(browser: BrowserManager, has_session: bool = False) -> bool:
@@ -56,8 +74,18 @@ async def ensure_logged_in(browser: BrowserManager, has_session: bool = False) -
     print(f"  1. Sign in to {provider_name} with your account")
     print("  2. Complete any CAPTCHA / verification checks")
     print("  3. Wait until you see the chat interface")
-    print("  4. Come back here and press Enter")
+    if can_prompt_for_login():
+        print("  4. Come back here and press Enter")
+    else:
+        print("  4. The API will keep running; check /status after login")
     print("\n" + "=" * 60 + "\n")
+
+    if not can_prompt_for_login():
+        log.warning(
+            "Login required, but stdin is not interactive. "
+            "Leaving browser open for VNC/noVNC login."
+        )
+        return False
 
     # Wait for user to sign in
     await asyncio.get_event_loop().run_in_executor(
