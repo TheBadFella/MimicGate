@@ -75,6 +75,9 @@ Do not set `CHATGPT_MODEL_SWITCH_TIMEOUT=1` expecting one second; that is 1 ms.
 ## Notes
 
 - Model availability depends on the logged-in ChatGPT account and plan.
+- Versioned GPT labels such as `5.2` may live under the picker option
+  `Configure...` rather than in the first menu. CatGPT opens Configure and
+  selects the requested version from the dialog's Model dropdown when needed.
 - UI labels change over time. Update `CHATGPT_MODEL_ALIASES` when ChatGPT
   renames picker items.
 - The CLI also supports `/model <name>`, which changes the model id sent to the

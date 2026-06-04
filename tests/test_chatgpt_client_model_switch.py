@@ -100,6 +100,40 @@ class _FakePage:
         return self.visible_options
 
 
+class _ConfigureOnlyClient(ChatGPTClient):
+    def __init__(self, page) -> None:
+        super().__init__(page)
+        self.configure_calls: list[tuple[tuple[str, ...], str]] = []
+        self.wait_for_label_calls = 0
+
+    async def _detect_current_model_label(self) -> str:
+        return "Thinking"
+
+    async def _open_model_picker(self, _target_label: str, current_label: str = "") -> bool:
+        return True
+
+    async def _click_model_option(self, _target_labels: tuple[str, ...]) -> bool:
+        return False
+
+    async def _click_menu_text(self, target_text: str) -> bool:
+        return target_text == "Configure"
+
+    async def _select_model_from_configure_dialog(
+        self,
+        target_labels: tuple[str, ...],
+        target_version_label: str = "",
+    ) -> bool:
+        self.configure_calls.append((target_labels, target_version_label))
+        return True
+
+    async def _wait_for_model_label(self, _target_labels: tuple[str, ...]) -> bool:
+        self.wait_for_label_calls += 1
+        return False
+
+    async def _dismiss_model_picker(self) -> None:
+        return None
+
+
 class ChatGPTClientModelSwitchTests(unittest.IsolatedAsyncioTestCase):
     async def test_missing_model_option_falls_back_and_caches_when_not_strict(self) -> None:
         page = _FakePage(open_picker=True, visible_options=["GPT-5", "o3"])
@@ -130,6 +164,29 @@ class ChatGPTClientModelSwitchTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("Could not open ChatGPT model picker", str(ctx.exception))
         self.assertEqual(page.keyboard.presses, ["Escape", "Escape"])
+
+    async def test_version_option_uses_configure_dropdown_confirmation(self) -> None:
+        page = _FakePage(open_picker=True)
+        client = _ConfigureOnlyClient(page)  # type: ignore[arg-type]
+
+        with patch.object(Config, "CHATGPT_MODEL_ALIASES", "gpt-5.2=5.2|GPT-5.2"), patch.object(
+            Config,
+            "CHATGPT_MODEL_SWITCH_STRICT",
+            True,
+        ), patch("src.chatgpt.client.asyncio.sleep", _noop_sleep):
+            await client.ensure_model("gpt-5.2")
+
+        self.assertEqual(client.configure_calls, [(("5.2", "GPT-5.2"), "5.2")])
+        self.assertEqual(client._last_model_label, "5.2")
+        self.assertEqual(client._last_model_version_label, "5.2")
+        self.assertEqual(client.wait_for_label_calls, 0)
+
+    def test_configure_version_click_labels_prioritize_dotted_version(self) -> None:
+        client = ChatGPTClient(_FakePage())  # type: ignore[arg-type]
+
+        labels = client._configure_version_click_labels(("Instant", "Latest 5.5", "GPT-5.5"), "5.5")
+
+        self.assertEqual(labels[:3], ("5.5", "Instant", "Latest 5.5"))
 
     async def test_model_picker_fallback_clicks_version_labeled_composer_button(self) -> None:
         if async_playwright is None:
