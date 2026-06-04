@@ -23,7 +23,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from src.browser.manager import BrowserManager
-from src.browser.auto_login import ensure_logged_in
+from src.browser.auto_login import can_prompt_for_login, ensure_logged_in
 from src.chatgpt.client import ChatGPTClient
 from src.claude.client import ClaudeClient
 from src.config import Config
@@ -106,10 +106,16 @@ async def lifespan(app: FastAPI):
         log.info("Not logged in — starting auto-login flow...")
         logged_in = await ensure_logged_in(_browser, has_session=session["exists"])
         if not logged_in:
-            log.error("Login failed after auto-login attempt")
-            raise RuntimeError(f"Could not log in to {provider_name}")
-        # Refresh session info after login
-        session = await _browser.get_session_info()
+            if can_prompt_for_login():
+                log.error("Login failed after auto-login attempt")
+                raise RuntimeError(f"Could not log in to {provider_name}")
+            log.warning(
+                "Login is still required, but startup is non-interactive. "
+                "API will remain online while the user signs in through noVNC/VNC."
+            )
+        else:
+            # Refresh session info after login
+            session = await _browser.get_session_info()
 
     if Config.PROVIDER == "claude":
         _client = ClaudeClient(page)
