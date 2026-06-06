@@ -74,16 +74,27 @@ _CONVERSATION_SNAPSHOT_JS = r"""
         return Boolean(el.closest("pre, code, .code-block, [data-testid*='code' i]")) ||
             label.includes("copy code");
     };
+    const isTableCopyButton = (el) => {
+        if (!el) return false;
+        const label = [
+            el.getAttribute("aria-label") || "",
+            el.getAttribute("data-testid") || "",
+            textOf(el).slice(0, 80)
+        ].join(" ").toLowerCase();
+        return Boolean(el.closest("._tableContainer, ._tableWrapper, table")) ||
+            label.includes("copy table");
+    };
+    const isTurnCopyButton = (el) => !isCodeCopyButton(el) && !isTableCopyButton(el);
 
     const findTurnCopyButton = (root) => {
         const preferred = Array.from(root.querySelectorAll(preferredTurnCopySelector))
-            .filter((button) => !isCodeCopyButton(button));
+            .filter(isTurnCopyButton);
         const visiblePreferred = preferred.find(isVisible);
         if (visiblePreferred) return visiblePreferred;
         if (preferred.length) return preferred[preferred.length - 1];
 
         const fallback = Array.from(root.querySelectorAll(copySelector))
-            .filter((button) => !isCodeCopyButton(button));
+            .filter(isTurnCopyButton);
         const visibleFallback = fallback.filter(isVisible);
         return visibleFallback[visibleFallback.length - 1] || fallback[fallback.length - 1] || null;
     };
@@ -353,15 +364,26 @@ _CLICK_LATEST_COPY_BUTTON_JS = r"""
         return Boolean(el.closest("pre, code, .code-block, [data-testid*='code' i]")) ||
             label.includes("copy code");
     };
+    const isTableCopyButton = (el) => {
+        if (!el) return false;
+        const label = [
+            el.getAttribute("aria-label") || "",
+            el.getAttribute("data-testid") || "",
+            textOf(el).slice(0, 80)
+        ].join(" ").toLowerCase();
+        return Boolean(el.closest("._tableContainer, ._tableWrapper, table")) ||
+            label.includes("copy table");
+    };
+    const isTurnCopyButton = (el) => !isCodeCopyButton(el) && !isTableCopyButton(el);
     const findTurnCopyButton = (root) => {
         const preferred = Array.from(root.querySelectorAll(preferredTurnCopySelector))
-            .filter((button) => !isCodeCopyButton(button));
+            .filter(isTurnCopyButton);
         const visiblePreferred = preferred.find(isVisible);
         if (visiblePreferred) return visiblePreferred;
         if (preferred.length) return preferred[preferred.length - 1];
 
         const fallback = Array.from(root.querySelectorAll(copySelector))
-            .filter((button) => !isCodeCopyButton(button));
+            .filter(isTurnCopyButton);
         const visibleFallback = fallback.filter(isVisible);
         return visibleFallback[visibleFallback.length - 1] || fallback[fallback.length - 1] || null;
     };
@@ -468,7 +490,7 @@ _CLICK_LATEST_COPY_BUTTON_JS = r"""
         const nearby = Array.from(document.querySelectorAll(copySelector))
             .filter((candidate) => {
                 const rect = candidate.getBoundingClientRect();
-                return !isCodeCopyButton(candidate) &&
+                return isTurnCopyButton(candidate) &&
                     rect.top >= rootRect.top - 10 &&
                     rect.top <= rootRect.bottom + 120 &&
                     rect.left >= rootRect.left - 60 &&

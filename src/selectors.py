@@ -96,10 +96,9 @@ class Selectors:
     # after the full response has been generated.
     COPY_BUTTON = [
         "button[data-testid='copy-turn-action-button']",
-        "button[data-testid*='copy' i]",
+        "button[data-testid*='copy-turn' i]",
         "button[aria-label='Copy message']",
-        "button[aria-label='Copy']",
-        "button[aria-label*='Copy' i]",
+        "button[aria-label='Copy response']",
     ]
 
     # ── Generated images inside assistant responses ───────────────────
