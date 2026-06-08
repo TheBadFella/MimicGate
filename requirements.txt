@@ -1,5 +1,5 @@
 # Core
-patchright>=1.59.1
+patchright>=1.60.1
 playwright-stealth>=2.0.3
 
 # TUI (Phase 2)
