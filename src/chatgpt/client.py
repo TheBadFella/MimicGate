@@ -413,17 +413,14 @@ class ChatGPTClient:
     # ── Navigation ──────────────────────────────────────────────
 
     async def new_chat(self) -> None:
-        """Start a new conversation by navigating to the home page."""
-        log.info("Starting new chat...")
-        # Direct navigation is the most reliable way — avoids duplicate button issues
-        await self._page.goto(Config.CHATGPT_URL, wait_until="domcontentloaded")
-        await asyncio.sleep(3)
+        """Start a new conversation.
 
         Strategy order:
         1. SPA button click (avoids DNS issues, preserves browser state)
         2. JavaScript location change (no DNS lookup needed if page is loaded)
-        3. Full page.goto() (last resort — may fail with DNS errors)
+        3. Full page.goto() (last resort - may fail with DNS errors)
         """
+        log.info("Starting new chat...")
         # Already on a fresh chat — nothing to do
         if "chatgpt.com" in self._page.url:
             try:
