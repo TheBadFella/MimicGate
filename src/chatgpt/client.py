@@ -91,7 +91,13 @@ class ChatGPTClient:
         log.info(f"Sending message ({len(text)} chars, {len(all_attachments)} attachments): {text[:80]}...")
         start_time = time.time()
 
-        # 0. Count existing assistant messages so we know when a new one appears
+        # 0. Check page health — recover from DNS errors before trying to send
+        page_error = await self._detect_page_error()
+        if page_error:
+            log.warning(f"Page error detected before send: {page_error}")
+            raise RuntimeError(f"Page is in error state: {page_error}")
+
+        # 0.5 Count existing assistant messages so we know when a new one appears
         pre_count = await count_assistant_messages(self._page)
         pre_turn_signature = await get_latest_assistant_turn_signature(self._page)
         pre_user_signature = await get_latest_user_turn_signature(self._page)
@@ -110,8 +116,14 @@ class ChatGPTClient:
         if all_attachments:
             await self._upload_files(all_attachments)
 
-        # 2. Find the chat input
+        # 2. Find the chat input (retry once after dismissing overlays if not found)
         input_selector = await self._find_selector(Selectors.CHAT_INPUT, "chat input")
+        if not input_selector:
+            # An overlay may have blocked it — dismiss and retry
+            log.info("Chat input not found on first try, dismissing overlays and retrying...")
+            await self._dismiss_overlays()
+            await asyncio.sleep(1)
+            input_selector = await self._find_selector(Selectors.CHAT_INPUT, "chat input")
         if not input_selector:
             raise RuntimeError("Could not find chat input element")
 
@@ -121,12 +133,15 @@ class ChatGPTClient:
         # Small pause after pasting (like a human reviewing before send)
         await random_delay(300, 600)
 
-        # 4. Send the message
-        sent = await self._click_send()
-        if not sent:
-            # Fallback: try pressing Enter
-            log.info("Send button not found, trying Enter key")
-            await self._page.keyboard.press("Enter")
+        if auto_submitted:
+            log.info("ChatGPT auto-submitted after text entry — skipping send button click")
+        else:
+            # No auto-submit — click the send button
+            log.info("No auto-submit detected, clicking send button")
+            sent = await self._click_send()
+            if not sent:
+                log.info("Send button not found, trying Enter key")
+                await self._page.keyboard.press("Enter")
 
         submitted = await self._wait_for_message_submission(pre_user_signature, text)
         if not submitted:
@@ -199,7 +214,7 @@ class ChatGPTClient:
             if is_incomplete_response_text(response_text):
                 log.warning("Extracted text looks incomplete/transient; retrying for final answer")
                 for attempt in range(1, 3):
-                    await asyncio.sleep(4)
+                    await asyncio.sleep(2)
                     await wait_for_response_complete(
                         self._page,
                         timeout_ms=90000,
@@ -398,20 +413,101 @@ class ChatGPTClient:
     # ── Navigation ──────────────────────────────────────────────
 
     async def new_chat(self) -> None:
-        """Start a new conversation by navigating to the home page."""
-        log.info("Starting new chat...")
-        # Direct navigation is the most reliable way — avoids duplicate button issues
-        await self._page.goto(Config.CHATGPT_URL, wait_until="domcontentloaded")
-        await asyncio.sleep(3)
+        """Start a new conversation.
 
-        # Wait for the chat input to be visible (signals page is ready)
+        Strategy order:
+        1. SPA button click (avoids DNS issues, preserves browser state)
+        2. JavaScript location change (no DNS lookup needed if page is loaded)
+        3. Full page.goto() (last resort - may fail with DNS errors)
+        """
+        log.info("Starting new chat...")
+        # Already on a fresh chat — nothing to do
+        if "chatgpt.com" in self._page.url:
+            try:
+                turn_count = await self._page.evaluate(
+                    "document.querySelectorAll('[data-testid^=\"conversation-turn-\"]').length"
+                )
+                if turn_count == 0:
+                    log.info("Already on a fresh chat — skipping navigation")
+                    return
+            except Exception:
+                pass
+
+        # Strategy 1: SPA button click
+        for selector in Selectors.NEW_CHAT_BUTTON:
+            try:
+                btn = await self._page.query_selector(selector)
+                if btn and await btn.is_visible():
+                    await btn.click()
+                    log.info(f"New chat via SPA button: {selector}")
+                    await asyncio.sleep(1)
+                    # Verify we're on a fresh chat
+                    try:
+                        turn_count = await self._page.evaluate(
+                            "document.querySelectorAll('[data-testid^=\"conversation-turn-\"]').length"
+                        )
+                        if turn_count == 0:
+                            await self._wait_for_chat_input()
+                            return
+                    except Exception:
+                        pass
+            except Exception:
+                continue
+
+        # Strategy 2: JavaScript navigation (avoids DNS lookup)
+        try:
+            log.info("New chat via JS navigation...")
+            await self._page.evaluate("window.location.href = '/'")
+            await self._page.wait_for_load_state("domcontentloaded", timeout=15000)
+            page_error = await self._detect_page_error()
+            if not page_error:
+                log.info("New chat started (JS navigation)")
+                await self._wait_for_chat_input()
+                return
+        except Exception as e:
+            log.warning(f"JS navigation failed: {e}")
+
+        # Strategy 3: Full page.goto() — last resort
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            log.info(f"New chat via page.goto (attempt {attempt}/{max_attempts})...")
+            try:
+                await self._page.goto(
+                    Config.CHATGPT_URL,
+                    wait_until="domcontentloaded",
+                    timeout=30000,
+                )
+            except Exception as e:
+                log.warning(f"page.goto failed (attempt {attempt}): {e}")
+                if attempt < max_attempts:
+                    await asyncio.sleep(attempt * 3)
+                    continue
+                raise
+
+            page_error = await self._detect_page_error()
+            if page_error:
+                log.error(f"Page error after goto (attempt {attempt}): {page_error}")
+                if attempt < max_attempts:
+                    await asyncio.sleep(attempt * 3)
+                    continue
+                raise RuntimeError(f"Page error persists after {max_attempts} attempts: {page_error}")
+
+            log.info("New chat started (page.goto)")
+            await self._wait_for_chat_input()
+            return
+
+    async def _wait_for_chat_input(self) -> None:
+        """Wait for the chat input to become visible and interactive."""
         for selector in Selectors.CHAT_INPUT:
             try:
                 await self._page.wait_for_selector(selector, timeout=10000, state="visible")
                 log.debug(f"Chat input ready: {selector}")
-                break
+                # Brief settle for React handlers to attach
+                await asyncio.sleep(0.5)
+                return
             except Exception:
                 continue
+        log.warning("Chat input not found — page may not be fully ready")
 
         await random_delay(500, 1000)
         log.info("New chat started (navigated to home)")
@@ -707,12 +803,98 @@ class ChatGPTClient:
         log.warning(f"No working selector found for: {name}")
         return None
 
+    async def _dismiss_overlays(self) -> None:
+        """Check for and dismiss any blocking dialogs/overlays on the page."""
+        try:
+            result = await self._page.evaluate(
+                """
+                () => {
+                    const info = { dismissed: [], found: [] };
+
+                    // Check for role="dialog" overlays
+                    const dialogs = document.querySelectorAll('[role="dialog"], [role="alertdialog"], dialog[open]');
+                    for (const d of dialogs) {
+                        const text = (d.innerText || '').trim().substring(0, 200);
+                        info.found.push('dialog: ' + text);
+
+                        // Try to find and click dismiss/close buttons
+                        const closeBtn = d.querySelector(
+                            'button[aria-label="Close"], button[aria-label="Dismiss"], ' +
+                            'button:has(svg[data-testid="close"]), button.close'
+                        );
+                        if (closeBtn) {
+                            closeBtn.click();
+                            info.dismissed.push('dialog-close');
+                        }
+                    }
+
+                    // Check for "Continue generating" button
+                    const allButtons = document.querySelectorAll('button');
+                    for (const btn of allButtons) {
+                        const btnText = (btn.innerText || '').trim().toLowerCase();
+                        if (btnText.includes('continue generating')) {
+                            btn.click();
+                            info.dismissed.push('continue-generating');
+                        }
+                    }
+
+                    // Check for rate limit or error banners
+                    const banners = document.querySelectorAll('[class*="banner"], [class*="toast"], [class*="alert"]');
+                    for (const b of banners) {
+                        const text = (b.innerText || '').trim().substring(0, 200);
+                        if (text) info.found.push('banner: ' + text);
+                    }
+
+                    return info;
+                }
+                """
+            )
+            if result and isinstance(result, dict):
+                if result.get("dismissed"):
+                    log.info(f"Dismissed overlays: {result['dismissed']}")
+                if result.get("found"):
+                    log.debug(f"Page overlays found: {result['found']}")
+        except Exception as e:
+            log.debug(f"Overlay check failed: {e}")
+
     async def _click_send(self) -> bool:
         """Try to click the send button using selector fallbacks."""
+        # Check send button state before clicking
+        btn_state = await self._page.evaluate(
+            """
+            () => {
+                const selectors = [
+                    'button[data-testid="send-button"]',
+                    '#composer-submit-button',
+                    "button[aria-label='Send prompt']",
+                ];
+                for (const sel of selectors) {
+                    const btn = document.querySelector(sel);
+                    if (btn) {
+                        return {
+                            selector: sel,
+                            disabled: btn.disabled,
+                            ariaDisabled: btn.getAttribute('aria-disabled'),
+                            visible: btn.offsetParent !== null,
+                            classes: btn.className.substring(0, 100),
+                        };
+                    }
+                }
+                return null;
+            }
+            """
+        )
+        log.debug(f"Send button state: {btn_state}")
+
+        # Don't click a disabled send button — the input wasn't recognized
+        if isinstance(btn_state, dict) and btn_state.get("disabled"):
+            log.warning("Send button is disabled — text may not have been inserted properly")
+            return False
+
         selector = await self._find_selector(Selectors.SEND_BUTTON, "send button")
         if selector:
             await human_click(self._page, selector)
-            log.debug("Send button clicked")
+            log.info(f"Send button clicked via: {selector}")
             return True
         return False
 

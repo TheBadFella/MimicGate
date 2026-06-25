@@ -35,6 +35,7 @@ from src.api.openai_schemas import (
     ChoiceMessage,
     AudioInfo,
     FunctionCallInfo,
+    FunctionDefinition,
     ImageData,
     ImageGenerationRequest,
     ImagesResponse,
@@ -1392,12 +1393,6 @@ def _build_cardinality_retry_prompt(
 
 def _validate_chat_request(request: ChatCompletionRequest) -> None:
     """Shared validation for chat completion request payloads."""
-    if request.stream:
-        raise HTTPException(
-            status_code=400,
-            detail="Streaming is not supported. Set stream=false or omit it.",
-        )
-
     if not request.messages:
         raise HTTPException(status_code=400, detail="messages array cannot be empty")
 
@@ -1646,6 +1641,8 @@ async def create_chat_completion(
     """
     _validate_chat_request(request)
     app_key = _resolve_app_key(request, http_request)
+    if request.stream:
+        return await _stream_chat_completion(request, app_key_override=app_key)
     return await _execute_chat_completion(request, app_key_override=app_key)
 
 
@@ -1690,6 +1687,8 @@ async def create_chat_completion_scoped(
     """App-scoped alias for chat completions (maps app name from URL path)."""
     _validate_chat_request(request)
     app_key = _resolve_app_key(request, http_request, endpoint_app_name=app_name)
+    if request.stream:
+        return await _stream_chat_completion(request, app_key_override=app_key)
     return await _execute_chat_completion(request, app_key_override=app_key)
 
 
@@ -1811,6 +1810,92 @@ def _responses_response_from_chat(
 def _responses_sse_event(event: str, data: dict[str, Any]) -> str:
     payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     return f"event: {event}\ndata: {payload}\n\n"
+
+
+def _chat_completion_sse_chunk(
+    response: ChatCompletionResponse,
+    delta: dict[str, Any],
+    *,
+    finish_reason: str | None = None,
+) -> str:
+    """Format one OpenAI chat.completion.chunk SSE data line."""
+    chunk = {
+        "id": response.id,
+        "object": "chat.completion.chunk",
+        "created": response.created,
+        "model": response.model,
+        "choices": [
+            {
+                "index": 0,
+                "delta": delta,
+                "finish_reason": finish_reason,
+            }
+        ],
+    }
+    payload = json.dumps(chunk, ensure_ascii=False, separators=(",", ":"))
+    return f"data: {payload}\n\n"
+
+
+async def _stream_chat_completion(
+    request: ChatCompletionRequest,
+    app_key_override: str = "",
+) -> StreamingResponse:
+    """Return a Chat Completions SSE stream after the browser response completes.
+
+    Browser automation cannot provide token deltas, but IDE clients (OpenCode,
+    Cline, etc.) send stream=true and require text/event-stream. Emit the full
+    assistant message as one or two chunks plus a terminal finish chunk.
+    """
+
+    async def _events():
+        non_stream_request = request.model_copy(update={"stream": False})
+        response = await _execute_chat_completion(
+            non_stream_request,
+            app_key_override=app_key_override,
+        )
+        choice = response.choices[0]
+        message = choice.message
+
+        yield _chat_completion_sse_chunk(
+            response,
+            {"role": "assistant", "content": ""},
+        )
+
+        if message.content:
+            yield _chat_completion_sse_chunk(response, {"content": message.content})
+
+        if message.tool_calls:
+            tool_deltas: list[dict[str, Any]] = []
+            for index, call in enumerate(message.tool_calls):
+                tool_deltas.append(
+                    {
+                        "index": index,
+                        "id": call.id,
+                        "type": call.type,
+                        "function": {
+                            "name": call.function.name,
+                            "arguments": call.function.arguments,
+                        },
+                    }
+                )
+            yield _chat_completion_sse_chunk(response, {"tool_calls": tool_deltas})
+
+        yield _chat_completion_sse_chunk(
+            response,
+            {},
+            finish_reason=choice.finish_reason,
+        )
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        _events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 async def _stream_responses(

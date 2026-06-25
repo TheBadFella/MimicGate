@@ -43,7 +43,7 @@ class Config:
 
     # Browser
     HEADLESS: bool = os.getenv("HEADLESS", "false").lower() == "true"
-    SLOW_MO: int = int(os.getenv("SLOW_MO", "50"))
+    SLOW_MO: int = int(os.getenv("SLOW_MO", "25"))
     CHATGPT_URL: str = os.getenv("CHATGPT_URL", "https://chatgpt.com")
     CLAUDE_URL: str = os.getenv("CLAUDE_URL", "https://claude.ai")
     CHATGPT_DEFAULT_MODEL: str = os.getenv("CHATGPT_DEFAULT_MODEL", "")
@@ -80,7 +80,7 @@ class Config:
     THINKING_PAUSE_MIN: int = int(os.getenv("THINKING_PAUSE_MIN", "500"))
     THINKING_PAUSE_MAX: int = int(os.getenv("THINKING_PAUSE_MAX", "1500"))
     # Completion poll interval — how often to check if response is ready (ms)
-    POLL_INTERVAL_MS: int = int(os.getenv("POLL_INTERVAL_MS", "500"))
+    POLL_INTERVAL_MS: int = int(os.getenv("POLL_INTERVAL_MS", "300"))
 
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "DEBUG")

@@ -27,6 +27,16 @@ if "patchright" not in sys.modules:
     sys.modules["patchright"] = patchright_mod
     sys.modules["patchright.async_api"] = async_api_mod
 
+    impl_mod = types.ModuleType("patchright._impl")
+    errors_mod = types.ModuleType("patchright._impl._errors")
+
+    class TargetClosedError(Exception):
+        pass
+
+    errors_mod.TargetClosedError = TargetClosedError
+    sys.modules["patchright._impl"] = impl_mod
+    sys.modules["patchright._impl._errors"] = errors_mod
+
 if "playwright_stealth" not in sys.modules:
     playwright_stealth_mod = types.ModuleType("playwright_stealth")
 
@@ -39,6 +49,7 @@ if "playwright_stealth" not in sys.modules:
 from src.api.openai_routes import (
     _build_page_extraction_note,
     _build_page_extraction_response_format,
+    _chat_completion_sse_chunk,
     _detect_user_prefix_contract,
     _display_app_name,
     _derive_app_key,
@@ -90,6 +101,16 @@ def _make_request(headers: dict[str, str] | None = None, client_host: str = "127
         "query_string": b"",
     }
     return Request(scope)
+
+
+async def _collect_stream(stream_response) -> list[bytes]:
+    chunks: list[bytes] = []
+    async for chunk in stream_response.body_iterator:
+        if isinstance(chunk, bytes):
+            chunks.append(chunk)
+        else:
+            chunks.append(chunk.encode("utf-8"))
+    return chunks
 
 
 class OpenAIRoutesHelpersTests(unittest.TestCase):
@@ -364,16 +385,34 @@ class ResponsesAPITests(unittest.TestCase):
         self.assertEqual(len(chat_req.tools), 1)
         self.assertEqual(chat_req.tool_choice, "auto")
 
-    def test_responses_request_to_chat_request_rejects_stream(self) -> None:
-        """Stream=true raises HTTPException."""
+    def test_validate_chat_request_accepts_stream(self) -> None:
+        """Stream=true is allowed; route handlers emit pseudo-SSE after completion."""
+        req = ChatCompletionRequest(
+            model="catgpt-browser",
+            messages=[ChatMessage(role="user", content="hello")],
+            stream=True,
+        )
+        _validate_chat_request(req)
+
+    def test_chat_completion_sse_chunk_uses_openai_shape(self) -> None:
+        response = ChatCompletionResponse(
+            model="catgpt-browser",
+            choices=[Choice(message=ChoiceMessage(role="assistant", content="ok"))],
+            usage=UsageInfo(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        )
+        chunk = _chat_completion_sse_chunk(response, {"content": "ok"})
+        self.assertIn('"object":"chat.completion.chunk"', chunk.replace(" ", ""))
+        self.assertIn('"content":"ok"', chunk.replace(" ", ""))
+
+    def test_responses_request_to_chat_request_preserves_stream_flag(self) -> None:
+        """Responses stream flag is forwarded for route-level SSE handling."""
         req = ResponsesRequest(
             model="catgpt-browser",
             input="Hello",
             stream=True,
         )
-        with self.assertRaises(HTTPException) as ctx:
-            _validate_responses_request(req)
-        self.assertEqual(ctx.exception.status_code, 400)
+        chat_req = _responses_request_to_chat_request(req)
+        self.assertTrue(chat_req.stream)
 
     def test_responses_response_from_chat_converts_content(self) -> None:
         """Chat completion response converts to Responses API format."""
@@ -456,6 +495,44 @@ class ResponsesAPITests(unittest.TestCase):
 
         self.assertEqual(captured["app_key_override"], "endpoint:n8n")
         self.assertEqual(resp.output[0].content[0].text, "ok")
+
+    def test_execute_chat_streaming_uses_non_stream_browser_call(self) -> None:
+        """Chat stream requests execute the browser call without stream=true."""
+        captured: dict[str, bool] = {}
+
+        async def fake_execute_chat_completion(
+            request: ChatCompletionRequest,
+            app_key_override: str = "",
+        ) -> ChatCompletionResponse:
+            captured["stream"] = bool(request.stream)
+            return ChatCompletionResponse(
+                model=request.model,
+                choices=[Choice(message=ChoiceMessage(role="assistant", content="ok"))],
+                usage=UsageInfo(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            )
+
+        original = openai_routes_module._execute_chat_completion
+        openai_routes_module._execute_chat_completion = fake_execute_chat_completion
+        try:
+            req = ChatCompletionRequest(
+                model="catgpt-browser",
+                messages=[ChatMessage(role="user", content="Hello")],
+                stream=True,
+            )
+            _validate_chat_request(req)
+
+            async def _run_stream_test() -> bytes:
+                stream_response = await openai_routes_module._stream_chat_completion(req)
+                chunks = await _collect_stream(stream_response)
+                return b"".join(chunks)
+
+            body = asyncio.run(_run_stream_test())
+        finally:
+            openai_routes_module._execute_chat_completion = original
+
+        self.assertFalse(captured["stream"])
+        self.assertIn(b"chat.completion.chunk", body)
+        self.assertIn(b"[DONE]", body)
 
     def test_execute_responses_accepts_streaming_clients_without_streaming_browser(self) -> None:
         """Responses stream requests are executed as non-stream browser calls."""
