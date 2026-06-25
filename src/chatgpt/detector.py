@@ -967,6 +967,7 @@ async def _check_page_error(page: Page) -> str | None:
 
 async def _wait_for_copy_button_or_image(
     page: Page,
+    pre_copy_count: int,
     timeout_ms: int,
     previous_turn_signature: str | None = None,
 ) -> str | None:
@@ -974,7 +975,6 @@ async def _wait_for_copy_button_or_image(
     elapsed = 0.0
     poll_interval = Config.POLL_INTERVAL_MS / 1000
     heartbeat = 10
-    next_heartbeat = heartbeat
     first_snapshot_logged = False
 
     while elapsed * 1000 < timeout_ms:
@@ -1011,6 +1011,10 @@ async def _wait_for_copy_button_or_image(
             log.info(
                 f"Copy button detected on latest turn {signature}"
             )
+            return "copy"
+
+        if previous_turn_signature is None and await _count_copy_buttons(page) > pre_copy_count:
+            log.info("Response complete - copy button count increased")
             return "copy"
 
         if is_new_turn and snapshot.get("hasImage"):
