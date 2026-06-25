@@ -29,6 +29,7 @@ from src.chatgpt.detector import (
     get_latest_user_turn_signature,
     is_incomplete_response_text,
     capture_response_diagnostics,
+    _check_page_error,
 )
 from src.chatgpt.image_handler import extract_images_from_response
 from src.chatgpt.audio_handler import generate_read_aloud_audio
@@ -133,6 +134,8 @@ class ChatGPTClient:
         # Small pause after pasting (like a human reviewing before send)
         await random_delay(300, 600)
 
+        auto_submitted = False
+        sent = False
         if auto_submitted:
             log.info("ChatGPT auto-submitted after text entry — skipping send button click")
         else:
@@ -689,6 +692,10 @@ class ChatGPTClient:
     def _backend_events_snapshot(self) -> list[dict]:
         """Return recent backend events with small, serializable fields."""
         return list(self._recent_backend_events[-40:])
+
+    async def _detect_page_error(self) -> str | None:
+        """Return the current browser/page error state, if one is visible."""
+        return await _check_page_error(self._page)
 
     async def _wait_for_message_submission(
         self,

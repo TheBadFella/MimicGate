@@ -14,6 +14,33 @@ import unittest
 import unittest.mock
 from types import SimpleNamespace
 
+if "patchright" not in sys.modules:
+    patchright_mod = unittest.mock.MagicMock()
+    async_api_mod = unittest.mock.MagicMock()
+    async_api_mod.Page = object
+    async_api_mod.BrowserContext = object
+    async_api_mod.Playwright = object
+    async_api_mod.Frame = object
+    async_api_mod.Request = object
+    async_api_mod.Response = object
+
+    async def _fake_async_playwright():
+        return None
+
+    async_api_mod.async_playwright = _fake_async_playwright
+    sys.modules["patchright"] = patchright_mod
+    sys.modules["patchright.async_api"] = async_api_mod
+
+    impl_mod = unittest.mock.MagicMock()
+    errors_mod = unittest.mock.MagicMock()
+
+    class TargetClosedError(Exception):
+        pass
+
+    errors_mod.TargetClosedError = TargetClosedError
+    sys.modules["patchright._impl"] = impl_mod
+    sys.modules["patchright._impl._errors"] = errors_mod
+
 _MISSING_FASTAPI_MODULES = (
     "fastapi",
     "fastapi.exceptions",
@@ -309,13 +336,19 @@ class TestAppThreadDeletionOrdering(unittest.TestCase):
 
 
 class TestDeleteThreadMethod(unittest.TestCase):
-    """Tests for ChatGPTClient.delete_thread (method signature check)."""
+    """Tests for ChatGPTClient method signatures."""
 
     def test_method_exists(self):
         from src.chatgpt.client import ChatGPTClient
 
         self.assertTrue(hasattr(ChatGPTClient, "delete_thread"))
         self.assertTrue(callable(getattr(ChatGPTClient, "delete_thread", None)))
+
+    def test_detect_page_error_method_exists(self):
+        from src.chatgpt.client import ChatGPTClient
+
+        self.assertTrue(hasattr(ChatGPTClient, "_detect_page_error"))
+        self.assertTrue(callable(getattr(ChatGPTClient, "_detect_page_error", None)))
 
     def test_delete_thread_does_not_click_global_menu_fallback(self):
         from src.chatgpt.client import ChatGPTClient
