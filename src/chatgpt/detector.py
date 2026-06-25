@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from patchright.async_api import Page
+from patchright._impl._errors import TargetClosedError
 
 from src.browser.human import idle_mouse_movement
 from src.config import Config
@@ -935,9 +936,37 @@ async def wait_for_response_complete(
         return False
 
 
+async def _check_page_error(page: Page) -> str | None:
+    """Check if the page is showing an error state (DNS failure, crash, etc.).
+
+    Returns error description string if an error is detected, None otherwise.
+    """
+    try:
+        error = await page.evaluate(
+            """
+            () => {
+                // Chrome error pages
+                const body = document.body ? document.body.innerText : '';
+                if (body.includes('DNS_PROBE_FINISHED_NXDOMAIN')) return 'DNS_PROBE_FINISHED_NXDOMAIN';
+                if (body.includes('ERR_NAME_NOT_RESOLVED')) return 'ERR_NAME_NOT_RESOLVED';
+                if (body.includes('ERR_CONNECTION_REFUSED')) return 'ERR_CONNECTION_REFUSED';
+                if (body.includes('ERR_INTERNET_DISCONNECTED')) return 'ERR_INTERNET_DISCONNECTED';
+                if (body.includes('ERR_CONNECTION_TIMED_OUT')) return 'ERR_CONNECTION_TIMED_OUT';
+                // ChatGPT error states
+                if (body.includes('Something went wrong')) return 'ChatGPT_something_went_wrong';
+                if (body.includes("We're experiencing high demand")) return 'ChatGPT_high_demand';
+                if (document.title && document.title.includes('is not available')) return 'page_not_available';
+                return null;
+            }
+            """
+        )
+        return error
+    except Exception:
+        return None
+
+
 async def _wait_for_copy_button_or_image(
     page: Page,
-    pre_count: int,
     timeout_ms: int,
     previous_turn_signature: str | None = None,
 ) -> str | None:
@@ -945,19 +974,42 @@ async def _wait_for_copy_button_or_image(
     elapsed = 0.0
     poll_interval = Config.POLL_INTERVAL_MS / 1000
     heartbeat = 10
+    next_heartbeat = heartbeat
+    first_snapshot_logged = False
 
     while elapsed * 1000 < timeout_ms:
-        snapshot = await _latest_assistant_turn_snapshot(page)
+        try:
+            snapshot = await _latest_assistant_turn_snapshot(page)
+        except TargetClosedError:
+            log.error("Page/browser closed while waiting for response")
+            return None
+        except Exception as e:
+            log.warning(f"Snapshot failed ({type(e).__name__}): {e}")
+            await asyncio.sleep(poll_interval)
+            elapsed += poll_interval
+            continue
+
         signature = snapshot.get("signature")
         is_new_turn = previous_turn_signature is None or (
             isinstance(signature, str) and signature != previous_turn_signature
         )
 
-        if is_new_turn and snapshot.get("hasCopyButton"):
-            current_count = await _count_copy_buttons(page)
+        # Log the first snapshot for diagnostics
+        if not first_snapshot_logged and elapsed >= 2:
+            first_snapshot_logged = True
+            turn_text = (snapshot.get("text") or "")[:200]
+            all_turns = await _dump_all_turns(page)
             log.debug(
-                f"Copy button detected on latest turn {signature} "
-                f"(copy-buttons: {pre_count} -> {current_count})"
+                f"First snapshot at {int(elapsed)}s | "
+                f"prev_sig={previous_turn_signature} cur_sig={signature} "
+                f"is_new={is_new_turn} copy={snapshot.get('hasCopyButton')} "
+                f"text[:{len(turn_text)}]={turn_text!r}"
+            )
+            log.debug(f"All turns ({len(all_turns)}): {all_turns}")
+
+        if is_new_turn and snapshot.get("hasCopyButton"):
+            log.info(
+                f"Copy button detected on latest turn {signature}"
             )
             return "copy"
 
@@ -970,8 +1022,21 @@ async def _wait_for_copy_button_or_image(
             log.debug(f"Still waiting for copy button or image... ({int(elapsed)}s)")
             await idle_mouse_movement(page)
 
+            # Check for page-level errors every heartbeat to fail fast
+            page_error = await _check_page_error(page)
+            if page_error:
+                log.error(f"Page error detected while waiting: {page_error}")
+                return None
+
         await asyncio.sleep(poll_interval)
         elapsed += poll_interval
+
+    # Diagnostic: save screenshot on timeout
+    try:
+        await page.screenshot(path="logs/detector_timeout.png")
+        log.info("Saved timeout screenshot to logs/detector_timeout.png")
+    except Exception as e:
+        log.debug(f"Could not save timeout screenshot: {e}")
 
     log.warning(f"Neither copy button nor image found after {int(elapsed)}s")
     return None
@@ -1093,7 +1158,7 @@ async def extract_last_response_via_copy(
         click_result = await page.evaluate(_CLICK_LATEST_COPY_BUTTON_JS, previous_turn_signature)
 
         if isinstance(click_result, dict) and click_result.get("clicked"):
-            await asyncio.sleep(0.8)
+            await asyncio.sleep(0.3)
             content = await page.evaluate("navigator.clipboard.readText().catch(() => '')")
             if content and content.strip() and content.strip() != str(pre_clipboard).strip():
                 log.info(

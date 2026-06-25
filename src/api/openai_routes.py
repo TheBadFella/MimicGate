@@ -35,6 +35,7 @@ from src.api.openai_schemas import (
     ChoiceMessage,
     AudioInfo,
     FunctionCallInfo,
+    FunctionDefinition,
     ImageData,
     ImageGenerationRequest,
     ImagesResponse,
