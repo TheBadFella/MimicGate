@@ -18,8 +18,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -269,18 +267,21 @@ class BearerTokenMiddleware:
             await self.app(scope, receive, send)
             return
 
-        path = scope.get("path", "").encode() if isinstance(scope.get("path"), str) else scope.get("raw_path", b"")
-        # Also check the string path for comparison
         path_str = scope.get("path", "")
         if path_str in {"/docs", "/redoc", "/openapi.json", "/healthz"}:
             await self.app(scope, receive, send)
             return
 
         # Check Authorization header
-        auth_header = request.headers.get("authorization", "")
+        headers = {
+            key.decode("latin-1").lower(): value.decode("latin-1")
+            for key, value in scope.get("headers", [])
+        }
+        auth_header = headers.get("authorization", "")
         if Config.API_TOKEN_OPTIONAL and not auth_header:
             # Optional-auth mode: no header is allowed.
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
         if auth_header.startswith("Bearer "):
             provided = auth_header[7:].strip()
@@ -289,8 +290,10 @@ class BearerTokenMiddleware:
 
         expected = token.strip()
         if provided != expected:
-            log.warning(f"Auth failed from {request.client.host if request.client else 'unknown'}: invalid token")
-            return JSONResponse(
+            client = scope.get("client")
+            client_host = client[0] if isinstance(client, tuple) and client else "unknown"
+            log.warning(f"Auth failed from {client_host}: invalid token")
+            response = JSONResponse(
                 status_code=401,
                 content={
                     "error": {
