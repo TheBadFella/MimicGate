@@ -47,6 +47,17 @@ Format:
 public_id=Primary UI Label|Alternate UI Label|Another Alternate
 ```
 
+`CHATGPT_MODEL_SETTINGS` maps model ids or UI labels to the extra setting shown
+beside configurable picker rows such as `Thinking` and `Pro`:
+
+```env
+CHATGPT_MODEL_SETTINGS=gpt-5.5-thinking=Extended,gpt-5.5-pro=Standard
+```
+
+The default configuration exposes both `gpt-5.5-thinking` and `gpt-5.5-pro`,
+with both set to `Standard`. Use `Standard` or `Extended` exactly as shown in
+the ChatGPT picker.
+
 If a request uses `catgpt-browser`, CatGPT keeps the current browser-selected
 model unless `CHATGPT_DEFAULT_MODEL` is set:
 

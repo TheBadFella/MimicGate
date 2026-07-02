@@ -17,9 +17,11 @@ class ModelRegistryTests(unittest.TestCase):
     def test_default_models_include_pro_composer_latest_alias(self) -> None:
         self.assertIn("gpt-5.5", model_registry.list_public_chat_models())
         self.assertIn("gpt-5.5-thinking", model_registry.list_public_chat_models())
+        self.assertIn("gpt-5.5-pro", model_registry.list_public_chat_models())
         self.assertIn("gpt-5.1", model_registry.list_public_chat_models())
         self.assertTrue(model_registry.is_supported_chat_model("Instant"))
         self.assertTrue(model_registry.is_supported_chat_model("Thinking"))
+        self.assertTrue(model_registry.is_supported_chat_model("Pro"))
         self.assertTrue(model_registry.is_supported_chat_model("Latest 5.5"))
         self.assertTrue(model_registry.is_supported_chat_model("5.5"))
         self.assertTrue(model_registry.is_supported_chat_model("GPT-5.5"))
@@ -31,6 +33,26 @@ class ModelRegistryTests(unittest.TestCase):
             assert resolved is not None
             self.assertEqual(resolved.ui_label, "Instant")
             self.assertEqual(resolved.alternate_labels, ("Latest 5.5", "5.5", "GPT-5.5"))
+
+    def test_model_settings_attach_to_public_id_or_ui_label(self) -> None:
+        with patch.object(
+            model_registry.Config,
+            "CHATGPT_MODEL_ALIASES",
+            "gpt-5.5-thinking=Thinking|5.5 Thinking,gpt-5.5-pro=Pro",
+        ), patch.object(
+            model_registry.Config,
+            "CHATGPT_MODEL_SETTINGS",
+            "gpt-5.5-thinking=Extended,Pro=Standard",
+        ):
+            thinking = model_registry.resolve_requested_model("gpt-5.5-thinking")
+            pro = model_registry.resolve_requested_model("gpt-5.5-pro")
+
+        self.assertIsNotNone(thinking)
+        self.assertIsNotNone(pro)
+        assert thinking is not None
+        assert pro is not None
+        self.assertEqual(thinking.setting_label, "Extended")
+        self.assertEqual(pro.setting_label, "Standard")
 
     def test_supported_model_accepts_public_id_and_ui_label(self) -> None:
         with patch.object(model_registry.Config, "CHATGPT_MODEL_ALIASES", "gpt-4.1-mini=GPT-4.1 mini"):

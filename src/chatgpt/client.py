@@ -50,6 +50,7 @@ class ChatGPTClient:
         self._page = page
         self._last_model_label = ""
         self._last_model_version_label = ""
+        self._last_model_setting_by_key: dict[str, str] = {}
         self._unavailable_model_keys: set[str] = set()
         self._recent_backend_events: list[dict] = []
         self._wire_backend_event_logger()
@@ -307,6 +308,7 @@ class ChatGPTClient:
             log.debug(f"No explicit browser model switch needed for request model={requested_model!r}")
             return
         target_version_label = self._model_version_label_for_option(target)
+        target_setting_label = self._model_setting_label_for_option(target)
         unavailable_keys = {
             key
             for key in (
@@ -326,7 +328,10 @@ class ChatGPTClient:
 
         current_label = await self._detect_current_model_label()
         if current_label and self._label_matches_model_option(current_label, target):
-            if not self._model_version_needs_configure(target, target_version_label):
+            if (
+                not self._model_version_needs_configure(target, target_version_label)
+                and self._model_setting_is_current(target, target_setting_label)
+            ):
                 self._last_model_label = target.ui_label
                 log.debug(f"ChatGPT model already selected: {target.ui_label}")
                 return
@@ -386,6 +391,18 @@ class ChatGPTClient:
                 return
             self._last_model_version_label = target_version_label
 
+        if target_setting_label and not self._model_setting_is_current(target, target_setting_label):
+            setting_configured = await self._ensure_model_setting(target, target_setting_label)
+            if not setting_configured:
+                visible_options = await self._collect_visible_model_options()
+                detail = f"Could not configure ChatGPT model setting '{target.ui_label} -> {target_setting_label}'"
+                if visible_options:
+                    detail = f"{detail}; visible options included: {', '.join(visible_options[:12])}"
+                await self._dismiss_model_picker()
+                self._handle_model_switch_failure(detail)
+                return
+            self._last_model_setting_by_key[self._model_setting_cache_key(target)] = target_setting_label
+
         if self._is_configure_only_version_option(target, target_version_label):
             confirmed = self._model_version_is_current(target_version_label)
             if not confirmed:
@@ -394,14 +411,19 @@ class ChatGPTClient:
                 )
                 return
         else:
-            confirmed = await self._wait_for_model_label(target.ui_labels)
+            confirmation_labels = self._model_confirmation_labels(target, target_setting_label)
+            confirmed = await self._wait_for_model_label(confirmation_labels)
             if not confirmed:
                 current_after = await self._detect_current_model_label()
-                if not self._label_matches_model_option(current_after, target):
+                if normalize_model_token(current_after) not in {
+                    normalize_model_token(label) for label in confirmation_labels
+                }:
                     await self._dismiss_model_picker()
                     await asyncio.sleep(1.0)
                     current_after = await self._detect_current_model_label()
-                    if not self._label_matches_model_option(current_after, target):
+                    if normalize_model_token(current_after) not in {
+                        normalize_model_token(label) for label in confirmation_labels
+                    }:
                         self._handle_model_switch_failure(
                             f"Model switch to '{target.ui_label}' could not be confirmed"
                         )
@@ -411,6 +433,8 @@ class ChatGPTClient:
         self._last_model_label = target.ui_label
         if target_version_label:
             self._last_model_version_label = target_version_label
+        if target_setting_label:
+            self._last_model_setting_by_key[self._model_setting_cache_key(target)] = target_setting_label
         log.info(f"Model switched to {target.ui_label}")
 
     # ── Navigation ──────────────────────────────────────────────
@@ -907,7 +931,11 @@ class ChatGPTClient:
 
     async def _detect_current_model_label(self) -> str:
         """Best-effort detection of the currently selected ChatGPT model label."""
-        known_labels = [label for option in list_switchable_models() for label in option.ui_labels]
+        known_labels = [
+            label
+            for option in list_switchable_models()
+            for label in self._model_confirmation_labels(option, self._model_setting_label_for_option(option))
+        ]
         if self._last_model_label and self._last_model_label not in known_labels:
             known_labels.append(self._last_model_label)
         if not known_labels:
@@ -1003,6 +1031,37 @@ class ChatGPTClient:
         target = normalize_model_token(target_version_label)
         current = normalize_model_token(self._last_model_version_label)
         return bool(target and current and target == current)
+
+    def _model_setting_label_for_option(self, option) -> str:
+        """Return the configured Standard/Extended picker setting for a model option."""
+        return (getattr(option, "setting_label", "") or "").strip()
+
+    def _model_setting_cache_key(self, option) -> str:
+        """Return the stable key used to remember a model's selected picker setting."""
+        return normalize_model_token(getattr(option, "public_id", "") or getattr(option, "ui_label", ""))
+
+    def _model_setting_is_current(self, option, target_setting_label: str) -> bool:
+        """Return whether the requested model setting was already selected."""
+        target = normalize_model_token(target_setting_label)
+        if not target:
+            return True
+        current = normalize_model_token(self._last_model_setting_by_key.get(self._model_setting_cache_key(option), ""))
+        return bool(current and current == target)
+
+    def _model_confirmation_labels(self, option, target_setting_label: str = "") -> tuple[str, ...]:
+        """Return visible labels that can confirm a successful model switch."""
+        labels = list(getattr(option, "ui_labels", ()) or ())
+        if target_setting_label:
+            labels.insert(0, target_setting_label)
+        seen: set[str] = set()
+        result: list[str] = []
+        for label in labels:
+            normalized = normalize_model_token(label)
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            result.append(label)
+        return tuple(result)
 
     def _model_version_needs_configure(self, option, target_version_label: str) -> bool:
         """
@@ -1162,6 +1221,8 @@ class ChatGPTClient:
             "Instant",
             "Thinking",
             "Latest",
+            "Standard",
+            "Extended",
             "Configure",
             "model",
             "GPT",
@@ -1363,6 +1424,153 @@ class ChatGPTClient:
             if await self._click_menu_text(target_label):
                 return True
         return False
+
+    async def _ensure_model_setting(self, option, setting_label: str) -> bool:
+        """Open a model row's settings submenu and select Standard/Extended."""
+        await self._dismiss_model_picker()
+        current_label = await self._detect_current_model_label()
+        opened = await self._open_model_picker(option.ui_label, current_label=current_label)
+        if not opened:
+            return False
+
+        await asyncio.sleep(0.3)
+        settings_opened = await self._click_model_setting_control(option.ui_labels)
+        if not settings_opened:
+            return False
+
+        await asyncio.sleep(0.3)
+        return await self._click_model_option((setting_label,))
+
+    async def _click_model_setting_control(self, target_labels: tuple[str, ...]) -> bool:
+        """Click the settings control beside a Thinking/Pro model row."""
+        labels = [label for label in target_labels if (label or "").strip()]
+        if not labels:
+            return False
+
+        row = await self._page.evaluate(
+            r"""
+            (targetLabels) => {
+                const normalize = (value) =>
+                    (value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+                const wanted = (targetLabels || []).map(normalize).filter(Boolean);
+                if (!wanted.length) return null;
+                const isVisible = (el) => {
+                    if (!el) return false;
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    return rect.width > 0 &&
+                        rect.height > 0 &&
+                        style.visibility !== "hidden" &&
+                        style.display !== "none";
+                };
+                const textFor = (el) => [
+                    el.innerText || "",
+                    el.textContent || "",
+                    el.getAttribute("aria-label") || "",
+                    el.getAttribute("title") || "",
+                ].join(" ");
+                const selectors = [
+                    "[role='menuitemradio']",
+                    "[role='menuitem']",
+                    "[data-testid^='model-switcher']",
+                    "[data-radix-collection-item]",
+                ];
+                const rows = [];
+                for (const selector of selectors) {
+                    for (const el of document.querySelectorAll(selector)) {
+                        if (!isVisible(el)) continue;
+                        const normalizedText = normalize(textFor(el));
+                        if (!normalizedText || !wanted.some((label) => normalizedText.includes(label))) continue;
+                        const rect = el.getBoundingClientRect();
+                        if (rect.width < 40 || rect.height < 20 || rect.top > window.innerHeight - 24) continue;
+                        rows.push({ el, rect });
+                    }
+                }
+                rows.sort((a, b) => a.rect.top - b.rect.top || a.rect.left - b.rect.left);
+                if (rows[0]) {
+                    const rect = rows[0].rect;
+                    return {
+                        left: rect.left,
+                        top: rect.top,
+                        width: rect.width,
+                        height: rect.height,
+                        x: Math.max(rect.left + rect.width - 18, rect.left + rect.width * 0.75),
+                        y: rect.top + rect.height / 2,
+                    };
+                }
+                return null;
+            }
+            """,
+            labels,
+        )
+        if not isinstance(row, dict) or "x" not in row or "y" not in row:
+            return False
+
+        await self._page.mouse.move(float(row["x"]), float(row["y"]), steps=8)
+        await asyncio.sleep(0.25)
+
+        candidate = await self._page.evaluate(
+            r"""
+            (row) => {
+                const normalize = (value) =>
+                    (value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+                const isVisible = (el) => {
+                    if (!el) return false;
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    return rect.width > 0 &&
+                        rect.height > 0 &&
+                        style.visibility !== "hidden" &&
+                        style.display !== "none";
+                };
+                const textFor = (el) => [
+                    el.innerText || "",
+                    el.textContent || "",
+                    el.getAttribute("aria-label") || "",
+                    el.getAttribute("title") || "",
+                    el.getAttribute("data-testid") || "",
+                ].join(" ");
+                const rowRight = row.left + row.width;
+                const rowBottom = row.top + row.height;
+                const controls = Array.from(document.querySelectorAll("button,[role='button'],[aria-label],[title],[data-testid]"))
+                    .filter((el) => {
+                        if (!isVisible(el)) return false;
+                        const rect = el.getBoundingClientRect();
+                        const centerY = rect.top + rect.height / 2;
+                        return centerY >= row.top - 6 &&
+                            centerY <= rowBottom + 6 &&
+                            rect.left >= row.left + row.width * 0.45 &&
+                            rect.left <= rowRight + 48;
+                    });
+                const scored = [];
+                for (const control of controls) {
+                    const rect = control.getBoundingClientRect();
+                    const text = normalize(textFor(control));
+                    let score = 0;
+                    if (/settings|setting|customize|preferences|options|sliders|model/.test(text)) score += 80;
+                    if (rect.width <= 48 && rect.height <= 48) score += 25;
+                    if (rect.left >= row.left + row.width * 0.6) score += 25;
+                    if (score) {
+                        scored.push({
+                            score,
+                            x: rect.left + rect.width / 2,
+                            y: rect.top + rect.height / 2,
+                        });
+                    }
+                }
+                scored.sort((a, b) => b.score - a.score);
+                return scored[0] || null;
+            }
+            """,
+            row,
+        )
+        if not isinstance(candidate, dict) or "x" not in candidate or "y" not in candidate:
+            return False
+
+        await self._page.mouse.move(float(candidate["x"]), float(candidate["y"]), steps=4)
+        await asyncio.sleep(0.05)
+        await self._page.mouse.click(float(candidate["x"]), float(candidate["y"]))
+        return True
 
     async def _select_model_from_configure_dialog(
         self,
@@ -1666,7 +1874,8 @@ class ChatGPTClient:
     def _label_matches_model_option(self, label: str, option) -> bool:
         """Return whether a visible UI label matches a configured model option."""
         normalized = normalize_model_token(label)
-        return bool(normalized and normalized in {normalize_model_token(item) for item in option.ui_labels})
+        labels = self._model_confirmation_labels(option, self._model_setting_label_for_option(option))
+        return bool(normalized and normalized in {normalize_model_token(item) for item in labels})
 
     async def _upload_files(self, file_paths: list[str]) -> None:
         """

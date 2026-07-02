@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime
 import os
+import platform
 import random
 import socket
 from pathlib import Path
@@ -19,6 +20,13 @@ from src.browser.stealth import apply_stealth
 from src.log import setup_logging
 
 log = setup_logging("browser")
+
+
+def _is_docker_runtime() -> bool:
+    """Return whether Chrome is running inside the Docker/Xvfb environment."""
+    if os.path.exists("/.dockerenv"):
+        return True
+    return platform.system() != "Windows" and os.environ.get("DISPLAY") == ":99"
 
 
 def _resolve_domains_for_chrome() -> str:
@@ -34,8 +42,8 @@ def _resolve_domains_for_chrome() -> str:
 
     Returns empty string if all resolutions fail.
     """
-    # Only needed in Docker (check for /.dockerenv or DISPLAY=:99)
-    if not os.path.exists("/.dockerenv") and os.environ.get("DISPLAY") != ":99":
+    # Only needed in Docker (check for /.dockerenv or DISPLAY=:99).
+    if not _is_docker_runtime():
         return ""
 
     common_domains = [
@@ -222,7 +230,7 @@ class BrowserManager:
         log.info("Launching browser...")
         self._playwright = await async_playwright().start()
 
-        in_docker = os.path.exists("/.dockerenv") or os.environ.get("DISPLAY") == ":99"
+        in_docker = _is_docker_runtime()
         display_width = _env_int("DISPLAY_WIDTH", Config.VIEWPORT_WIDTH)
         display_height = _env_int("DISPLAY_HEIGHT", Config.VIEWPORT_HEIGHT)
 
@@ -235,7 +243,6 @@ class BrowserManager:
             width = Config.VIEWPORT_WIDTH + random.randint(-20, 20)
             height = Config.VIEWPORT_HEIGHT + random.randint(-20, 20)
 
-        # Try real Chrome first, fall back to bundled Chromium
         chrome_args = [
             "--disable-blink-features=AutomationControlled",
             "--no-first-run",
@@ -246,6 +253,10 @@ class BrowserManager:
             # via --host-resolver-rules (see _resolve_domains_for_chrome).
             "--disable-features=AsyncDns,DnsOverHttps",
             "--dns-prefetch-disable",
+            # Local system extensions/ad blockers can break OpenAI auth flows
+            # even with a fresh user-data-dir.
+            "--disable-extensions",
+            "--disable-component-extensions-with-background-pages",
         ]
 
         # Docker-specific flags
@@ -278,13 +289,22 @@ class BrowserManager:
         else:
             launch_kwargs["viewport"] = {"width": width, "height": height}
 
+        browser_channel = Config.BROWSER_CHANNEL
         try:
-            self._context = await self._playwright.chromium.launch_persistent_context(
-                channel="chrome", **launch_kwargs
-            )
-            log.info("Launched with real Chrome")
+            if browser_channel in {"", "chromium", "bundled"}:
+                self._context = await self._playwright.chromium.launch_persistent_context(
+                    **launch_kwargs
+                )
+                log.info("Launched with bundled Chromium")
+            else:
+                self._context = await self._playwright.chromium.launch_persistent_context(
+                    channel=browser_channel, **launch_kwargs
+                )
+                log.info("Launched with browser channel: %s", browser_channel)
         except Exception:
-            log.info("Real Chrome not found, using bundled Chromium")
+            if browser_channel in {"", "chromium", "bundled"}:
+                raise
+            log.info("Browser channel %r not available, using bundled Chromium", browser_channel)
             self._context = await self._playwright.chromium.launch_persistent_context(
                 **launch_kwargs
             )

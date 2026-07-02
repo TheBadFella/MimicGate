@@ -28,6 +28,7 @@ class BrowserModelOption:
     public_id: str
     ui_label: str
     alternate_labels: tuple[str, ...] = ()
+    setting_label: str = ""
 
     @property
     def ui_labels(self) -> tuple[str, ...]:
@@ -75,9 +76,52 @@ def _parse_model_aliases(raw: str) -> list[BrowserModelOption]:
     return options
 
 
+def _parse_model_settings(raw: str) -> dict[str, str]:
+    """Parse model setting mappings like `gpt-5.5-thinking=Extended,Pro=Standard`."""
+    settings: dict[str, str] = {}
+    for chunk in (raw or "").split(","):
+        item = chunk.strip()
+        if not item or "=" not in item:
+            continue
+        model_key, setting_label = item.split("=", 1)
+        normalized = normalize_model_token(model_key)
+        setting_label = setting_label.strip()
+        if normalized and setting_label:
+            settings[normalized] = setting_label
+    return settings
+
+
+def _apply_model_settings(options: list[BrowserModelOption], raw_settings: str) -> list[BrowserModelOption]:
+    """Attach optional picker setting labels to configured model options."""
+    settings = _parse_model_settings(raw_settings)
+    if not settings:
+        return options
+
+    configured: list[BrowserModelOption] = []
+    for option in options:
+        lookup_keys = [
+            normalize_model_token(option.public_id),
+            *(normalize_model_token(label) for label in option.ui_labels),
+        ]
+        setting_label = next((settings[key] for key in lookup_keys if key in settings), "")
+        if not setting_label:
+            configured.append(option)
+            continue
+        configured.append(
+            BrowserModelOption(
+                public_id=option.public_id,
+                ui_label=option.ui_label,
+                alternate_labels=option.alternate_labels,
+                setting_label=setting_label,
+            )
+        )
+    return configured
+
+
 def list_switchable_models() -> list[BrowserModelOption]:
     """Return the configured explicit browser-switchable models."""
-    return _parse_model_aliases(Config.CHATGPT_MODEL_ALIASES)
+    options = _parse_model_aliases(Config.CHATGPT_MODEL_ALIASES)
+    return _apply_model_settings(options, Config.CHATGPT_MODEL_SETTINGS)
 
 
 def list_public_chat_models() -> list[str]:

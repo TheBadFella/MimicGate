@@ -134,6 +134,35 @@ class _ConfigureOnlyClient(ChatGPTClient):
         return None
 
 
+class _SettingClient(ChatGPTClient):
+    def __init__(self, page) -> None:
+        super().__init__(page)
+        self.setting_calls: list[tuple[str, str]] = []
+
+    async def _detect_current_model_label(self) -> str:
+        return "Instant"
+
+    async def _open_model_picker(self, _target_label: str, current_label: str = "") -> bool:
+        return True
+
+    async def _click_model_option(self, _target_labels: tuple[str, ...]) -> bool:
+        return True
+
+    async def _ensure_model_setting(self, option, setting_label: str) -> bool:
+        self.setting_calls.append((option.public_id, setting_label))
+        return True
+
+    async def _ensure_configured_model_version(self, target_version_label: str) -> bool:
+        self._last_model_version_label = target_version_label
+        return True
+
+    async def _wait_for_model_label(self, _target_labels: tuple[str, ...]) -> bool:
+        return True
+
+    async def _dismiss_model_picker(self) -> None:
+        return None
+
+
 class ChatGPTClientModelSwitchTests(unittest.IsolatedAsyncioTestCase):
     async def test_missing_model_option_falls_back_and_caches_when_not_strict(self) -> None:
         page = _FakePage(open_picker=True, visible_options=["GPT-5", "o3"])
@@ -187,6 +216,28 @@ class ChatGPTClientModelSwitchTests(unittest.IsolatedAsyncioTestCase):
         labels = client._configure_version_click_labels(("Instant", "Latest 5.5", "GPT-5.5"), "5.5")
 
         self.assertEqual(labels[:3], ("5.5", "Instant", "Latest 5.5"))
+
+    async def test_model_setting_is_applied_for_configured_thinking_mode(self) -> None:
+        page = _FakePage(open_picker=True)
+        client = _SettingClient(page)  # type: ignore[arg-type]
+
+        with patch.object(
+            Config,
+            "CHATGPT_MODEL_ALIASES",
+            "gpt-5.5-thinking=Thinking|5.5 Thinking",
+        ), patch.object(
+            Config,
+            "CHATGPT_MODEL_SETTINGS",
+            "gpt-5.5-thinking=Extended",
+        ), patch.object(
+            Config,
+            "CHATGPT_MODEL_SWITCH_STRICT",
+            True,
+        ), patch("src.chatgpt.client.asyncio.sleep", _noop_sleep):
+            await client.ensure_model("gpt-5.5-thinking")
+
+        self.assertEqual(client.setting_calls, [("gpt-5.5-thinking", "Extended")])
+        self.assertEqual(client._last_model_setting_by_key["gpt55thinking"], "Extended")
 
     async def test_model_picker_fallback_clicks_version_labeled_composer_button(self) -> None:
         if async_playwright is None:
