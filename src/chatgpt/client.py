@@ -391,9 +391,10 @@ class ChatGPTClient:
                 return
             self._last_model_version_label = target_version_label
 
+        setting_applied = False
         if target_setting_label and not self._model_setting_is_current(target, target_setting_label):
             setting_configured = await self._ensure_model_setting(target, target_setting_label)
-            if not setting_configured:
+            if setting_configured is False:
                 visible_options = await self._collect_visible_model_options()
                 detail = f"Could not configure ChatGPT model setting '{target.ui_label} -> {target_setting_label}'"
                 if visible_options:
@@ -401,7 +402,9 @@ class ChatGPTClient:
                 await self._dismiss_model_picker()
                 self._handle_model_switch_failure(detail)
                 return
-            self._last_model_setting_by_key[self._model_setting_cache_key(target)] = target_setting_label
+            if setting_configured:
+                self._last_model_setting_by_key[self._model_setting_cache_key(target)] = target_setting_label
+                setting_applied = True
 
         if self._is_configure_only_version_option(target, target_version_label):
             confirmed = self._model_version_is_current(target_version_label)
@@ -433,7 +436,7 @@ class ChatGPTClient:
         self._last_model_label = target.ui_label
         if target_version_label:
             self._last_model_version_label = target_version_label
-        if target_setting_label:
+        if target_setting_label and (setting_applied or self._model_setting_is_current(target, target_setting_label)):
             self._last_model_setting_by_key[self._model_setting_cache_key(target)] = target_setting_label
         log.info(f"Model switched to {target.ui_label}")
 
@@ -1053,6 +1056,20 @@ class ChatGPTClient:
         labels = list(getattr(option, "ui_labels", ()) or ())
         if target_setting_label:
             labels.insert(0, target_setting_label)
+        return self._dedupe_model_labels(labels)
+
+    def _model_setting_control_labels(self, option) -> tuple[str, ...]:
+        """Return row labels to use when opening a model row's settings control."""
+        labels = list(getattr(option, "ui_labels", ()) or ())
+        public_id = (getattr(option, "public_id", "") or "").lower()
+        if public_id.endswith("-thinking"):
+            labels.insert(0, "Thinking")
+        elif public_id.endswith("-pro"):
+            labels.insert(0, "Pro")
+        return self._dedupe_model_labels(labels)
+
+    def _dedupe_model_labels(self, labels: list[str] | tuple[str, ...]) -> tuple[str, ...]:
+        """Return labels in order with normalized duplicates removed."""
         seen: set[str] = set()
         result: list[str] = []
         for label in labels:
@@ -1425,7 +1442,7 @@ class ChatGPTClient:
                 return True
         return False
 
-    async def _ensure_model_setting(self, option, setting_label: str) -> bool:
+    async def _ensure_model_setting(self, option, setting_label: str) -> bool | None:
         """Open a model row's settings submenu and select Standard/Extended."""
         await self._dismiss_model_picker()
         current_label = await self._detect_current_model_label()
@@ -1434,7 +1451,71 @@ class ChatGPTClient:
             return False
 
         await asyncio.sleep(0.3)
-        settings_opened = await self._click_model_setting_control(option.ui_labels)
+        settings_opened = await self._click_model_setting_control(self._model_setting_control_labels(option))
+        if not settings_opened:
+            target_version_label = self._model_version_label_for_option(option)
+            if target_version_label:
+                configured = await self._ensure_configured_model_setting(option, setting_label, target_version_label)
+                if configured:
+                    return True
+                current_label = await self._detect_current_model_label()
+                if self._label_matches_model_option(current_label, option):
+                    log.warning(
+                        "ChatGPT model setting '%s -> %s' was not visible; continuing with selected model",
+                        option.ui_label,
+                        setting_label,
+                    )
+                    return None
+                return False
+            return False
+
+        await asyncio.sleep(0.3)
+        if await self._click_model_option((setting_label,)):
+            return True
+
+        target_version_label = self._model_version_label_for_option(option)
+        if target_version_label:
+            configured = await self._ensure_configured_model_setting(option, setting_label, target_version_label)
+            if configured:
+                return True
+            current_label = await self._detect_current_model_label()
+            if self._label_matches_model_option(current_label, option):
+                log.warning(
+                    "ChatGPT model setting '%s -> %s' was not visible; continuing with selected model",
+                    option.ui_label,
+                    setting_label,
+                )
+                return None
+
+        return False
+
+    async def _ensure_configured_model_setting(
+        self,
+        option,
+        setting_label: str,
+        target_version_label: str,
+    ) -> bool:
+        """Open Configure and set Standard/Extended for a versioned Thinking/Pro row."""
+        await self._dismiss_model_picker()
+        current_label = await self._detect_current_model_label()
+        opened = await self._open_model_picker(option.ui_label, current_label=current_label)
+        if not opened:
+            return False
+
+        await asyncio.sleep(0.3)
+        configure_opened = await self._click_menu_text("Configure")
+        if not configure_opened:
+            return False
+
+        await asyncio.sleep(0.5)
+        dropdown_opened = await self._click_configure_model_combobox()
+        if dropdown_opened:
+            await asyncio.sleep(0.3)
+            version_labels = self._configure_version_click_labels(option.ui_labels, target_version_label)
+            await self._click_model_option(version_labels)
+            await asyncio.sleep(0.4)
+
+        settings_opened = await self._click_model_setting_control(self._model_setting_control_labels(option))
         if not settings_opened:
             return False
 
@@ -1472,6 +1553,7 @@ class ChatGPTClient:
                 const selectors = [
                     "[role='menuitemradio']",
                     "[role='menuitem']",
+                    "[role='radio']",
                     "[data-testid^='model-switcher']",
                     "[data-radix-collection-item]",
                 ];
@@ -1600,7 +1682,8 @@ class ChatGPTClient:
 
             await asyncio.sleep(0.4)
             radio_selected = await self._click_configure_radio_for_version(
-                target_version_label or version_labels[0]
+                target_version_label or version_labels[0],
+                target_labels=target_labels,
             )
             return radio_selected or version_selected
 
@@ -1697,6 +1780,29 @@ class ChatGPTClient:
                         });
                     }
                 }
+                if (!candidates.length) {
+                    const dialogs = Array.from(document.querySelectorAll("[role='dialog'], [aria-modal='true']"))
+                        .filter(isVisible);
+                    for (const dialog of dialogs) {
+                        const rows = Array.from(dialog.querySelectorAll("div"))
+                            .filter((el) => isVisible(el));
+                        for (const el of rows) {
+                            const rawText = (el.innerText || el.textContent || "").trim();
+                            const text = normalize(rawText);
+                            if (!text.includes("model")) continue;
+                            if (!/(5[0-9]|o[0-9]+)/.test(text)) continue;
+                            const rect = el.getBoundingClientRect();
+                            if (rect.height > 70 || rect.width < 120) continue;
+                            candidates.push({
+                                score: 70,
+                                top: rect.top,
+                                left: rect.left,
+                                x: rect.left + rect.width - 28,
+                                y: rect.top + rect.height / 2,
+                            });
+                        }
+                    }
+                }
                 candidates.sort((a, b) => b.score - a.score || a.top - b.top || b.left - a.left);
                 const best = candidates[0];
                 return best || null;
@@ -1715,15 +1821,23 @@ class ChatGPTClient:
         await self._page.mouse.click(float(dropdown_candidate["x"]), float(dropdown_candidate["y"]))
         return True
 
-    async def _click_configure_radio_for_version(self, target_version_token: str) -> bool:
-        """Click a Configure dialog radio row that explicitly contains a model version."""
+    async def _click_configure_radio_for_version(
+        self,
+        target_version_token: str,
+        target_labels: tuple[str, ...] = (),
+    ) -> bool:
+        """Click a Configure dialog radio row matching the requested mode/version."""
         candidate = await self._page.evaluate(
             r"""
-            (targetVersionToken) => {
+            ({ targetVersionToken, targetLabels }) => {
                 const normalize = (value) =>
                     (value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
                 const target = normalize(targetVersionToken);
                 if (!target) return null;
+                const labels = (targetLabels || []).map(normalize).filter(Boolean);
+                const wantsThinking = labels.some((label) => label.includes("thinking"));
+                const wantsPro = labels.some((label) => label.includes("pro"));
+                const wantsInstant = labels.some((label) => label.includes("instant"));
                 const isVisible = (el) => {
                     if (!el) return false;
                     const rect = el.getBoundingClientRect();
@@ -1742,20 +1856,32 @@ class ChatGPTClient:
                         el.textContent || "",
                         el.getAttribute("aria-label") || "",
                     ].join(" ");
-                    if (!normalize(text).includes(target)) continue;
+                    const normalizedText = normalize(text);
+                    if (!normalizedText.includes(target)) continue;
+                    let score = 10;
+                    if (wantsThinking && normalizedText.includes("thinking")) score += 100;
+                    if (wantsPro && normalizedText.includes("pro")) score += 100;
+                    if (wantsInstant && normalizedText.includes("instant")) score += 100;
+                    if (!wantsThinking && !wantsPro && !wantsInstant && normalizedText.includes("instant")) {
+                        score += 40;
+                    }
                     const rect = el.getBoundingClientRect();
                     matches.push({
+                        score,
                         top: rect.top,
                         left: rect.left,
                         x: rect.left + rect.width / 2,
                         y: rect.top + rect.height / 2,
                     });
                 }
-                matches.sort((a, b) => a.top - b.top || a.left - b.left);
+                matches.sort((a, b) => b.score - a.score || a.top - b.top || a.left - b.left);
                 return matches[0] || null;
             }
             """,
-            target_version_token,
+            {
+                "targetVersionToken": target_version_token,
+                "targetLabels": list(target_labels),
+            },
         )
         if not isinstance(candidate, dict) or "x" not in candidate or "y" not in candidate:
             return False

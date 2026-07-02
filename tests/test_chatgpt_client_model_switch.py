@@ -198,16 +198,16 @@ class ChatGPTClientModelSwitchTests(unittest.IsolatedAsyncioTestCase):
         page = _FakePage(open_picker=True)
         client = _ConfigureOnlyClient(page)  # type: ignore[arg-type]
 
-        with patch.object(Config, "CHATGPT_MODEL_ALIASES", "gpt-5.2=5.2|GPT-5.2"), patch.object(
+        with patch.object(Config, "CHATGPT_MODEL_ALIASES", "gpt-5.4=5.4|GPT-5.4"), patch.object(
             Config,
             "CHATGPT_MODEL_SWITCH_STRICT",
             True,
         ), patch("src.chatgpt.client.asyncio.sleep", _noop_sleep):
-            await client.ensure_model("gpt-5.2")
+            await client.ensure_model("gpt-5.4")
 
-        self.assertEqual(client.configure_calls, [(("5.2", "GPT-5.2"), "5.2")])
-        self.assertEqual(client._last_model_label, "5.2")
-        self.assertEqual(client._last_model_version_label, "5.2")
+        self.assertEqual(client.configure_calls, [(("5.4", "GPT-5.4"), "5.4")])
+        self.assertEqual(client._last_model_label, "5.4")
+        self.assertEqual(client._last_model_version_label, "5.4")
         self.assertEqual(client.wait_for_label_calls, 0)
 
     def test_configure_version_click_labels_prioritize_dotted_version(self) -> None:
@@ -216,6 +216,125 @@ class ChatGPTClientModelSwitchTests(unittest.IsolatedAsyncioTestCase):
         labels = client._configure_version_click_labels(("Instant", "Latest 5.5", "GPT-5.5"), "5.5")
 
         self.assertEqual(labels[:3], ("5.5", "Instant", "Latest 5.5"))
+
+    def test_model_setting_control_labels_prefer_mode_row(self) -> None:
+        client = ChatGPTClient(_FakePage())  # type: ignore[arg-type]
+        option = types.SimpleNamespace(
+            public_id="gpt-5.4-thinking",
+            ui_labels=("Thinking 5.4", "5.4 Thinking", "GPT-5.4 Thinking"),
+        )
+
+        labels = client._model_setting_control_labels(option)
+
+        self.assertEqual(labels[:2], ("Thinking", "Thinking 5.4"))
+
+    async def test_model_setting_control_clicks_generic_thinking_row(self) -> None:
+        if async_playwright is None:
+            self.skipTest("patchright is not installed")
+
+        playwright_context = async_playwright()
+        playwright = await playwright_context.__aenter__()
+        try:
+            try:
+                browser = await playwright.chromium.launch(headless=True)
+            except Exception as exc:
+                self.skipTest(f"browser runtime is not available: {exc}")
+
+            try:
+                page = await (await browser.new_context()).new_page()
+                await page.set_content(
+                    """
+                    <!doctype html>
+                    <style>
+                      [role=menu] { position: relative; width: 220px; padding: 8px; }
+                      [role=menuitemradio] {
+                        position: relative;
+                        width: 180px;
+                        height: 32px;
+                        padding: 6px 40px 6px 10px;
+                      }
+                      button { position: absolute; right: 6px; top: 5px; width: 26px; height: 24px; }
+                    </style>
+                    <div role="menu">
+                      <div role="menuitemradio">Instant</div>
+                      <div role="menuitemradio">Thinking<button aria-label="Settings"></button></div>
+                      <div role="menuitemradio">Pro<button aria-label="Settings"></button></div>
+                    </div>
+                    """
+                )
+                await page.evaluate(
+                    """
+                    () => {
+                      window.clickedSetting = "";
+                      document.querySelectorAll("button").forEach((el) => {
+                        el.addEventListener("click", () => {
+                          window.clickedSetting = el.parentElement.textContent.trim();
+                        });
+                      });
+                    }
+                    """
+                )
+                client = ChatGPTClient(page)  # type: ignore[arg-type]
+
+                with patch("src.chatgpt.client.asyncio.sleep", _noop_sleep):
+                    clicked = await client._click_model_setting_control(("Thinking", "Thinking 5.4"))
+                clicked_setting = await page.evaluate("window.clickedSetting")
+
+                self.assertTrue(clicked)
+                self.assertEqual(clicked_setting, "Thinking")
+            finally:
+                await browser.close()
+        finally:
+            await playwright_context.__aexit__(None, None, None)
+
+    async def test_configure_radio_prefers_requested_mode_for_version(self) -> None:
+        if async_playwright is None:
+            self.skipTest("patchright is not installed")
+
+        playwright_context = async_playwright()
+        playwright = await playwright_context.__aenter__()
+        try:
+            try:
+                browser = await playwright.chromium.launch(headless=True)
+            except Exception as exc:
+                self.skipTest(f"browser runtime is not available: {exc}")
+
+            try:
+                page = await (await browser.new_context()).new_page()
+                await page.set_content(
+                    """
+                    <!doctype html>
+                    <div role="dialog">
+                      <div role="radio" data-mode="instant">Instant 5.4</div>
+                      <div role="radio" data-mode="thinking">Thinking 5.4</div>
+                      <div role="radio" data-mode="pro">Pro 5.4</div>
+                    </div>
+                    """
+                )
+                await page.evaluate(
+                    """
+                    () => {
+                      window.clickedMode = "";
+                      document.querySelectorAll("[role=radio]").forEach((el) => {
+                        el.addEventListener("click", () => { window.clickedMode = el.dataset.mode; });
+                      });
+                    }
+                    """
+                )
+                client = ChatGPTClient(page)  # type: ignore[arg-type]
+
+                clicked = await client._click_configure_radio_for_version(
+                    "5.4",
+                    target_labels=("Thinking 5.4", "5.4 Thinking"),
+                )
+                clicked_mode = await page.evaluate("window.clickedMode")
+
+                self.assertTrue(clicked)
+                self.assertEqual(clicked_mode, "thinking")
+            finally:
+                await browser.close()
+        finally:
+            await playwright_context.__aexit__(None, None, None)
 
     async def test_model_setting_is_applied_for_configured_thinking_mode(self) -> None:
         page = _FakePage(open_picker=True)

@@ -18,10 +18,19 @@ class ModelRegistryTests(unittest.TestCase):
         self.assertIn("gpt-5.5", model_registry.list_public_chat_models())
         self.assertIn("gpt-5.5-thinking", model_registry.list_public_chat_models())
         self.assertIn("gpt-5.5-pro", model_registry.list_public_chat_models())
-        self.assertIn("gpt-5.1", model_registry.list_public_chat_models())
+        self.assertIn("gpt-5.4", model_registry.list_public_chat_models())
+        self.assertIn("gpt-5.4-thinking", model_registry.list_public_chat_models())
+        self.assertIn("gpt-5.4-pro", model_registry.list_public_chat_models())
+        self.assertIn("gpt-5.3", model_registry.list_public_chat_models())
+        self.assertIn("o3", model_registry.list_public_chat_models())
+        self.assertNotIn("gpt-5.2", model_registry.list_public_chat_models())
+        self.assertNotIn("gpt-5.1", model_registry.list_public_chat_models())
+        self.assertNotIn("gpt-4o", model_registry.list_public_chat_models())
         self.assertTrue(model_registry.is_supported_chat_model("Instant"))
         self.assertTrue(model_registry.is_supported_chat_model("Thinking"))
         self.assertTrue(model_registry.is_supported_chat_model("Pro"))
+        self.assertTrue(model_registry.is_supported_chat_model("Thinking 5.4"))
+        self.assertTrue(model_registry.is_supported_chat_model("Pro 5.4"))
         self.assertTrue(model_registry.is_supported_chat_model("Latest 5.5"))
         self.assertTrue(model_registry.is_supported_chat_model("5.5"))
         self.assertTrue(model_registry.is_supported_chat_model("GPT-5.5"))
@@ -55,9 +64,9 @@ class ModelRegistryTests(unittest.TestCase):
         self.assertEqual(pro.setting_label, "Standard")
 
     def test_supported_model_accepts_public_id_and_ui_label(self) -> None:
-        with patch.object(model_registry.Config, "CHATGPT_MODEL_ALIASES", "gpt-4.1-mini=GPT-4.1 mini"):
-            self.assertTrue(model_registry.is_supported_chat_model("gpt-4.1-mini"))
-            self.assertTrue(model_registry.is_supported_chat_model("GPT-4.1 mini"))
+        with patch.object(model_registry.Config, "CHATGPT_MODEL_ALIASES", "gpt-5.4=5.4|GPT-5.4"):
+            self.assertTrue(model_registry.is_supported_chat_model("gpt-5.4"))
+            self.assertTrue(model_registry.is_supported_chat_model("GPT-5.4"))
 
     def test_resolve_requested_model_uses_default_for_browser_alias(self) -> None:
         with patch.object(model_registry.Config, "CHATGPT_MODEL_ALIASES", "gpt-5.3=GPT-5.3,o3=o3"), patch.object(

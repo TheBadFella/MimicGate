@@ -50,11 +50,11 @@ class Config:
     CHATGPT_DEFAULT_MODEL: str = os.getenv("CHATGPT_DEFAULT_MODEL", "")
     CHATGPT_MODEL_ALIASES: str = os.getenv(
         "CHATGPT_MODEL_ALIASES",
-        "gpt-5.5=Instant|Latest 5.5|5.5|GPT-5.5,gpt-5.5-thinking=Thinking|5.5 Thinking|GPT-5.5 Thinking,gpt-5.5-pro=Pro|5.5 Pro|GPT-5.5 Pro,gpt-5.4=5.4|GPT-5.4,gpt-5.3=5.3|GPT-5.3,gpt-5.2=5.2|GPT-5.2,gpt-5.1=5.1|GPT-5.1,gpt-5=GPT-5,gpt-5-mini=GPT-5 mini,gpt-5-nano=GPT-5 nano,o3=o3,o4-mini=o4-mini,gpt-4.5=GPT-4.5,gpt-4.1=GPT-4.1,gpt-4.1-mini=GPT-4.1 mini,gpt-4o=GPT-4o",
+        "gpt-5.5=Instant|Latest 5.5|5.5|GPT-5.5,gpt-5.5-thinking=Thinking|5.5 Thinking|Thinking 5.5|GPT-5.5 Thinking,gpt-5.5-pro=Pro|5.5 Pro|Pro 5.5|GPT-5.5 Pro,gpt-5.4=5.4|GPT-5.4|Instant 5.4,gpt-5.4-thinking=Thinking 5.4|5.4 Thinking|GPT-5.4 Thinking,gpt-5.4-pro=Pro 5.4|5.4 Pro|GPT-5.4 Pro,gpt-5.3=5.3|GPT-5.3|Instant 5.3,o3=o3",
     )
     CHATGPT_MODEL_SETTINGS: str = os.getenv(
         "CHATGPT_MODEL_SETTINGS",
-        "gpt-5.5-thinking=Standard,gpt-5.5-pro=Standard",
+        "gpt-5.5-thinking=Standard,gpt-5.5-pro=Standard,gpt-5.4-thinking=Standard,gpt-5.4-pro=Standard",
     )
     CHATGPT_MODEL_SWITCH_TIMEOUT: int = int(os.getenv("CHATGPT_MODEL_SWITCH_TIMEOUT", "10000"))
     CHATGPT_MODEL_SWITCH_STRICT: bool = os.getenv("CHATGPT_MODEL_SWITCH_STRICT", "false").lower() == "true"

@@ -38,7 +38,7 @@ curl http://localhost:8000/v1/models -H "Authorization: Bearer dummy123"
 `CHATGPT_MODEL_ALIASES` maps public API ids to visible ChatGPT picker labels:
 
 ```env
-CHATGPT_MODEL_ALIASES=gpt-5.5=Instant|Latest 5.5|5.5|GPT-5.5,gpt-5.5-thinking=Thinking,o3=o3
+CHATGPT_MODEL_ALIASES=gpt-5.5=Instant|Latest 5.5|5.5|GPT-5.5,gpt-5.5-thinking=Thinking,gpt-5.5-pro=Pro,gpt-5.4=5.4,gpt-5.4-thinking=Thinking 5.4,gpt-5.4-pro=Pro 5.4,gpt-5.3=5.3,o3=o3
 ```
 
 Format:
@@ -51,12 +51,13 @@ public_id=Primary UI Label|Alternate UI Label|Another Alternate
 beside configurable picker rows such as `Thinking` and `Pro`:
 
 ```env
-CHATGPT_MODEL_SETTINGS=gpt-5.5-thinking=Extended,gpt-5.5-pro=Standard
+CHATGPT_MODEL_SETTINGS=gpt-5.5-thinking=Extended,gpt-5.5-pro=Standard,gpt-5.4-thinking=Extended,gpt-5.4-pro=Standard
 ```
 
-The default configuration exposes both `gpt-5.5-thinking` and `gpt-5.5-pro`,
-with both set to `Standard`. Use `Standard` or `Extended` exactly as shown in
-the ChatGPT picker.
+The default configuration exposes `gpt-5.5`, `gpt-5.5-thinking`,
+`gpt-5.5-pro`, `gpt-5.4`, `gpt-5.4-thinking`, `gpt-5.4-pro`, `gpt-5.3`,
+and `o3`. The configurable Thinking/Pro rows are set to `Standard` by default.
+Use `Standard` or `Extended` exactly as shown in the ChatGPT picker.
 
 If a request uses `catgpt-browser`, CatGPT keeps the current browser-selected
 model unless `CHATGPT_DEFAULT_MODEL` is set:
@@ -86,7 +87,7 @@ Do not set `CHATGPT_MODEL_SWITCH_TIMEOUT=1` expecting one second; that is 1 ms.
 ## Notes
 
 - Model availability depends on the logged-in ChatGPT account and plan.
-- Versioned GPT labels such as `5.2` may live under the picker option
+- Versioned GPT labels such as `5.4` may live under the picker option
   `Configure...` rather than in the first menu. CatGPT opens Configure and
   selects the requested version from the dialog's Model dropdown when needed.
 - UI labels change over time. Update `CHATGPT_MODEL_ALIASES` when ChatGPT

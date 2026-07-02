@@ -261,14 +261,13 @@ Change it with `VNC_PASSWORD` in `docker-compose.yml`.
 ### OpenAI-Compatible Endpoints
 
 `catgpt-browser` is the default browser alias. If you send an explicit paid-plan
-model id like `gpt-5.5`, `gpt-5.5-pro`, `gpt-5.4`, `gpt-5.4-pro`, `gpt-5.4-mini`,
-`gpt-5.4-nano`, `gpt-5-mini`, `gpt-5-nano`, `gpt-5`, `gpt-5.3`, `o3`, `o4-mini`,
-`gpt-4.5`, `gpt-4.1`, `gpt-4.1-mini`, or `gpt-4o`, CatGPT will try to switch
-the ChatGPT web UI to that model before sending the prompt. Current ChatGPT
-Plus composer labels map `gpt-5.5` to `Instant` and `gpt-5.5-thinking` to
-`Thinking`. `gpt-5.5-thinking` and `gpt-5.5-pro` can also select the picker row
-setting shown beside `Thinking` and `Pro`; set `CHATGPT_MODEL_SETTINGS` to map
-those ids to `Standard` or `Extended`. If you want `catgpt-browser` itself to auto-switch, set
+model id like `gpt-5.5`, `gpt-5.5-thinking`, `gpt-5.5-pro`, `gpt-5.4`,
+`gpt-5.4-thinking`, `gpt-5.4-pro`, `gpt-5.3`, or `o3`, CatGPT will try to
+switch the ChatGPT web UI to that model before sending the prompt. Current
+ChatGPT Plus composer labels map `gpt-5.5` to `Instant` and
+`gpt-5.5-thinking` to `Thinking`. The `thinking` and `pro` ids can also select
+the picker row setting shown beside `Thinking` and `Pro`; set
+`CHATGPT_MODEL_SETTINGS` to map those ids to `Standard` or `Extended`. If you want `catgpt-browser` itself to auto-switch, set
 `CHATGPT_DEFAULT_MODEL` to one of the configured ids. If the requested model is
 configured but not visible in your ChatGPT account's picker, CatGPT logs the
 visible picker labels and continues with the currently selected browser model
