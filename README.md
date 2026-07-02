@@ -1,1305 +1,349 @@
-# CatGPT — ChatGPT Browser-Automation Gateway
+# CatGPT
 
-> **A production-grade gateway that exposes the ChatGPT web UI as an OpenAI-compatible API.**
->
-> Uses browser automation (Playwright / Patchright) to control a real ChatGPT session,
-> supports **tool/function calling**, **image input**, **file attachments** (PDF, etc.),
-> and **DALL-E image generation** — all without an OpenAI API key.
-
-![Python 3.14+](https://img.shields.io/badge/python-3.14%2B-blue)
-![Patchright](https://img.shields.io/badge/patchright-1.58%2B-green)
-![FastAPI](https://img.shields.io/badge/fastapi-0.115%2B-orange)
-![Docker](https://img.shields.io/badge/docker-compose-blue)
-
----
+CatGPT exposes a logged-in ChatGPT browser session as an OpenAI-compatible API.
+It is meant for self-hosted use where you want apps such as Open WebUI,
+LangChain, scripts, or internal tools to talk to ChatGPT through one persistent
+browser profile.
 
 ## Table of Contents
 
-1. [What It Does](#what-it-does)
-2. [Quick Start — Docker](#quick-start--docker-recommended)
-3. [Quick Start — Local](#quick-start--local-without-docker)
-4. [First Login (One-Time Setup)](#first-login-one-time-setup)
-5. [Authentication](#authentication)
-6. [API Reference](#api-reference)
-   - [OpenAI-Compatible Endpoints](#openai-compatible-endpoints)
-   - [Custom REST Endpoints](#custom-rest-endpoints)
-   - [Health Check](#health-check)
-7. [Usage Examples](#usage-examples)
-   - [Simple Chat](#simple-chat)
-   - [Tool / Function Calling](#tool--function-calling)
-   - [Image Input (Vision)](#image-input-vision)
-   - [File Attachments (PDF, DOCX, etc.)](#file-attachments-pdf-docx-etc)
-   - [Combined: Images + Files + Tools](#combined-images--files--tools)
-   - [Image Generation (DALL-E)](#image-generation-dall-e)
-8. [TUI — Interactive Terminal Client](#tui--interactive-terminal-client)
-9. [Configuration Reference](#configuration-reference)
-10. [Architecture](#architecture)
-11. [Project Structure](#project-structure)
-12. [Docker Internals](#docker-internals)
-13. [How It Works — Deep Dive](#how-it-works--deep-dive)
-   - [Complicated Flows](#complicated-flows)
-14. [Testing](#testing)
-15. [Troubleshooting](#troubleshooting)
-16. [Known Limitations](#known-limitations)
-17. [Tech Stack](#tech-stack)
+1. [What is CatGPT](#what-is-catgpt)
+2. [How to Setup on Docker](#how-to-setup-on-docker)
+3. [Supported Models](#supported-models)
+4. [Docker Environment Variables](#docker-environment-variables)
+5. [Usage Examples](#usage-examples)
+6. [Troubleshooting](#troubleshooting)
 
----
+## What is CatGPT
 
-## What It Does
+CatGPT runs Chromium with a saved ChatGPT login, then wraps that browser session
+with HTTP APIs that look like OpenAI and Ollama.
 
-CatGPT automates a real browser session with ChatGPT, letting you:
+This version supports:
 
-- **Use ChatGPT as an OpenAI-compatible API** — drop-in replacement for `openai.ChatCompletion.create()`
-- **Use ChatGPT as an Ollama-compatible API** — supports common `/api/*` endpoints for Ollama-based clients
-- **Tool / Function calling** — full round-trip support (define tools → model calls them → send results back)
-- **Send images** — OpenAI vision format (`image_url` with base64 data URLs or HTTP URLs)
-- **Send file attachments** — PDF, DOCX, TXT, CSV, etc. via a custom `file` content type
-- **Generate DALL-E images** — ask for images and they're auto-downloaded locally
-- **Manage conversations** — create, switch, and list threads
-- **Interactive TUI** — full-screen terminal chat interface with cyberpunk theme
-- **Evade bot detection** — human-like typing, mouse movements, stealth patches, viewport jitter
+| Capability | Supported |
+| --- | :---: |
+| OpenAI `/v1/chat/completions` | Yes |
+| OpenAI `/v1/responses` | Yes |
+| Async chat jobs | Yes |
+| OpenAI `/v1/images/generations` through ChatGPT image generation | Yes |
+| Ollama `/api/chat`, `/api/generate`, `/api/tags` compatibility | Yes |
+| Tool / function calling compatibility | Yes |
+| Image input / vision requests | Yes |
+| File attachments | Yes |
+| App-scoped routes such as `/mealie/v1/chat/completions` | Yes |
+| App-thread isolation using request identity | Yes |
+| Model switching for current ChatGPT picker models | Yes |
+| noVNC browser login UI | Yes |
 
-All without needing an OpenAI API key — it uses your existing ChatGPT login session.
-| Feature | Claude | ChatGPT |
-|---|:---:|:---:|
-| Chat completions | Yes | Yes |
-| Multi-turn conversations | Yes | Yes |
-| Tool / function calling | Yes | Yes |
-| Image input (vision) | Yes | Yes |
-| File attachments (PDF, DOCX, etc.) | Yes | Yes |
-| Image generation (DALL-E) | -- | Yes |
-| Read-aloud audio download | -- | Yes |
-| Interactive TUI (terminal chat) | Yes | Yes |
-| OpenAI SDK compatible | Yes | Yes |
-| LangChain compatible | Yes | Yes |
-| Docker deployment | Yes | Yes |
+The default browser-backed model id is `catgpt-browser`. You can also request
+specific ChatGPT picker models listed below.
 
----
+## How to Setup on Docker
 
-## Quick Start — Docker (Recommended)
+The repository includes a production-style `docker-compose.yml` using the
+published image:
 
-Docker runs the entire stack (virtual display + VNC + browser + API) in one container.
+```yaml
+image: ghcr.io/thebadfella/catgpt:latest
+```
+
+1. Clone the repo.
 
 ```bash
-# 1. Clone the repo
-git clone <repo-url> catgpt && cd catgpt
+git clone <repo-url> catgpt
+cd catgpt
+```
 
-# 2. Copy environment template
-# Optional for local (non-Docker) runs: create a .env file with needed values
-# (Docker deployments should configure environment variables in docker-compose.yml)
+2. Create the host variables used by `docker-compose.yml`.
 
-# 3. Build and start
-docker compose up --build -d catgpt
+```bash
+export DOCKERDIR=/path/to/docker
+export CATGPT_API_KEY=change-this-api-token
+export CATGPT_VNC_PASSWORD=change-this-vnc-password
+```
 
-# 4. First login — open noVNC in your browser
-open http://localhost:6080
-# → Log into ChatGPT in the browser you see in VNC
-# → Once logged in, close the noVNC tab — your session is saved
+If you prefer a `.env` file beside `docker-compose.yml`:
 
-# 5. Verify the API is ready (default token: dummy123)
-curl -H "Authorization: Bearer dummy123" http://localhost:8000/v1/models
+```env
+DOCKERDIR=/path/to/docker
+CATGPT_API_KEY=change-this-api-token
+CATGPT_VNC_PASSWORD=change-this-vnc-password
+```
 
-# 6. Send your first message
-curl -X POST http://localhost:8000/v1/chat/completions \
+3. Start CatGPT.
+
+```bash
+docker compose up -d
+```
+
+4. Log in to ChatGPT once.
+
+Open:
+
+```text
+http://localhost:6080
+```
+
+Enter the VNC password from `CATGPT_VNC_PASSWORD`, then log in to ChatGPT inside
+the browser. The session is saved in:
+
+```text
+${DOCKERDIR}/appdata/catgpt/browser
+```
+
+5. Check the API.
+
+The compose file maps the API to host port `8650`.
+
+```bash
+curl -H "Authorization: Bearer $CATGPT_API_KEY" \
+  http://localhost:8650/v1/models
+```
+
+6. Send a message.
+
+```bash
+curl -X POST http://localhost:8650/v1/chat/completions \
+  -H "Authorization: Bearer $CATGPT_API_KEY" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer dummy123" \
   -d '{
     "model": "catgpt-browser",
-    "messages": [{"role": "user", "content": "Hello!"}]
+    "messages": [
+      {"role": "user", "content": "Say hello from CatGPT in one sentence."}
+    ]
   }'
 ```
 
-> **After code changes**, you must rebuild the image — `docker restart catgpt` does NOT pick up changes:
->
-> ```bash
-> docker compose up --build -d catgpt
-> ```
-
----
-
-## Quick Start — Local (Without Docker)
+After code changes, rebuild instead of only restarting:
 
 ```bash
-# 1. Clone & setup
-cd catgpt
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-
-# 2. Install Chromium for Patchright
-patchright install chromium
-
-# 3. First login (one-time)
-python scripts/first_login.py
-# → A browser window opens. Log into ChatGPT. Press Enter in terminal when done.
-
-# 4. Start the API server
-python -m src.api.server
-# → API available at http://localhost:8000
-
-# 5. (Optional) Start the TUI
-python -m src.cli.app
+docker compose up --build -d
 ```
 
-### Nix Flake (Reproducible)
+## Supported Models
 
-This repo ships a `flake.nix` that packages Patchright and matching Chromium revisions for Linux/Nix users.
+CatGPT exposes `catgpt-browser` plus the configured ChatGPT picker models. The
+model switcher is driven by `CHATGPT_MODEL_ALIASES` and
+`CHATGPT_MODEL_SETTINGS`, so you can update labels when ChatGPT changes the UI.
 
-```bash
-# 1. Optional: copy env template for local overrides
-cp .env.example .env
+| API model id | ChatGPT picker target | Accepted aliases | Standard / Extended setting |
+| --- | --- | --- | --- |
+| `catgpt-browser` | Current browser model, or `CHATGPT_DEFAULT_MODEL` when set | `auto`, `default`, `browser` | No |
+| `gpt-5.5` | Instant / latest 5.5 | `Instant`, `Latest 5.5`, `5.5`, `GPT-5.5` | No |
+| `gpt-5.5-thinking` | Thinking on 5.5 | `Thinking`, `5.5 Thinking`, `Thinking 5.5`, `GPT-5.5 Thinking` | Yes |
+| `gpt-5.5-pro` | Pro on 5.5 | `Pro`, `5.5 Pro`, `Pro 5.5`, `GPT-5.5 Pro` | Yes |
+| `gpt-5.4` | 5.4 / Instant 5.4 | `5.4`, `GPT-5.4`, `Instant 5.4` | No |
+| `gpt-5.4-thinking` | Thinking on 5.4 | `Thinking 5.4`, `5.4 Thinking`, `GPT-5.4 Thinking` | Yes |
+| `gpt-5.4-pro` | Pro on 5.4 | `Pro 5.4`, `5.4 Pro`, `GPT-5.4 Pro` | Yes |
+| `gpt-5.3` | 5.3 / Instant 5.3 | `5.3`, `GPT-5.3`, `Instant 5.3` | No |
+| `o3` | o3 | `o3` | No |
 
-# 2. First login (one-time, interactive)
-nix run .#login
+Default configurable settings:
 
-# 3. Start the proxy
-nix run .#proxy
-
-# 4. Optional: run the TUI
-nix run .#tui
+```env
+CHATGPT_MODEL_SETTINGS=gpt-5.5-thinking=Standard,gpt-5.5-pro=Standard,gpt-5.4-thinking=Standard,gpt-5.4-pro=Standard
 ```
 
-Notes:
-- The app reads `./.env` from your current working directory if present.
-- Environment variables from your shell/systemd override values from `.env`.
+Example: default all `catgpt-browser` requests to 5.4 Thinking Extended.
 
-#### systemd user service (optional)
-
-```ini
-# ~/.config/systemd/user/catgpt.service
-[Unit]
-Description=CatGPT Proxy (Nix flake)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-WorkingDirectory=%h/Projects/CatGPT
-ExecStart=/usr/bin/env nix run .#proxy
-Restart=on-failure
-RestartSec=5
-Environment=HEADLESS=true
-Environment=API_TOKEN=change-me
-Environment=API_HOST=127.0.0.1
-Environment=API_PORT=8000
-
-[Install]
-WantedBy=default.target
+```yaml
+environment:
+  CHATGPT_DEFAULT_MODEL: "gpt-5.4-thinking"
+  CHATGPT_MODEL_SETTINGS: "gpt-5.4-thinking=Extended"
 ```
 
-```bash
-systemctl --user daemon-reload
-systemctl --user enable --now catgpt
-journalctl --user -u catgpt -f
-```
+## Docker Environment Variables
 
----
+### Required by the included compose file
 
-## First Login (One-Time Setup)
+| Variable | Example | Purpose |
+| --- | --- | --- |
+| `DOCKERDIR` | `/mnt/user/appdata` | Host root for persisted browser data and logs |
+| `CATGPT_API_KEY` | `change-me` | Value passed into container as `API_TOKEN` |
+| `CATGPT_VNC_PASSWORD` | `change-me` | Value passed into container as `VNC_PASSWORD` |
 
-CatGPT uses your existing ChatGPT session. You need to sign in **once** — the browser profile is persisted.
+### Browser and provider
 
-### Docker Login Flow
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PROVIDER` | `chatgpt` | Browser provider. Use `chatgpt` for CatGPT; `claude` is also wired in the codebase. |
+| `CHATGPT_URL` | `https://chatgpt.com` | ChatGPT URL to open. |
+| `CLAUDE_URL` | `https://claude.ai` | Claude URL when `PROVIDER=claude`. |
+| `HEADLESS` | `false` | Keep `false` for Docker/noVNC. |
+| `BROWSER_CHANNEL` | `chrome` | Browser channel. Use `chromium` to force bundled Chromium. |
+| `BROWSER_DATA_DIR` | `browser_data` | Persistent browser profile path inside the container. |
+| `SLOW_MO` | `25` | Browser automation delay in milliseconds. |
+| `DISPLAY` | `:99` | X display used by the container. |
+| `DISPLAY_WIDTH` | `1366` in compose | Virtual display width. |
+| `DISPLAY_HEIGHT` | `768` in compose | Virtual display height. |
+| `DISPLAY_DEPTH` | `24` in compose | Virtual display depth. |
 
-1. Start the container: `docker compose up --build -d catgpt`
-2. Wait ~30 seconds for startup
-3. Open **http://localhost:6080** (noVNC) in your browser
-4. You'll see a Chromium browser inside the VNC viewer
-5. Navigate to chatgpt.com if not already there
-6. Sign in with your ChatGPT account (Google, email, etc.)
-7. Verify you see the ChatGPT new chat page
-8. Close the noVNC tab — your session is saved in the Docker volume
+### Model switching
 
-### Local Login Flow
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `CHATGPT_DEFAULT_MODEL` | empty | Model to use when a request asks for `catgpt-browser`, `auto`, or `default`. |
+| `CHATGPT_MODEL_ALIASES` | Current 5.5, 5.4, 5.3, and o3 aliases | Comma-separated `model=label|alias` map for ChatGPT UI labels. |
+| `CHATGPT_MODEL_SETTINGS` | Thinking/Pro set to `Standard` | Comma-separated setting map for Thinking/Pro rows. |
+| `CHATGPT_MODEL_SWITCH_TIMEOUT` | `10000` | Milliseconds to wait for a model label after switching. |
+| `CHATGPT_MODEL_SWITCH_STRICT` | `false` | Return an error when a configured model is not visible instead of continuing. |
 
-1. Run `python scripts/first_login.py`
-2. A Chromium window opens and navigates to chatgpt.com
-3. Sign in manually
-4. Press Enter in the terminal when you see the chat page
-5. The browser closes — session is saved in `browser_data/`
+### API
 
-### Re-Login
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `API_HOST` | `0.0.0.0` | Server bind host inside the container. |
+| `API_PORT` | `8000` | Server port inside the container. |
+| `API_TOKEN` | empty in code, set from `CATGPT_API_KEY` in compose | Bearer token. Empty disables auth. |
+| `API_TOKEN_OPTIONAL` | `false`, `true` in compose | Allow requests without a token while still accepting token auth. |
+| `RATE_LIMIT_SECONDS` | `5` | Basic request pacing. |
+| `API_THREAD_CONTRACT_MODE` | `false`, `true` in compose | Cache large system instructions in a thread and send compact reminders. |
+| `API_THREAD_CONTRACT_TTL_SECONDS` | `3600` | Thread contract TTL. |
+| `API_APP_THREAD_MODE` | `false`, `true` in compose | Route different apps/users to dedicated ChatGPT threads. |
+| `API_APP_THREAD_TTL_SECONDS` | `86400` | App-thread mapping TTL. |
+| `API_APP_THREAD_DELETE_EXPIRED` | `false`, `true` in compose | Delete expired CatGPT-owned app threads from ChatGPT UI. |
+| `API_HEADER_ROW_MERGE_MODE` | `false`, `true` in compose | Merge header-only rows into the next row for structured JSON outputs. |
 
-If your session expires (typically after days/weeks), repeat the login flow. The API will return a 503 error if the session is expired.
+### Timeouts and interaction pacing
 
----
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `RESPONSE_TIMEOUT` | `120000` | Max response wait in milliseconds. |
+| `SELECTOR_TIMEOUT` | `10000` | DOM selector wait in milliseconds. |
+| `POLL_INTERVAL_MS` | `300` | Response completion polling interval. |
+| `TYPING_SPEED_MIN` | `50` | Minimum typing delay. |
+| `TYPING_SPEED_MAX` | `150` | Maximum typing delay. |
+| `THINKING_PAUSE_MIN` | `500`, `1000` in compose | Minimum pause before actions. |
+| `THINKING_PAUSE_MAX` | `1500`, `3000` in compose | Maximum pause before actions. |
 
-## Authentication
+### Attachments, generated files, and Ollama compatibility
 
-### API Bearer Token
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `ATTACHMENT_EXPAND_MULTIPAGE` | `true` | Expand supported multipage files for per-page extraction. |
+| `ATTACHMENT_MAX_PAGES` | `24` | Max pages/frames to render from attachments. |
+| `ATTACHMENT_RENDER_DPI` | `144` | Render DPI for attachment extraction. |
+| `IMAGES_DIR` | `downloads/images` | Generated/downloaded image output path. |
+| `AUDIO_DIR` | `downloads/audio` | Read-aloud audio output path. |
+| `LOG_DIR` | `logs` | Log path. |
+| `OLLAMA_EMBEDDING_MODELS` | `nomic-embed-text` | Names exposed as Ollama-compatible embedding models. |
+| `OLLAMA_EMBEDDING_DIMENSIONS` | `768` | Dimension count for deterministic compatibility embeddings. |
+| `OLLAMA_ACTIVE_MODEL_TTL_SECONDS` | `900` | TTL for `/api/ps` active model tracking. |
 
-By default, all API endpoints require a Bearer token when `API_TOKEN` is set (default: `dummy123`).
+### VNC and logging
 
-```bash
-curl -H "Authorization: Bearer dummy123" http://localhost:8000/v1/models
-```
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `VNC_PASSWORD` | `catgpt` | Password for `http://localhost:6080`. |
+| `LOG_LEVEL` | `DEBUG` | Python logging level. |
+| `VERBOSE` | `true` | Log to console as well as files. |
 
-**OpenAI SDK / LangChain** — pass the token as the `api_key`:
+## Usage Examples
+
+### OpenAI Python SDK
 
 ```python
 from openai import OpenAI
 
 client = OpenAI(
-    base_url="http://localhost:8000/v1",
-    api_key="dummy123"  # your API_TOKEN value
+    base_url="http://localhost:8650/v1",
+    api_key="change-this-api-token",
 )
-```
-
-**Open paths** (no token required): `/docs`, `/redoc`, `/openapi.json`, `/healthz`
-
-To **disable** API auth entirely, set `API_TOKEN=` (empty string) in `docker-compose.yml` or `.env`.
-To allow requests **with or without token** while still accepting token auth, set `API_TOKEN_OPTIONAL=true`.
-
-### noVNC Password
-
-The noVNC browser UI at `http://localhost:6080` is password-protected (default: `catgpt`).
-Change it with `VNC_PASSWORD` in `docker-compose.yml`.
-
----
-
-## API Reference
-
-### OpenAI-Compatible Endpoints
-
-`catgpt-browser` is the default browser alias. If you send an explicit paid-plan
-model id like `gpt-5.5`, `gpt-5.5-thinking`, `gpt-5.5-pro`, `gpt-5.4`,
-`gpt-5.4-thinking`, `gpt-5.4-pro`, `gpt-5.3`, or `o3`, CatGPT will try to
-switch the ChatGPT web UI to that model before sending the prompt. Current
-ChatGPT Plus composer labels map `gpt-5.5` to `Instant` and
-`gpt-5.5-thinking` to `Thinking`. The `thinking` and `pro` ids can also select
-the picker row setting shown beside `Thinking` and `Pro`; set
-`CHATGPT_MODEL_SETTINGS` to map those ids to `Standard` or `Extended`. If you want `catgpt-browser` itself to auto-switch, set
-`CHATGPT_DEFAULT_MODEL` to one of the configured ids. If the requested model is
-configured but not visible in your ChatGPT account's picker, CatGPT logs the
-visible picker labels and continues with the currently selected browser model
-by default. Set `CHATGPT_MODEL_SWITCH_STRICT=true` to return an error instead.
-
-Base URL: `http://localhost:8000/v1` — **Model ID:** `catgpt-browser`
-
-| Method | Path                     | Description                                                                     |
-| ------ | ------------------------ | ------------------------------------------------------------------------------- |
-| `POST` | `/v1/chat/completions`   | Chat completions — tools, images, file attachments supported. **No streaming.** |
-| `POST` | `/v1/responses`          | Responses API (Codex CLI/Desktop compatibility). **No streaming.**             |
-| `POST` | `/v1/chat/completions/async` | Submit async chat job (poll with job ID). Structured output supported.      |
-| `GET`  | `/v1/chat/completions/async/{job_id}` | Get async job status/result (`queued/running/completed/failed`). |
-| `POST` | `/v1/images/generations` | Generate images via DALL-E                                                      |
-| `GET`  | `/v1/models`             | List available browser-backed chat model ids (`catgpt-browser` + configured models) |
-| `POST` | `/{app_name}/v1/chat/completions` | App-scoped chat completions (derives app from URL path)             |
-| `POST` | `/{app_name}/v1/responses` | App-scoped Responses API                                            |
-| `POST` | `/{app_name}/v1/chat/completions/async` | App-scoped async chat submit                                      |
-| `GET`  | `/{app_name}/v1/chat/completions/async/{job_id}` | App-scoped async status/result                           |
-| `POST` | `/{app_name}/v1/images/generations` | App-scoped image generation                                        |
-| `GET`  | `/{app_name}/v1/models` | App-scoped model list                                                       |
-
-### Ollama-Compatible Endpoints
-
-CatGPT also exposes a compatibility layer for Ollama-oriented clients such as
-Open WebUI. Chat and generation requests are routed into the same browser-backed
-ChatGPT executor used by the OpenAI-compatible API.
-
-`/api/embed` is implemented as a deterministic compatibility embedding shim so
-clients that require the endpoint can function, but it is not a semantic
-embedding model suitable for production-quality retrieval or RAG ranking.
-
-| Method | Path                     | Description |
-| ------ | ------------------------ | ----------- |
-| `POST` | `/api/chat`              | Ollama-compatible chat mapping |
-| `POST` | `/api/generate`          | Ollama-compatible text generation mapping |
-| `POST` | `/api/embed`             | Ollama-compatible embedding shim |
-| `GET`  | `/api/tags`              | List configured model profiles |
-| `POST` | `/api/show`              | Return static metadata for a model |
-| `GET`  | `/api/ps`                | List recently active models |
-| `POST` | `/api/pull`              | Safety mock for configured models |
-| `DELETE` | `/api/delete`          | Safety mock delete success |
-| `POST` | `/api/copy`              | Unsupported mock response |
-
-Every Ollama endpoint is also available under the app-scoped `/{app_name}/api/*`
-prefix for consistency with app-thread routing.
-
-### Custom REST Endpoints
-
-| Method | Path                | Description                                   |
-| ------ | ------------------- | --------------------------------------------- |
-| `POST` | `/chat`             | Send a message in the current conversation    |
-| `POST` | `/thread/new`       | Start a new conversation with a first message |
-| `POST` | `/thread/{id}/chat` | Send a message in a specific thread           |
-| `GET`  | `/threads`          | List recent threads from sidebar              |
-| `GET`  | `/status`           | Health check + login status + current thread  |
-
-### Health Check
-
-| Method | Path       | Description                                       |
-| ------ | ---------- | ------------------------------------------------- |
-| `GET`  | `/healthz` | Unauthenticated health check (used by Docker too) |
-
-> **Streaming note:** `/v1/chat/completions` actively rejects `stream=true` with a 400 error. This is a fundamental limitation since the browser waits for the full ChatGPT response before returning.
-
-> **Structured output note:** `response_format` is supported for `/v1/chat/completions` and `/v1/chat/completions/async` (including `json_object` and `json_schema`).
-
-> **Per-page OCR note:** set `page_extraction={"mode":"structured"}` on `/v1/chat/completions` or `/v1/chat/completions/async` to force attachment OCR/document extraction into a strict JSON `pages` array with one item per rendered page. This mode manages `response_format` automatically.
-
-> **Response cache note:** `/v1/chat/completions` now includes an in-memory dedup cache for identical requests (TTL: 600s, max entries: 256). Cache hits return a fresh OpenAI-style response envelope (`id`, `created`) with cached content.
-
-> **Prompt assembly note:** single-turn requests now include all provided `system` messages (not just the first one). Tool-mode prompt instructions were compacted to reduce repeated overhead.
-
-> **App URL note:** You can use app-specific base URLs without proxy rewrites. Examples:
-> `http://catgpt:8000/karakeep/v1`, `http://catgpt:8000/mealie/v1`,
-> `http://catgpt:8000/linkwarden/v1`, `http://catgpt:8000/immich/v1`
-
----
-
-## Usage Examples
-
-### Simple Chat
-
-```python
-from openai import OpenAI
-
-client = OpenAI(base_url="http://localhost:8000/v1", api_key="dummy123")
 
 response = client.chat.completions.create(
-    model="catgpt-browser",
-    messages=[{"role": "user", "content": "What is quantum computing?"}]
+    model="gpt-5.4-thinking",
+    messages=[
+        {"role": "user", "content": "Summarize why browser-backed APIs are useful."}
+    ],
 )
+
 print(response.choices[0].message.content)
 ```
-
-```bash
-# Or with curl:
-curl -X POST http://localhost:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer dummy123" \
-  -d '{
-    "model": "catgpt-browser",
-    "messages": [{"role": "user", "content": "What is quantum computing?"}]
-  }'
-```
-
----
 
 ### Responses API
 
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://localhost:8000/v1", api_key="dummy123")
+client = OpenAI(base_url="http://localhost:8650/v1", api_key="change-this-api-token")
 
 response = client.responses.create(
     model="catgpt-browser",
-    input="Say hello in one sentence.",
-    instructions="Be concise."
+    instructions="Be concise.",
+    input="Give me three setup checks for CatGPT.",
 )
+
 print(response.output[0].content[0].text)
 ```
 
----
-
-### Async Chat + Polling
+### Async job
 
 ```bash
-# Submit job
-curl -X POST http://localhost:8000/v1/chat/completions/async \
+JOB_ID="$(
+  curl -s -X POST http://localhost:8650/v1/chat/completions/async \
+    -H "Authorization: Bearer $CATGPT_API_KEY" \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer dummy123" \
-    -d '{
-        "model": "catgpt-browser",
-        "messages": [{"role": "user", "content": "Summarize this in 5 bullets"}]
-    }'
+    -d '{"model":"catgpt-browser","messages":[{"role":"user","content":"Write a short checklist."}]}' |
+  python -c "import json,sys; print(json.load(sys.stdin)['id'])"
+)"
 
-# Response example:
-# {"id":"chatjob-...","status":"queued", ...}
-
-# Poll status/result
-curl -H "Authorization: Bearer dummy123" \
-    http://localhost:8000/v1/chat/completions/async/chatjob-REPLACE_ID
+curl -H "Authorization: Bearer $CATGPT_API_KEY" \
+  "http://localhost:8650/v1/chat/completions/async/$JOB_ID"
 ```
 
-```python
-import time
-import requests
+### Ollama-compatible clients
 
-base = "http://localhost:8000/v1"
-headers = {
-    "Authorization": "Bearer dummy123",
-    "Content-Type": "application/json",
-}
+Point Ollama-compatible tools at:
 
-submit = requests.post(
-    f"{base}/chat/completions/async",
-    headers=headers,
-    json={
-        "model": "catgpt-browser",
-        "messages": [{"role": "user", "content": "Return only JSON with title and tags"}],
-        "response_format": {"type": "json_object"},
-    },
-    timeout=30,
-)
-submit.raise_for_status()
-job_id = submit.json()["id"]
-
-while True:
-    job = requests.get(
-        f"{base}/chat/completions/async/{job_id}",
-        headers={"Authorization": "Bearer dummy123"},
-        timeout=30,
-    )
-    job.raise_for_status()
-    payload = job.json()
-    if payload["status"] in {"completed", "failed"}:
-        print(payload)
-        break
-    time.sleep(1)
+```text
+http://localhost:8650
 ```
 
----
+Common endpoints:
 
-### Tool / Function Calling
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/tags` | List chat and embedding model profiles |
+| `POST /api/chat` | Chat request |
+| `POST /api/generate` | Text generation request |
+| `POST /api/embed` | Deterministic compatibility embedding shim |
 
-Full round-trip tool calling — define tools, let the model call them, send results back.
+### App-scoped routes
 
-```python
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage, ToolMessage
-from langchain_core.tools import tool
+Use app-scoped paths when several apps share one CatGPT instance:
 
-@tool
-def get_weather(city: str) -> str:
-    """Get the current weather for a city."""
-    return f"The weather in {city} is sunny, 25°C."
-
-@tool
-def add_numbers(a: int, b: int) -> str:
-    """Add two numbers together."""
-    return str(a + b)
-
-llm = ChatOpenAI(
-    model="catgpt-browser",
-    base_url="http://localhost:8000/v1",
-    api_key="dummy123",
-)
-
-llm_with_tools = llm.bind_tools([get_weather, add_numbers])
-response = llm_with_tools.invoke([
-    HumanMessage(content="What's the weather in Paris, and what is 42 + 58?")
-])
-
-# Model returns tool_calls
-print(response.tool_calls)
-# [{'name': 'get_weather', 'args': {'city': 'Paris'}, 'id': 'call_...'},
-#  {'name': 'add_numbers', 'args': {'a': 42, 'b': 58}, 'id': 'call_...'}]
-
-# Execute tools and send results back
-messages = [HumanMessage(content="What's the weather in Paris, and what is 42 + 58?"), response]
-for tc in response.tool_calls:
-    tool_fn = {"get_weather": get_weather, "add_numbers": add_numbers}[tc["name"]]
-    result = tool_fn.invoke(tc["args"])
-    messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
-
-final = llm_with_tools.invoke(messages)
-print(final.content)
-# "The weather in Paris is sunny at 25°C, and 42 + 58 = 100."
+```text
+http://localhost:8650/mealie/v1/chat/completions
+http://localhost:8650/linkwarden/v1/chat/completions
+http://localhost:8650/immich/v1/chat/completions
 ```
 
-**How it works internally:** Tool definitions are injected as a system prompt instructing ChatGPT to output `{"tool_calls": [...]}` JSON. CatGPT parses that JSON and returns it in standard OpenAI `tool_calls` format. See [Tool Calling Implementation](#tool-calling-implementation) for details.
-
----
-
-### Image Input (Vision)
-
-Send images using the standard OpenAI vision format with base64 data URLs:
-
-```python
-import base64
-from openai import OpenAI
-
-client = OpenAI(base_url="http://localhost:8000/v1", api_key="dummy123")
-
-with open("photo.png", "rb") as f:
-    img_b64 = base64.b64encode(f.read()).decode()
-
-response = client.chat.completions.create(
-    model="catgpt-browser",
-    messages=[{
-        "role": "user",
-        "content": [
-            {"type": "text", "text": "Describe this image in detail."},
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}},
-        ]
-    }]
-)
-print(response.choices[0].message.content)
-```
-
-**Multiple images** and **HTTP URLs** are also supported:
-
-```python
-# Multiple images
-{"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img1_b64}"}}
-{"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img2_b64}"}}
-
-# HTTP URL (downloaded server-side)
-{"type": "image_url", "image_url": {"url": "https://example.com/photo.jpg"}}
-```
-
----
-
-### File Attachments (PDF, DOCX, etc.)
-
-CatGPT supports arbitrary file attachments via a custom `file` content type:
-
-Multi-page PDFs and multi-frame images (for example TIFF) are expanded into
-ordered page images automatically before upload so ChatGPT can see the full
-document, not just the first page/frame. For large document jobs, prefer
-`POST /v1/chat/completions/async` to avoid long-lived request timeouts.
-
-If you want structured OCR-style output instead of a free-form answer, add
-`"page_extraction": {"mode": "structured"}` to the request body. CatGPT will
-force a JSON response shaped like:
-
-```json
-{
-  "pages": [
-    {
-      "page_index": 1,
-      "source_name": "document.pdf",
-      "page_number": 1,
-      "text": "..."
-    }
-  ]
-}
-```
-
-Each `pages` item maps to one rendered page in upload order. Blank/unreadable
-pages are kept with an empty `text` string instead of being dropped.
-
-```python
-import base64
-from openai import OpenAI
-
-client = OpenAI(base_url="http://localhost:8000/v1", api_key="dummy123")
-
-with open("document.pdf", "rb") as f:
-    pdf_b64 = base64.b64encode(f.read()).decode()
-
-response = client.chat.completions.create(
-    model="catgpt-browser",
-    messages=[{
-        "role": "user",
-        "content": [
-            {"type": "text", "text": "Summarize the contents of this PDF."},
-            {
-                "type": "file",
-                "file": {
-                    "filename": "document.pdf",
-                    "data": pdf_b64,
-                    "mime_type": "application/pdf"
-                }
-            },
-        ]
-    }],
-    page_extraction={"mode": "structured"},
-)
-```
-
-**Supported file types:** PDF, DOCX, XLSX, TXT, CSV, JSON, and any other format ChatGPT accepts.
-
-Alternative data-URL format:
-
-```json
-{
-  "type": "file",
-  "file": {
-    "filename": "report.pdf",
-    "url": "data:application/pdf;base64,<base64-encoded-content>"
-  }
-}
-```
-
----
-
-### Combined: Images + Files + Tools
-
-All features can be used together in a single request:
-
-```python
-response = client.chat.completions.create(
-    model="catgpt-browser",
-    messages=[{
-        "role": "user",
-        "content": [
-            {"type": "text", "text": "Look at this image and PDF, then use add_numbers to add 10 + 20."},
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}},
-            {"type": "file", "file": {"filename": "doc.pdf", "data": pdf_b64, "mime_type": "application/pdf"}},
-        ]
-    }],
-    tools=[{
-        "type": "function",
-        "function": {
-            "name": "add_numbers",
-            "description": "Add two numbers",
-            "parameters": {"type": "object", "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}}}
-        }
-    }]
-)
-```
-
----
-
-### Image Generation (DALL-E)
-
-```python
-from openai import OpenAI
-
-client = OpenAI(base_url="http://localhost:8000/v1", api_key="dummy123")
-
-response = client.images.generate(
-    model="dall-e-3",
-    prompt="A cyberpunk cat hacking a mainframe",
-    n=1,
-    size="1024x1024",
-    response_format="b64_json",
-)
-
-image_data = response.data[0]
-print(f"Revised prompt: {image_data.revised_prompt}")
-
-import base64
-with open("generated_image.png", "wb") as f:
-    f.write(base64.b64decode(image_data.b64_json))
-```
-
-```bash
-curl -X POST http://localhost:8000/v1/images/generations \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer dummy123" \
-  -d '{
-    "model": "dall-e-3",
-    "prompt": "A cyberpunk cat hacking a mainframe",
-    "n": 1,
-    "size": "1024x1024",
-    "response_format": "b64_json"
-  }'
-```
-
-**Request parameters:**
-
-| Parameter         | Type    | Default      | Description                      |
-| ----------------- | ------- | ------------ | -------------------------------- |
-| `prompt`          | string  | _(required)_ | Text description of the image    |
-| `model`           | string  | `dall-e-3`   | Ignored — uses ChatGPT's DALL-E  |
-| `n`               | integer | `1`          | Number of images (1–4)           |
-| `size`            | string  | `1024x1024`  | Hint to ChatGPT                  |
-| `quality`         | string  | `standard`   | `standard` or `hd`               |
-| `style`           | string  | `vivid`      | `vivid` or `natural`             |
-| `response_format` | string  | `b64_json`   | `b64_json` or `url` (local path) |
-
-> `size`, `quality`, and `style` are passed as hints in the prompt — the actual output depends on DALL-E's web UI.
-
----
-
-## TUI — Interactive Terminal Client
-
-CatGPT includes a full-screen cyberpunk-themed terminal chat interface built with Textual.
-
-```bash
-# Local only (not available inside Docker)
-python -m src.cli.app
-```
-
-### Features
-
-- Splash screen with ASCII cat logo
-- Scrollable chat log with colored message borders (cyan = user, green = assistant, magenta = images)
-- Markdown rendering in responses
-- DALL-E image cards with file path and size
-- Status bar: connection state, thread ID, message count, response time
-
-### Commands
-
-| Command        | Description                   |
-| -------------- | ----------------------------- |
-| `/new`         | Start a fresh conversation    |
-| `/threads`     | List recent threads           |
-| `/thread <id>` | Switch to a thread            |
-| `/images`      | List downloaded DALL-E images |
-| `/status`      | Connection details            |
-| `/clear`       | Clear chat display            |
-| `/help`        | Show commands                 |
-| `/exit`        | Quit                          |
-
-**Shortcuts:** `Ctrl+N` (new), `Ctrl+T` (threads), `Ctrl+L` (clear), `Ctrl+Q` (quit)
-
----
-
-## Configuration Reference
-
-All settings are loaded from environment variables (`.env` file or `docker-compose.yml`):
-
-| Variable             | Default               | Description                                              |
-| -------------------- | --------------------- | -------------------------------------------------------- |
-| `BROWSER_DATA_DIR`   | `browser_data`        | Chrome persistent profile directory                      |
-| `LOG_DIR`            | `logs`                | Log file output directory                                |
-| `IMAGES_DIR`         | `downloads/images`    | DALL-E image download directory                          |
-| `HEADLESS`           | `false`               | Run browser headless (not recommended — easily detected) |
-| `SLOW_MO`            | `0`                   | Playwright slow-motion delay (ms) for debugging          |
-| `BROWSER_CHANNEL`    | `chrome`              | Browser channel; use `chromium` to force bundled Chromium |
-| `CHATGPT_URL`        | `https://chatgpt.com` | Target ChatGPT URL                                       |
-| `CHATGPT_DEFAULT_MODEL` | ``                  | Optional model id to auto-apply when requests use `catgpt-browser` |
-| `CHATGPT_MODEL_ALIASES` | `gpt-5.5=Instant,...` | Comma-separated `public_id=UI label` map for browser model switching |
-| `CHATGPT_MODEL_SETTINGS` | `gpt-5.5-thinking=Standard,...` | Comma-separated model setting map for configurable picker rows like `Thinking` and `Pro` |
-| `CHATGPT_MODEL_SWITCH_TIMEOUT` | `10000`     | Max wait time (ms) to confirm the ChatGPT UI switched models |
-| `CHATGPT_MODEL_SWITCH_STRICT` | `false`      | If `true`, return an error when a requested ChatGPT UI model cannot be selected |
-| `ATTACHMENT_EXPAND_MULTIPAGE` | `true`      | If `true`, expands multi-page PDFs and multi-frame images into ordered page images before upload |
-| `ATTACHMENT_MAX_PAGES` | `24`                | Maximum pages/frames rendered from a single attachment |
-| `ATTACHMENT_RENDER_DPI` | `144`              | DPI used when rendering PDF pages to images |
-| `OLLAMA_EMBEDDING_MODELS` | `nomic-embed-text` | Comma-separated Ollama-visible embedding model profiles |
-| `OLLAMA_EMBEDDING_DIMENSIONS` | `768`       | Vector size used by the compatibility embedding shim |
-| `OLLAMA_ACTIVE_MODEL_TTL_SECONDS` | `900`   | How long a model remains listed in `/api/ps` after use |
-| `RESPONSE_TIMEOUT`   | `120000`              | Max wait for ChatGPT response (ms)                       |
-| `SELECTOR_TIMEOUT`   | `5000`                | Timeout per selector probe (ms)                          |
-| `TYPE_DELAY_MIN`     | `50`                  | Min delay between keystrokes (ms)                        |
-| `TYPE_DELAY_MAX`     | `150`                 | Max delay between keystrokes (ms)                        |
-| `THINK_PAUSE_MIN`    | `1000`                | Min thinking pause (ms)                                  |
-| `THINK_PAUSE_MAX`    | `3000`                | Max thinking pause (ms)                                  |
-| `LOG_LEVEL`          | `DEBUG`               | Logging level (DEBUG, INFO, WARNING, ERROR)              |
-| `LOG_CONSOLE`        | `true`                | Enable console log output                                |
-| `API_HOST`           | `0.0.0.0`             | FastAPI server bind address                              |
-| `API_PORT`           | `8000`                | FastAPI server port                                      |
-| `API_TOKEN`          | `dummy123`            | Bearer token for API auth (empty = disabled)             |
-| `API_TOKEN_OPTIONAL` | `false`               | If `true`, requests without token are allowed even when `API_TOKEN` is set |
-| `API_THREAD_CONTRACT_MODE` | `false`         | If `true`, reuses per-thread system instruction contracts with compact follow-up prompts |
-| `API_THREAD_CONTRACT_TTL_SECONDS` | `3600`    | TTL for per-thread instruction contracts in memory       |
-| `API_APP_THREAD_MODE` | `false`               | If `true`, routes requests to app-specific threads keyed by app identity (`user` first, then built-in app-name headers) |
-| `API_APP_THREAD_TTL_SECONDS` | `86400`       | TTL for app-to-thread mappings in memory                 |
-| `API_APP_THREAD_DELETE_EXPIRED` | `false`  | If `true`, best-effort deletion of expired CatGPT-created app threads from the web UI |
-| `API_HEADER_ROW_MERGE_MODE` | `false`        | If `true`, merges header-only rows (note/context only) into the next item's note/context |
-| `VNC_PASSWORD`       | `catgpt`              | Password for noVNC browser UI                            |
-| `RATE_LIMIT_SECONDS` | `5`                   | Min seconds between API requests                         |
-
----
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                        Docker Container                                │
-│                                                                        │
-│   ┌─────────┐   ┌──────────┐   ┌──────────────┐   ┌──────────────┐    │
-│   │  Xvfb   │   │ x11vnc   │   │    noVNC     │   │   FastAPI    │    │
-│   │ :99     │──▶│ VNC :5900│──▶│  WS :6080    │   │  API :8000   │    │
-│   │(virtual │   │(captures │   │(web browser  │   │(OpenAI-compat│    │
-│   │ display)│   │ display) │   │ access)      │   │  + custom)   │    │
-│   └─────────┘   └──────────┘   └──────────────┘   └──────┬───────┘    │
-│                                                           │            │
-│                                          ┌────────────────┴──────┐     │
-│                                          │   ChatGPTClient       │     │
-│                                          │   (send_message,      │     │
-│                                          │    new_chat,           │     │
-│                                          │    _upload_files)      │     │
-│                                          └────────────┬──────────┘     │
-│                                                       │                │
-│                          ┌────────────────────────────┼──────────┐     │
-│                          │                            │          │     │
-│                   ┌──────┴──────┐   ┌─────────────────┴┐  ┌─────┴──┐  │
-│                   │  Detector   │   │  BrowserManager  │  │ Human  │  │
-│                   │  (copy btn, │   │  (Patchright +   │  │ (type, │  │
-│                   │   stop btn, │   │   stealth +      │  │  click,│  │
-│                   │   stability)│   │   persistent ctx) │  │  delay)│  │
-│                   └─────────────┘   └──────────────────┘  └────────┘  │
-│                                                                        │
-│   Managed by supervisord (4 processes)                                 │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-**External clients** (Python, curl, LangChain, any OpenAI SDK) connect to port **8000** (API).\
-**Developers** can connect to port **6080** (noVNC) to see/interact with the browser visually.
-
----
-
-## Project Structure
-
-```
-catgpt/
-├── README.md                     ← This file
-├── requirements.txt              ← Python dependencies
-├── flake.nix / flake.lock        ← Reproducible Nix runtime
-├── docker-compose.yml            ← Single-service stack: ports 8000+6080, volumes
-├── .env                          ← Local environment overrides (optional)
-├── .env.example                  ← Environment template
-├── .dockerignore / .gitignore
-│
-├── docker/
-│   ├── Dockerfile                ← Build: system deps + Python + Patchright
-│   ├── entrypoint.sh             ← Container startup: Xvfb, DNS resolution, supervisor
-│   └── supervisord.conf          ← Process manager: Xvfb + VNC + noVNC + FastAPI
-│
-├── src/
-│   ├── config.py                 ← All settings loaded from env vars with defaults
-│   ├── selectors.py              ← Centralized DOM selectors (single update point)
-│   ├── log.py                    ← File + console logging setup
-│   ├── dom_observer.py           ← DOM mutation observer (experimental)
-│   ├── network_recorder.py       ← Network request recorder (experimental)
-│   │
-│   ├── browser/
-│   │   ├── manager.py            ← Browser lifecycle: launch, persist, close, DNS
-│   │   ├── stealth.py            ← Stealth patches: playwright-stealth + Docker workaround
-│   │   ├── human.py              ← Human simulation: typing, clicking, delays, mouse
-│   │   └── auto_login.py         ← Auto-login detection: prompts user if not logged in
-│   │
-│   ├── chatgpt/
-│   │   ├── client.py             ← Core: send_message(), new_chat(), file upload
-│   │   ├── detector.py           ← Response completion: copy btn, stop btn, text stability
-│   │   ├── image_handler.py      ← DALL-E image detection, download, save
-│   │   └── models.py             ← Data models: ChatResponse, ImageInfo, Thread
-│   │
-│   ├── api/
-│   │   ├── server.py             ← FastAPI app: lifespan, browser init, CORS, routes
-│   │   ├── openai_routes.py      ← OpenAI-compatible API: /v1/chat/completions, /v1/models
-│   │   ├── openai_schemas.py     ← Pydantic schemas matching OpenAI's API spec
-│   │   ├── routes.py             ← Custom REST API: /chat, /threads, /status
-│   │   └── schemas.py            ← Custom API schemas
-│   │
-│   └── cli/
-│       ├── app.py                ← Textual TUI: cyberpunk chat interface
-│       └── catgpt.tcss           ← Terminal CSS theme
-│
-├── scripts/
-│   ├── first_login.py            ← One-time browser sign-in script
-│   ├── test_langchain_tools.py   ← Comprehensive test suite (6 test categories)
-│   ├── test_phase1.py            ← Phase 1 validation
-│   ├── test_multi_turn.py        ← Multi-turn conversation tests
-│   ├── test_robust.py            ← Robustness test suite
-│   ├── test_images.py            ← DALL-E image generation tests
-│   └── debug_image_dom.py        ← DOM debugging utilities
-│
-├── downloads/                    ← Downloaded files & test assets
-│   ├── images/                   ← DALL-E generated images + test images
-│   └── test.pdf                  ← Test PDF for file attachment tests
-│
-├── browser_data/                 ← Persistent Chrome profile (gitignored)
-├── logs/                         ← All log files (gitignored)
-└── tests/                        ← Unit tests (placeholder)
-```
-
----
-
-## Docker Internals
-
-### Container Services (managed by supervisord)
-
-| Service    | Port            | Purpose                                   |
-| ---------- | --------------- | ----------------------------------------- |
-| **Xvfb**   | `:99` (display) | Virtual framebuffer — Chrome renders here |
-| **x11vnc** | `5900`          | VNC server capturing the Xvfb display     |
-| **noVNC**  | `6080`          | WebSocket bridge — browser-accessible VNC |
-| **catgpt** | `8000`          | FastAPI API server                        |
-
-### Startup Sequence (entrypoint.sh)
-
-1. Create directories (`/app/browser_data`, `/app/logs`, `/app/downloads/images`)
-2. Clean stale Chrome lock files (`SingletonLock`, `SingletonSocket`, `SingletonCookie`)
-3. Set up VNC password from `VNC_PASSWORD` env var
-4. Pre-resolve DNS domains via Python and write to `/etc/hosts` (Docker DNS workaround)
-5. Log environment variables
-6. Verify Xvfb functionality
-7. Verify Patchright Chromium installation
-8. Print access info (API URL, noVNC URL, first-login instructions)
-9. Start supervisord (manages all 4 services)
-
-### Volumes
-
-| Volume                                                  | Purpose                                           |
-| ------------------------------------------------------- | ------------------------------------------------- |
-| `${DOCKERDIR}/appdata/catgpt/browser:/app/browser_data` | Persistent browser session (cookies, login state) |
-| `${DOCKERDIR}/appdata/catgpt/logs:/app/logs`            | Logs accessible from host                         |
-
-### Health Check
-
-```yaml
-healthcheck:
-  test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
-  interval: 30s
-  timeout: 10s
-  start_period: 60s
-  retries: 3
-```
-
-The `/healthz` endpoint is unauthenticated so the health check works without a token.
-
----
-
-## How It Works — Deep Dive
-
-### Browser Lifecycle
-
-1. **Launch:** `BrowserManager` creates a Patchright persistent browser context at `browser_data/`
-2. **DNS Pre-resolution (Docker):** Pre-resolves `chatgpt.com`, `cdn.oaistatic.com`, etc. and passes them via `--host-resolver-rules`
-3. **Navigate:** Opens `chatgpt.com` with retry logic (up to 5 attempts, exponential backoff)
-4. **Stealth (deferred):** Stealth patches applied **after** first navigation to avoid breaking DNS
-5. **Login Check:** `ensure_logged_in()` checks for login indicators and prompts if needed
-6. **Client Injection:** `ChatGPTClient` is injected into all API routers
-7. **Shutdown:** Browser closes gracefully on FastAPI shutdown
-
-### Stealth & Anti-Detection
-
-| Technique                 | Implementation                                                                          | File                 |
-| ------------------------- | --------------------------------------------------------------------------------------- | -------------------- |
-| Persistent Chrome profile | `launch_persistent_context()` — retains cookies, Cloudflare clearance                   | `browser/manager.py` |
-| playwright-stealth        | Patches `navigator.webdriver`, WebGL, canvas, plugins                                   | `browser/stealth.py` |
-| Docker stealth workaround | Uses `page.evaluate()` instead of `add_init_script()` (the latter breaks DNS in Docker) | `browser/stealth.py` |
-| Human-like typing         | `keyboard.insert_text()` for paste-style input                                          | `browser/human.py`   |
-| Mouse simulation          | Hover before click, natural movement                                                    | `browser/human.py`   |
-| Random delays             | 500–1200ms before typing, 300–600ms before sending                                      | `browser/human.py`   |
-| Viewport jitter           | ±20px randomization on each launch (1280×720 base)                                      | `browser/manager.py` |
-| Headful mode              | Always runs with visible browser (headless is trivially detected)                       | `config.py`          |
-| Lock file cleanup         | Auto-cleans stale `SingletonLock` files from crashed Chrome processes                   | `browser/manager.py` |
-| Orphan process kill       | Kills leftover `chrome-for-testing` processes on startup                                | `browser/manager.py` |
-
-> **Critical Docker DNS Fix:** `playwright-stealth`'s `add_init_script()` causes Chrome to fail DNS resolution inside Docker. The fix uses `page.evaluate()` to inject stealth JS at runtime instead, hooking `framenavigated` events to re-inject on every navigation.
-
-### Message Send/Receive Flow
-
-```
-send_message(text, image_paths, file_paths)
-│
-├── 1. Count existing assistant messages (pre_count)
-├── 2. Random delay (500-1200ms, human simulation)
-├── 3. Upload files if any → _upload_files()
-│      └── set_input_files() on hidden <input type="file">
-│      └── Wait 3s + extra per file for processing
-├── 4. Find chat input → _find_selector(CHAT_INPUT)
-├── 5. Paste text → keyboard.insert_text()
-├── 6. Random delay (300-600ms)
-├── 7. Click send → _click_send() or fallback Enter key
-├── 8. Wait for response → wait_for_response_complete()
-│      └── Expected message count = pre_count + 1
-├── 9. Sleep 1s (DOM settle)
-├── 10. Check for DALL-E images → extract_images_from_response()
-├── 11. Extract text:
-│       ├── Image response → _extract_image_turn_text() (DOM scraping)
-│       └── Text response → extract_last_response_via_copy() (copy button)
-└── 12. Return ChatResponse(message, thread_id, elapsed_ms, images)
-```
-
-### Complicated Flows
-
-#### 1) Async Chat Job Lifecycle (`/v1/chat/completions/async`)
-
-```
-POST /v1/chat/completions/async
-│
-├── 1. Validate request and resolve app key (if app-thread mode enabled)
-├── 2. Create job entry: status=queued
-├── 3. Store ownership map: job_id -> app_key
-├── 4. Spawn background task (_run_async_chat_job)
-└── 5. Return job handle immediately
-
-Background task:
-├── 6. Mark job status=running
-├── 7. Execute normal chat pipeline (_execute_chat_completion)
-├── 8a. On success: status=completed + response
-└── 8b. On error:   status=failed + error
-
-GET /v1/chat/completions/async/{job_id}
-└── 9. Poll until completed/failed
-```
-
-#### 2) App-Thread Routing + Isolation
-
-When `API_APP_THREAD_MODE=true`, CatGPT maps each app identity to its own ChatGPT thread:
-
-```
-Incoming request
-│
-├── 1. Derive app key (priority order):
-│      endpoint app name -> request.user -> app headers -> origin/referer
-│      -> user-agent fingerprint -> client IP fallback
-├── 2. Check explicit request.thread_id:
-│      └── If present, navigate there directly (overrides app mapping)
-├── 3. Otherwise, look up app_key -> thread_id mapping
-│      ├── Found: navigate to mapped thread
-│      └── Missing: create a new chat to isolate this app
-├── 4. Execute message send in that thread context
-└── 5. Persist/refresh app_key -> resulting thread_id mapping (TTL-based)
-```
-
-This prevents multiple apps sharing one browser session from contaminating each
-other's context.
-
-##### Expired App-Thread Cleanup
-
-`API_APP_THREAD_TTL_SECONDS` controls how long an app identity can reuse the same
-mapped ChatGPT thread. The default is `86400` seconds (24 hours), and CatGPT
-enforces a minimum of 300 seconds.
-
-Cleanup is opportunistic, not a background timer: expired mappings are checked
-when an app-thread request is handled. If `API_APP_THREAD_DELETE_EXPIRED=false`
-(the default), CatGPT only drops the expired in-memory mapping. If
-`API_APP_THREAD_DELETE_EXPIRED=true`, CatGPT also schedules a best-effort browser
-UI deletion after the current request finishes and releases the shared browser
-lock.
-
-Only threads that CatGPT created for app-thread isolation are eligible for UI
-deletion. Threads supplied through `request.thread_id`, manually-created ChatGPT
-threads, and pre-existing chats are not marked delete-owned; when those mappings
-expire, CatGPT forgets the mapping but does not delete the ChatGPT conversation.
-
-#### 3) Thread Contract Compression (Large Instruction Prompts)
-
-When `API_THREAD_CONTRACT_MODE=true`, repeated long instructions are compacted:
-
-```
-Request with system instructions + single user message
-│
-├── 1. Hash normalized system messages -> contract_id
-├── 2. If current thread already learned same contract:
-│      └── Replace full prompt with compact reminder + user payload
-├── 3. Track previous user text in thread
-├── 4. Detect repeated user instruction prefix (if any)
-├── 5. If prefix contract is learned and response_format is active:
-│      └── Use even smaller "user-prefix contract" reminder prompt
-└── 6. On non-JSON result (when structured output requested):
-       fallback retry once with full original prompt
-```
-
-This reduces token-like prompt size while keeping long-lived instruction
-contracts stable across turns.
-
-#### 4) Structured Output + Cardinality Recovery
-
-For `response_format={"type":"json_schema"...}` or `{"type":"json_object"}`:
-
-```
-1. Inject strict structured-output system instruction (if not already present)
-2. Send message and normalize extracted assistant text
-3. Validate output cardinality against request expectation
-4. If mismatch, build retry prompt with expected vs actual counts
-5. Retry once and accept retry if cardinality now matches
-```
-
-This addresses common browser-UI model behavior where valid JSON is returned but
-with the wrong number of items.
-
-### Response Detection Strategy
-
-The detector (`detector.py`) uses multiple strategies to know when ChatGPT finishes responding:
-
-1. **Primary: Copy Button** — appears only after the full response is generated
-2. **Fallback: Stop Button Lifecycle** — watches "Stop generating" button appear then disappear
-3. **Fallback: Text Stability** — polls last assistant message; stable for 4+ consecutive checks (2s apart) = complete
-4. **Message Counting** — counts both `div[data-message-author-role='assistant']` and `.agent-turn` elements (image responses use the latter)
-
-### Tool Calling Implementation
-
-Since ChatGPT's web UI has no native tool API, CatGPT uses **prompt injection**:
-
-1. Tool definitions are converted to a system prompt instructing ChatGPT to output:
-   ```json
-   {"tool_calls": [{"name": "<function_name>", "arguments": {...}}]}
-   ```
-2. Few-shot examples ensure reliable JSON output
-3. CatGPT parses the JSON via regex and returns standard OpenAI `tool_calls` format
-4. Tool results (`ToolMessage`) are formatted into the prompt transcript for multi-turn
-5. Each request prepends `"Forget all prior instructions"` to prevent context refusal
-
-### File & Image Upload Pipeline
-
-```
-API Request (with image_url / file content parts)
-│
-├── _extract_image_urls(content) → list of URLs/data-URLs
-├── _extract_file_attachments(content) → list of {filename, data_b64, mime_type}
-│
-├── _download_file(url_or_dict) → local file path
-│   ├── data: URL → base64 decode → save to /tmp/catgpt_files/
-│   ├── http: URL → urllib.request.urlretrieve
-│   ├── dict → base64 decode with original filename
-│   └── local path → pass through
-│
-└── client._upload_files(all_paths)
-    ├── Find <input type="file"> via Selectors.FILE_UPLOAD_INPUT
-    ├── set_input_files(valid_paths)
-    └── Wait 3s + 1s per additional file
-```
-
-### Echo Detection & Recovery
-
-Sometimes the copy-button extraction grabs the **sent prompt** instead of the response. CatGPT detects and recovers:
-
-1. Check if `response_text` contains `"[System instruction:"` (part of the injected tool prompt)
-2. If echo detected, wait 3 seconds and retry `extract_last_response_via_copy()`
-3. If retry still echoes, strip the system prompt prefix and extract the tail
-
-### Selector Fallback System
-
-All DOM selectors are defined in `selectors.py` as **lists of fallbacks** tried in order:
-
-```python
-CHAT_INPUT = [
-    "#prompt-textarea",                                    # Primary
-    "div[contenteditable='true'][id='prompt-textarea']",   # Specific
-    "div[contenteditable='true']",                         # Broad fallback
-]
-```
-
-When ChatGPT updates their UI, only `selectors.py` needs changes. Tracked selectors: `CHAT_INPUT`, `SEND_BUTTON`, `ASSISTANT_MESSAGE`, `STOP_BUTTON`, `NEW_CHAT_BUTTON`, `SIDEBAR_THREAD_LINKS`, `LOGIN_INDICATORS`, `ASSISTANT_MARKDOWN`, `POST_RESPONSE_BUTTONS`, `COPY_BUTTON`, `ASSISTANT_IMAGE`, `IMAGE_CONTAINER`, `IMAGE_DOWNLOAD_BUTTON`, `FILE_UPLOAD_INPUT`, `ATTACH_BUTTON`.
-
----
-
-## Testing
-
-```bash
-source .venv/bin/activate
-
-# Chat / tools / vision / file tests
-python scripts/test_langchain_tools.py
-
-# Image generation tests
-python scripts/test_image_generation.py
-# Run individual test suites
-python scripts/test_phase1.py           # Basic send/receive
-python scripts/test_multi_turn.py       # Multi-turn conversations
-python scripts/test_robust.py           # Tables, code blocks, long responses
-python scripts/test_images.py           # Image detection
-python scripts/test_read_aloud.py       # ChatGPT read-aloud audio capture
-python scripts/test_langchain_tools.py  # LangChain + tool calling (needs server running)
-```
-
-### Test Categories
-
-#### Chat & Tools (`test_langchain_tools.py`)
-
-| #   | Test                      | What It Validates                                       |
-| --- | ------------------------- | ------------------------------------------------------- |
-| 1   | **Simple Chat**           | Basic question/answer without tools                     |
-| 2   | **get_current_time Tool** | Single tool call → execute → send result → final answer |
-| 3   | **add_numbers Tool**      | Tool with parameters (a=42, b=58) → round-trip          |
-| 4   | **Complex Multi-Tool**    | Two tools called in one turn (weather + math)           |
-| 5   | **Image Input**           | Single image, multiple images, image + tool calling     |
-| 6   | **File Attachment**       | PDF upload + summarize, PDF + image combined            |
-
-#### Image Generation (`test_image_generation.py`)
-
-| #   | Test                | What It Validates                                      |
-| --- | ------------------- | ------------------------------------------------------ |
-| 1   | **Basic b64_json**  | Generate image, validate base64 response, save to disk |
-| 2   | **Generate & Save** | HD quality image, verify file exists and has content   |
-| 3   | **URL format**      | `response_format="url"` returns local file path        |
-| 4   | **OpenAI SDK**      | `client.images.generate()` works end-to-end            |
-
-### Test Assets
-
-- `downloads/images/*.png` — Test images for vision tests (Test 5)
-- `downloads/test.pdf` — Test PDF for file attachment tests (Test 6)
-
-Tests gracefully skip if assets are missing.
-
----
+With `API_APP_THREAD_MODE=true`, CatGPT can keep those apps in separate ChatGPT
+threads.
+
+### Useful things to run through CatGPT
+
+| Use case | Why CatGPT helps |
+| --- | --- |
+| Self-hosted apps needing an OpenAI-compatible URL | Use `base_url=http://catgpt:8000/v1` inside Docker networks. |
+| Open WebUI / Ollama-style clients | Use `/api/chat` and `/api/tags` without running a real Ollama model. |
+| Structured extraction from files | Send PDFs/images and request JSON output. |
+| App-specific assistants | Use app-scoped URLs and app-thread mode to isolate context. |
+| Occasional image generation | Use `/v1/images/generations` and let ChatGPT create/download the result. |
+| Tool-calling prototypes | Use OpenAI-style tools with browser-backed ChatGPT responses. |
 
 ## Troubleshooting
 
-### "ChatGPT client not initialized" (503 error)
+| Problem | Fix |
+| --- | --- |
+| API says the browser is not initialized | Wait 30-60 seconds after container start, then check `docker logs catgpt --tail 100`. |
+| Login expired | Open `http://localhost:6080` and log in again. |
+| noVNC opens but ChatGPT is logged out | Log in inside noVNC; the profile persists in the mounted browser volume. |
+| Model switch fails | Check `/v1/models`, then update `CHATGPT_MODEL_ALIASES` or set `CHATGPT_MODEL_SWITCH_STRICT=false`. |
+| A code change is not visible | Run `docker compose up --build -d`. |
+| Browser profile is stuck | Stop the container and remove stale browser lock files from the mounted browser directory. |
+| Responses are slow | ChatGPT browser automation is serialized; one request uses the browser at a time. |
 
-The API server started but the browser hasn't finished initializing. Wait 30–45 seconds after startup, or check logs:
-
-```bash
-docker logs catgpt --tail 50   # Docker
-cat logs/api_server.log        # Local
-```
-
-### "Not logged in" / Login required
-
-Your ChatGPT session expired. Re-login:
-
-- **Docker:** Open http://localhost:6080 and sign in
-- **Local:** Run `python scripts/first_login.py`
-
-### Stale browser lock files
-
-If the app crashes, orphan Chrome processes may leave lock files:
-
-```bash
-pkill -f "chrome-for-testing" 2>/dev/null
-rm -f browser_data/SingletonLock browser_data/SingletonSocket browser_data/SingletonCookie
-```
-
-The app auto-cleans these on startup, but manual cleanup may be needed after hard crashes.
-
-### Docker DNS issues
-
-Chrome inside Docker sometimes fails to resolve domains. If you still see DNS errors after the entrypoint workaround:
-
-```bash
-docker exec catgpt cat /etc/hosts      # Verify DNS entries
-docker exec catgpt curl -s https://chatgpt.com  # Test connectivity
-```
-
-### Tool calling returns empty response
-
-ChatGPT occasionally returns an empty response. This is a prompt-sensitivity issue — retry the request.
-
-### Tool calling says "I don't have tools"
-
-This happens when conversation history makes ChatGPT "remember" it doesn't have tools. Start a new chat (`POST /thread/new`) to reset context.
-
-### Code changes not taking effect (Docker)
-
-You must **rebuild** the Docker image after code changes:
-
-```bash
-docker compose up --build -d catgpt   # Correct
-# NOT: docker restart catgpt          # Wrong: uses old image
-```
-
-### Browser not visible in noVNC
-
-Check if all container services are running:
-
-```bash
-docker exec catgpt supervisorctl status
-```
-
-Expected: all 4 services (`xvfb`, `vnc`, `novnc`, `catgpt`) showing `RUNNING`.
-
----
-
-## Known Limitations
-
-- **No streaming:** `stream=true` returns a 400 error. All responses are returned at once after completion.
-- **Single concurrency:** All requests are serialized through an `asyncio.Lock` — one request at a time.
-- **Response time:** Each request takes 5–30+ seconds depending on response length.
-- **Token counts are estimated:** ~4 characters per token. Not accurate.
-- **Cache scope:** chat dedup cache is in-memory and process-local (not shared across replicas/restarts).
-- **Session expiry:** ChatGPT login sessions expire periodically — re-login required.
-- **ChatGPT UI changes:** If ChatGPT updates their HTML, selectors in `selectors.py` may need updating.
-- **No multi-user:** Single browser session = single user.
-- **Tool calling reliability:** Depends on ChatGPT following the injected system prompt (~95% reliable).
-- **File size limits:** Large files (>10MB) may timeout during upload.
-
----
-
-## Tech Stack
-
-| Component          | Library               | Version | Purpose                              |
-| ------------------ | --------------------- | ------- | ------------------------------------ |
-| Browser automation | Patchright            | 1.58+   | Playwright fork for Chromium control |
-| Anti-detection     | playwright-stealth    | 2.0+    | Patch browser fingerprints           |
-| API framework      | FastAPI               | 0.115+  | OpenAI-compatible + custom REST API  |
-| ASGI server        | Uvicorn               | 0.32+   | Serve FastAPI app                    |
-| Data validation    | Pydantic              | 2.5+    | Request/response schemas             |
-| TUI framework      | Textual               | 0.85+   | Full-screen terminal application     |
-| Rich text          | Rich                  | 13.0+   | Markdown rendering in terminal       |
-| CLI                | Typer                 | 0.12+   | Command-line argument parsing        |
-| Config             | python-dotenv         | 1.0+    | Environment variable loading         |
-| Testing            | OpenAI SDK            | 1.0+    | API client for tests                 |
-| Testing            | LangChain             | 0.2+    | Tool calling integration tests       |
-| Container          | Docker + Compose      | —       | Production deployment                |
-| Display server     | Xvfb + x11vnc + noVNC | —       | Virtual display + browser access     |
-| Process manager    | supervisord           | —       | Manage container services            |
-
----
-
-## License
-
-Educational proof-of-concept. Built to demonstrate browser automation capabilities.
-Use responsibly and in accordance with OpenAI's terms of service.
-
+CatGPT intentionally does not support streaming. Requests return after the
+browser response is complete.
