@@ -998,7 +998,8 @@ async def _wait_for_copy_button_or_image(
         if not first_snapshot_logged and elapsed >= 2:
             first_snapshot_logged = True
             turn_text = (snapshot.get("text") or "")[:200]
-            all_turns = await _dump_all_turns(page)
+            conv_snapshot = await _conversation_snapshot(page)
+            all_turns = conv_snapshot.get("assistantTurns", [])
             log.debug(
                 f"First snapshot at {int(elapsed)}s | "
                 f"prev_sig={previous_turn_signature} cur_sig={signature} "
