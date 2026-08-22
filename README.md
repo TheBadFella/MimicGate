@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>A browser-backed, multi-protocol AI gateway for ChatGPT, Claude, and MiniMax.</strong><br />
-  Connect OpenAI, Anthropic, Ollama, LangChain, and self-hosted clients to one persistent gateway.
+  Connect OpenAI, Anthropic, Ollama, LangChain, Cline, and self-hosted clients to one persistent gateway.
 </p>
 
 <p align="center">
@@ -35,7 +35,7 @@ CatGPT turns a logged-in browser session into familiar API endpoints. ChatGPT an
   <tr>
     <td width="50%" valign="top">
       <h3>🔌 Protocol Compatibility</h3>
-      OpenAI Chat Completions and Responses, Anthropic Messages, Ollama chat/generate/embed, tool calling, and SSE-compatible responses.
+      OpenAI Chat Completions and Responses, Anthropic Messages, Ollama chat/generate/embed, tool calling, and SSE-compatible responses for IDE clients such as Cline and OpenCode.
     </td>
     <td width="50%" valign="top">
       <h3>⚡ Sessions & Scale</h3>
@@ -142,9 +142,12 @@ curl http://localhost:8650/v1/chat/completions \
 | OpenAI | `/v1/chat/completions`, `/v1/responses`, `/v1/images/generations`, `/v1/models` |
 | Anthropic | `/v1/messages` |
 | Ollama | `/api/chat`, `/api/generate`, `/api/embed`, `/api/tags` |
+| Cline / OpenCode | `/cline/v1/chat/completions` (OpenAI-compatible; SSE `stream=true`) |
 | Native CatGPT | `/chat`, `/thread/{id}/chat`, `/thread/new`, `/threads`, `/status` |
 
-Use `/{app_name}/v1/...` or `/{app_name}/api/...` routes to isolate applications such as Open WebUI, Mealie, Linkwarden, or internal agents. Use `thread_id` or `x-session-id` when the caller needs stable conversation continuity.
+Use `/{app_name}/v1/...` or `/{app_name}/api/...` routes to isolate applications such as Cline, Open WebUI, Mealie, Linkwarden, or internal agents. Use `thread_id` or `x-session-id` when the caller needs stable conversation continuity.
+
+In Cline, choose **OpenAI Compatible**, set Base URL to `http://localhost:8650/cline/v1`, API Key to `CATGPT_API_KEY`, and Model ID to `catgpt-browser` (or `claude-browser`).
 
 > [!NOTE]
 > `stream=true` is protocol-compatible, but browser generation finishes before CatGPT emits the SSE or NDJSON response chunks. It is not live token forwarding from the provider.

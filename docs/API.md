@@ -41,6 +41,12 @@ With the OpenAI SDK:
 client = OpenAI(base_url="http://localhost:8000/v1", api_key="dummy123")
 ```
 
+Cline and similar IDE clients should use an app-scoped OpenAI-compatible base URL so their chats stay isolated:
+
+```
+http://localhost:8650/cline/v1
+```
+
 Open paths (no auth needed): `/docs`, `/redoc`, `/openapi.json`, `/healthz`
 
 ---
@@ -88,7 +94,7 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 | `tool_choice` | string/object | no | `auto`, `none`, `required`, or specific function |
 | `temperature` | float | no | Ignored (browser controls this) |
 | `max_tokens` | int | no | Ignored |
-| `stream` | bool | no | Must be `false` (streaming not supported) |
+| `stream` | bool | no | SSE is accepted for IDE clients such as Cline. The browser finishes first, then CatGPT emits the completed message as event-stream chunks. |
 | `read_aloud` | bool | no | ChatGPT only. Opens `More actions` -> `Read aloud`, downloads the browser-generated audio, and returns it at `choices[0].message.audio`. |
 
 **Response:**
