@@ -48,14 +48,16 @@ RUN add-pkg \
 ENV VIRTUAL_ENV=/opt/venv
 RUN python3 -m venv $VIRTUAL_ENV
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 
 # ── Application setup ───────────────────────────────────────────
 WORKDIR /app
 
-# Install Python dependencies first (layer caching)
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install locked Python dependencies first (layer caching)
+RUN pip install --no-cache-dir uv==0.12.5
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
 
 # Install Patchright's Chromium into a shared path that is identical during
 # the root build and the non-root jlesage application runtime.
@@ -66,7 +68,7 @@ COPY src/ src/
 COPY scripts/ scripts/
 
 # ── Directory setup ─────────────────────────────────────────────
-RUN mkdir -p /app/browser_data /app/logs /app/downloads/images /app/downloads/audio
+RUN mkdir -p /app/browser_data /app/logs /app/state /app/downloads/images /app/downloads/audio
 
 # ── GUI initialization & startup scripts ────────────────────────
 COPY docker/50-catgpt-init.sh /etc/cont-init.d/50-catgpt-init.sh

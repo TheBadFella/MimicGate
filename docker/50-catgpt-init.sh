@@ -4,12 +4,13 @@ set -e
 # ── CatGPT Container Initialization (runs as root before startapp.sh) ──
 
 echo "[catgpt-init] Preparing runtime directories..."
-mkdir -p /app/browser_data /app/logs /app/downloads/images /app/downloads/audio
+mkdir -p /app/browser_data /app/logs /app/state /app/downloads/images /app/downloads/audio
 
 # This script runs after jlesage initializes USER_ID/GROUP_ID and the app user.
 # Use the base-image helper so bind mounts and network shares are handled safely.
 take-ownership /app/browser_data
 take-ownership /app/logs
+take-ownership /app/state
 take-ownership /app/downloads
 
 # Clean up stale Chromium locks from previous crash/restart

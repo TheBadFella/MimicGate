@@ -73,6 +73,15 @@ class PageExtractionOptions(BaseModel):
     mode: str = "structured"
 
 
+class ReasoningOptions(BaseModel):
+    """Reasoning options accepted by Chat Completions and Responses."""
+
+    effort: Optional[str] = None
+    mode: Optional[str] = None
+    summary: Optional[str] = None
+    context: Optional[str] = None
+
+
 class ChatCompletionRequest(BaseModel):
     """OpenAI-compatible chat completion request body."""
     model: str = "catgpt-browser"
@@ -88,6 +97,10 @@ class ChatCompletionRequest(BaseModel):
     stream: Optional[bool] = False
     n: Optional[int] = 1
     user: Optional[str] = None
+    reasoning_effort: Optional[str] = None
+    reasoning: Optional[ReasoningOptions] = None
+    # Durable logical conversation identity (also accepted via header).
+    conversation_id: Optional[str] = None
     # CatGPT extension: explicit thread targeting for app-level isolation.
     thread_id: Optional[str] = None
     response_format: Optional[Any] = None
@@ -229,6 +242,10 @@ class ResponsesRequest(BaseModel):
     stream: Optional[bool] = False
     metadata: Optional[dict[str, Any]] = None
     user: Optional[str] = None
+    reasoning: Optional[ReasoningOptions] = None
+    conversation: Optional[Union[str, dict[str, Any]]] = None
+    previous_response_id: Optional[str] = None
+    store: Optional[bool] = True
     # CatGPT extension
     read_aloud: Optional[bool] = False
 

@@ -14,7 +14,7 @@ import unittest
 import unittest.mock
 from types import SimpleNamespace
 
-if "patchright" not in sys.modules:
+if "patchright" not in sys.modules and importlib.util.find_spec("patchright.async_api") is None:
     patchright_mod = unittest.mock.MagicMock()
     async_api_mod = unittest.mock.MagicMock()
     async_api_mod.Page = object

@@ -145,7 +145,7 @@ curl http://localhost:8650/v1/chat/completions \
 | Cline / OpenCode | `/cline/v1/chat/completions` (OpenAI-compatible; SSE `stream=true`) |
 | Native CatGPT | `/chat`, `/thread/{id}/chat`, `/thread/new`, `/threads`, `/status` |
 
-Use `/{app_name}/v1/...` or `/{app_name}/api/...` routes to isolate applications such as Cline, Open WebUI, Mealie, Linkwarden, or internal agents. Use `thread_id` or `x-session-id` when the caller needs stable conversation continuity.
+Use `/{app_name}/v1/...` or `/{app_name}/api/...` routes to isolate applications such as Cline, Open WebUI, Mealie, Linkwarden, or internal agents. Use `conversation_id` (or `X-CatGPT-Conversation-Id`) for durable, history-verified continuity; `thread_id` and `x-session-id` remain available for direct browser-thread and tab affinity. Send `X-CatGPT-Thread-Mode: fresh` when a request must start an isolated ephemeral thread.
 
 In Cline, choose **OpenAI Compatible**, set Base URL to `http://localhost:8650/cline/v1`, API Key to `CATGPT_API_KEY`, and Model ID to `catgpt-browser` (or `claude-browser`).
 
@@ -161,6 +161,7 @@ In Cline, choose **OpenAI Compatible**, set Base URL to `http://localhost:8650/c
 | `CATGPT_VNC_PASSWORD` | `catgpt` | Browser GUI password |
 | `MAX_CONCURRENT_REQUESTS` | `3` | Concurrent browser-backed requests |
 | `CHATGPT_DEFAULT_MODEL` | Current UI selection | Default ChatGPT model mapping |
+| `CHATGPT_PROJECT_URL` | Empty | Confine ChatGPT threads to one project |
 | `CHATGPT_LONG_PROMPT_FALLBACK` | `attachment` | Upload oversized prompts or use `error` for HTTP 413 |
 
 See the [generated environment reference](docs/ENVIRONMENT.md), [docker-compose.yml](docker-compose.yml), and the [Setup Guide](docs/SETUP.md) for advanced options. Add runtime-only Docker overrides under `services.catgpt.environment`.
@@ -175,6 +176,7 @@ See the [generated environment reference](docs/ENVIRONMENT.md), [docker-compose.
 | [Model Switching](docs/MODEL_SWITCHING.md) | ChatGPT model aliases, versions, and effort settings |
 | [Architecture](docs/ARCHITECTURE.md) | Browser lifecycle, routing, extraction, and response detection |
 | [Chrome Runbook](docs/CHROME_PLAYWRIGHT_RUNBOOK.md) | Browser automation diagnostics and recovery |
+| [Testing Guide](docs/TESTING.md) | Reproducible unit, environment, container, and browser smoke checks |
 
 ## Operational Notes
 

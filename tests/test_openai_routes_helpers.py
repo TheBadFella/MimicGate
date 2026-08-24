@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import sys
 import types
 import unittest
@@ -10,7 +11,7 @@ from fastapi import HTTPException
 
 # Provide a minimal patchright stub so helper tests can import API modules
 # without requiring browser automation dependencies.
-if "patchright" not in sys.modules:
+if "patchright" not in sys.modules and importlib.util.find_spec("patchright.async_api") is None:
     patchright_mod = types.ModuleType("patchright")
     async_api_mod = types.ModuleType("patchright.async_api")
     async_api_mod.Page = object
@@ -37,7 +38,7 @@ if "patchright" not in sys.modules:
     sys.modules["patchright._impl"] = impl_mod
     sys.modules["patchright._impl._errors"] = errors_mod
 
-if "playwright_stealth" not in sys.modules:
+if "playwright_stealth" not in sys.modules and importlib.util.find_spec("playwright_stealth") is None:
     playwright_stealth_mod = types.ModuleType("playwright_stealth")
 
     class _FakeStealth:
@@ -48,12 +49,15 @@ if "playwright_stealth" not in sys.modules:
 
 from src.api.openai_routes import (
     _anthropic_messages_to_chat_request,
+    _apply_tool_prompt_to_messages,
     _build_page_extraction_note,
     _build_page_extraction_response_format,
+    _build_tool_system_prompt,
     _chat_completion_sse_chunk,
     _detect_user_prefix_contract,
     _display_app_name,
     _derive_app_key,
+    _fresh_thread_from_header,
     _infer_expected_item_count,
     _latest_turn_messages,
     _looks_like_instruction_prefix,
@@ -84,7 +88,10 @@ from src.api.openai_schemas import (
     ResponseOutputText,
     ResponsesUsageInfo,
     ToolCall,
+    ToolDefinition,
+    FunctionDefinition,
     FunctionCallInfo,
+    ReasoningOptions,
 )
 
 
@@ -117,6 +124,57 @@ async def _collect_stream(stream_response) -> list[bytes]:
 
 
 class OpenAIRoutesHelpersTests(unittest.TestCase):
+    def test_fresh_thread_header_validation(self) -> None:
+        self.assertTrue(_fresh_thread_from_header(_make_request({"x-catgpt-thread-mode": "fresh"})))
+        self.assertFalse(_fresh_thread_from_header(_make_request()))
+        with self.assertRaises(HTTPException):
+            _fresh_thread_from_header(_make_request({"x-catgpt-thread-mode": "reuse"}))
+
+    def test_fresh_thread_rejects_explicit_routing(self) -> None:
+        for field in ("conversation_id", "thread_id"):
+            request = ChatCompletionRequest(
+                messages=[ChatMessage(role="user", content="hello")],
+                **{field: "route-1"},
+            )
+            with self.subTest(field=field), self.assertRaises(HTTPException):
+                _validate_chat_request(request, fresh_thread=True)
+
+    def test_tool_prompt_honors_none_required_and_specific_choices(self) -> None:
+        tools = [ToolDefinition(function=FunctionDefinition(name="add_numbers"))]
+        self.assertEqual(_build_tool_system_prompt(tools, "none"), "")
+
+        required = _build_tool_system_prompt(tools, "required")
+        specific = _build_tool_system_prompt(
+            tools,
+            {"type": "function", "function": {"name": "add_numbers"}},
+        )
+        self.assertIn("MUST contain at least one", required)
+        self.assertIn("JSON name value MUST be 'add_numbers'", specific)
+        self.assertIn("only text transformation", specific)
+
+    def test_tool_prompt_prefixes_latest_text_user_turn_without_mutation(self) -> None:
+        messages = [
+            ChatMessage(role="assistant", content="Earlier answer"),
+            ChatMessage(role="user", content="Call add_numbers"),
+        ]
+        updated = _apply_tool_prompt_to_messages(messages, "Return JSON")
+        self.assertEqual(updated[0], messages[0])
+        self.assertIn("Return JSON", updated[1].content)
+        self.assertIn("Latest request to transform:\nCall add_numbers", updated[1].content)
+        self.assertEqual(messages[1].content, "Call add_numbers")
+
+    def test_tool_prompt_preserves_multimodal_content(self) -> None:
+        original_parts = [
+            {"type": "text", "text": "Describe this"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}},
+        ]
+        updated = _apply_tool_prompt_to_messages(
+            [ChatMessage(role="user", content=original_parts)],
+            "Return JSON",
+        )
+        self.assertEqual(updated[0].content[1:], original_parts)
+        self.assertIn("Return JSON", updated[0].content[0]["text"])
+
     def test_route_families_share_browser_access_lock(self) -> None:
         self.assertIs(native_routes.browser_access_lock, browser_access_lock)
         self.assertIs(openai_routes_module.browser_access_lock, browser_access_lock)
@@ -388,6 +446,15 @@ class ResponsesAPITests(unittest.TestCase):
         self.assertEqual(len(chat_req.tools), 1)
         self.assertEqual(chat_req.tool_choice, "auto")
 
+    def test_responses_reasoning_effort_translates_to_chat_field(self) -> None:
+        req = ResponsesRequest(
+            model="gpt-5.6-sol",
+            input="Hello",
+            reasoning=ReasoningOptions(effort="high"),
+        )
+        chat_req = _responses_request_to_chat_request(req)
+        self.assertEqual(chat_req.reasoning_effort, "high")
+
     def test_validate_chat_request_accepts_stream(self) -> None:
         """Stream=true is allowed; route handlers emit pseudo-SSE after completion."""
         req = ChatCompletionRequest(
@@ -476,6 +543,7 @@ class ResponsesAPITests(unittest.TestCase):
             request: ChatCompletionRequest,
             app_key_override: str = "",
             http_request=None,
+            **_kwargs,
         ) -> ChatCompletionResponse:
             captured["app_key_override"] = app_key_override
             return ChatCompletionResponse(
@@ -508,6 +576,7 @@ class ResponsesAPITests(unittest.TestCase):
             request: ChatCompletionRequest,
             app_key_override: str = "",
             http_request=None,
+            **_kwargs,
         ) -> ChatCompletionResponse:
             captured["stream"] = bool(request.stream)
             return ChatCompletionResponse(
@@ -547,6 +616,7 @@ class ResponsesAPITests(unittest.TestCase):
             request: ChatCompletionRequest,
             app_key_override: str = "",
             http_request=None,
+            **_kwargs,
         ) -> ChatCompletionResponse:
             captured["stream"] = bool(request.stream)
             return ChatCompletionResponse(
@@ -576,7 +646,7 @@ class ResponsesAPITests(unittest.TestCase):
 
     def test_validate_responses_request_rejects_unsupported_model(self) -> None:
         """Unsupported model raises HTTPException."""
-        req = ResponsesRequest(model="gpt-42", input="Hello")
+        req = ResponsesRequest(model="not-a-model", input="Hello")
         with self.assertRaises(HTTPException) as ctx:
             _validate_responses_request(req)
         self.assertEqual(ctx.exception.status_code, 400)

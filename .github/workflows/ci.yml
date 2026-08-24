@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.14"]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          version: "0.12.5"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+          cache-suffix: py${{ matrix.python-version }}
+
+      - name: Install Python
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Verify lockfile
+        run: uv lock --check
+
+      - name: Install locked development dependencies
+        run: uv sync --frozen --group dev --python ${{ matrix.python-version }}
+
+      - name: Compile Python sources
+        run: uv run --frozen python -m compileall -q src tests scripts
+
+      - name: Run deterministic tests
+        run: uv run --frozen python -m unittest discover -s tests

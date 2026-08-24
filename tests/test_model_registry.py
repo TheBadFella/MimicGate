@@ -7,6 +7,12 @@ from src.chatgpt import model_registry
 
 
 class ModelRegistryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        model_registry.clear_discovered_models()
+
+    def tearDown(self) -> None:
+        model_registry.clear_discovered_models()
+
     def test_public_models_include_browser_alias_and_configured_models(self) -> None:
         with patch.object(model_registry.Config, "CHATGPT_MODEL_ALIASES", "gpt-5.3=GPT-5.3,o3=o3"):
             self.assertEqual(
@@ -86,6 +92,33 @@ class ModelRegistryTests(unittest.TestCase):
             "",
         ):
             self.assertIsNone(model_registry.resolve_requested_model("catgpt-browser"))
+
+    def test_dynamic_model_and_reasoning_suffix_resolve(self) -> None:
+        with patch.object(model_registry.Config, "CHATGPT_MODEL_ALIASES", ""):
+            resolved = model_registry.resolve_model_request("gpt-6.1-high")
+        self.assertIsNotNone(resolved.model)
+        assert resolved.model is not None
+        self.assertEqual(resolved.model.public_id, "gpt-6.1")
+        self.assertEqual(resolved.reasoning_effort, "high")
+        self.assertTrue(resolved.reasoning_from_model_id)
+
+    def test_reasoning_choice_clamps_to_closest_visible_row(self) -> None:
+        label, effort = model_registry.choose_reasoning_label(
+            "xhigh",
+            ["Low", "Medium", "High"],
+        )
+        self.assertEqual((label, effort), ("High", "high"))
+
+    def test_discovered_models_and_reasoning_are_public(self) -> None:
+        with patch.object(model_registry.Config, "CHATGPT_MODEL_ALIASES", ""):
+            model_registry.replace_discovered_catalog(
+                ["GPT-6.2 Sol"],
+                {"GPT-6.2 Sol": ["Medium", "High"]},
+            )
+            public = model_registry.list_public_chat_models()
+        self.assertIn("gpt-6.2-sol", public)
+        self.assertIn("gpt-6.2-sol-medium", public)
+        self.assertIn("gpt-6.2-sol-high", public)
 
 
 if __name__ == "__main__":

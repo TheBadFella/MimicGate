@@ -13,8 +13,8 @@ multi-ecosystem-groups:
       include: "scope"
 
 updates:
-  # Python dependencies from requirements.txt
-  - package-ecosystem: "pip"
+  # Python dependencies from pyproject.toml and uv.lock
+  - package-ecosystem: "uv"
     directory: "/"
     multi-ecosystem-group: "dependencies"
     patterns:

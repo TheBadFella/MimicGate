@@ -19,9 +19,15 @@ from typing import Literal
 from patchright.async_api import Page
 
 from src.chatgpt.model_registry import (
+    BrowserModelOption,
+    canonical_reasoning_effort,
+    choose_reasoning_label,
+    list_reasoning_labels,
     list_switchable_models,
     normalize_model_token,
-    resolve_requested_model,
+    register_discovered_models,
+    register_discovered_reasoning,
+    resolve_model_request,
 )
 from src.config import Config
 from src.selectors import Selectors
@@ -61,6 +67,8 @@ class ChatGPTClient:
         self._last_model_version_label = ""
         self._last_model_setting_by_key: dict[str, str] = {}
         self._unavailable_model_keys: set[str] = set()
+        self._model_capabilities_checked_at = 0.0
+        self._discovered_model_labels: list[str] = []
         self._recent_backend_events: list[dict] = []
         self._wire_backend_event_logger()
 
@@ -84,6 +92,7 @@ class ChatGPTClient:
         image_paths: list[str] | None = None,
         file_paths: list[str] | None = None,
         model: str | None = None,
+        reasoning_effort: str | None = None,
         read_aloud: bool = False,
     ) -> ChatResponse:
         """
@@ -126,8 +135,8 @@ class ChatGPTClient:
         log.debug(f"Latest user turn before send: {pre_user_signature}")
 
         # 1. Switch model if requested before interacting with the composer
-        if model:
-            await self.ensure_model(model)
+        if model or reasoning_effort:
+            await self.ensure_model(model or "catgpt-browser", reasoning_effort=reasoning_effort)
 
         # 2. Brief pause (human would take a moment to start typing)
         await random_delay(250, 700)
@@ -297,6 +306,7 @@ class ChatGPTClient:
 
             elapsed_ms = int((time.time() - start_time) * 1000)
             thread_id = self._extract_thread_id()
+            self._verify_project_thread_scope(thread_id)
             audio = None
 
             if read_aloud and response_text:
@@ -353,14 +363,21 @@ class ChatGPTClient:
 
         return await self.send_message("\n\n".join(part for part in prompt_parts if part.strip()))
 
-    async def ensure_model(self, requested_model: str) -> None:
+    async def ensure_model(
+        self,
+        requested_model: str,
+        reasoning_effort: str | None = None,
+    ) -> None:
         """Switch ChatGPT's model picker to the requested model when possible."""
-        target = resolve_requested_model(requested_model)
+        resolved = resolve_model_request(requested_model, reasoning_effort)
+        target = resolved.model
         if target is None:
+            if resolved.reasoning_effort:
+                await self._ensure_reasoning_for_current_model(resolved.reasoning_effort)
             log.debug(f"No explicit browser model switch needed for request model={requested_model!r}")
             return
         target_version_label = self._model_version_label_for_option(target)
-        target_setting_label = self._model_setting_label_for_option(target)
+        target_setting_label = self._reasoning_setting_label(target, resolved.reasoning_effort)
         unavailable_keys = {
             key
             for key in (
@@ -496,6 +513,91 @@ class ChatGPTClient:
             self._last_model_setting_by_key[self._model_setting_cache_key(target)] = target_setting_label
         log.info(f"Model switched to {target.ui_label}")
 
+    def _reasoning_setting_label(
+        self,
+        target: BrowserModelOption,
+        requested_effort: str | None,
+    ) -> str:
+        if not requested_effort:
+            return self._model_setting_label_for_option(target)
+        available = list_reasoning_labels(target.public_id)
+        if available:
+            label, _ = choose_reasoning_label(requested_effort, available)
+            if label:
+                return label
+        canonical = canonical_reasoning_effort(requested_effort) or requested_effort.strip().lower()
+        return {
+            "none": "None",
+            "minimal": "Minimal",
+            "low": "Low",
+            "medium": "Medium",
+            "high": "High",
+            "xhigh": "Extra High",
+            "max": "Max",
+            "ultra": "Ultra",
+        }.get(canonical, requested_effort.strip())
+
+    async def _ensure_reasoning_for_current_model(self, requested_effort: str) -> None:
+        current = await self._detect_current_model_label()
+        option = BrowserModelOption(
+            public_id="current",
+            ui_label=current or "ChatGPT",
+        )
+        setting = self._reasoning_setting_label(option, requested_effort)
+        configured = await self._ensure_model_setting(option, setting)
+        if configured is False:
+            self._handle_model_switch_failure(
+                f"Could not configure ChatGPT reasoning effort '{requested_effort}'"
+            )
+
+    async def discover_available_models(self, force: bool = False) -> list[str]:
+        """Discover visible model labels and reasoning rows from the live picker."""
+        ttl = max(0, Config.CHATGPT_MODEL_DISCOVERY_TTL_SECONDS)
+        if (
+            self._discovered_model_labels
+            and not force
+            and time.time() - self._model_capabilities_checked_at < ttl
+        ):
+            return list(self._discovered_model_labels)
+
+        await self._dismiss_model_picker()
+        current = await self._detect_current_model_label()
+        if not await self._open_model_picker(current, current_label=current):
+            return list(self._discovered_model_labels)
+        await asyncio.sleep(0.3)
+        await self._expand_advanced_picker()
+        await self._click_menu_text("Model")
+        visible = await self._collect_visible_model_options()
+        labels = [
+            label for label in visible
+            if re.search(r"(?:\bGPT[- ]?\d|\bo\d|^\d+(?:\.\d+)+)", label, re.IGNORECASE)
+        ]
+        if current and re.search(r"(?:GPT|\d|\bo\d)", current, re.IGNORECASE):
+            labels.insert(0, current)
+        labels = list(dict.fromkeys(label.strip() for label in labels if label.strip()))
+        if labels:
+            register_discovered_models(labels)
+
+        await self._dismiss_model_picker()
+        reasoning_labels: list[str] = []
+        if await self._open_model_picker(current, current_label=current):
+            await asyncio.sleep(0.3)
+            await self._expand_advanced_picker()
+            if await self._click_menu_text("Effort"):
+                visible_efforts = await self._collect_visible_model_options()
+                reasoning_labels = [
+                    label for label in visible_efforts
+                    if canonical_reasoning_effort(label, substring=True)
+                ]
+        await self._dismiss_model_picker()
+        if current and reasoning_labels:
+            register_discovered_reasoning(current, reasoning_labels)
+
+        if labels:
+            self._discovered_model_labels = labels
+            self._model_capabilities_checked_at = time.time()
+        return list(self._discovered_model_labels)
+
     # ── Navigation ──────────────────────────────────────────────
 
     async def new_chat(self) -> None:
@@ -507,6 +609,28 @@ class ChatGPTClient:
         3. Full page.goto() (last resort - may fail with DNS errors)
         """
         log.info("Starting new chat...")
+        project_url = Config.chatgpt_project_url()
+        if project_url:
+            current_url = (self._page.url or "").rstrip("/")
+            if current_url == project_url:
+                try:
+                    turn_count = await self._page.evaluate(
+                        "document.querySelectorAll('[data-testid^=\"conversation-turn-\"]').length"
+                    )
+                    if turn_count == 0:
+                        await self._wait_for_chat_input()
+                        log.info("Already on a fresh chat in the configured project")
+                        return
+                except Exception:
+                    pass
+            log.info("Starting new chat in configured ChatGPT project")
+            await self._page.goto(project_url, wait_until="domcontentloaded", timeout=30000)
+            page_error = await self._detect_page_error()
+            if page_error:
+                raise RuntimeError(f"Could not open configured ChatGPT project: {page_error}")
+            await self._wait_for_chat_input()
+            return
+
         # Already on a fresh chat — nothing to do
         if "chatgpt.com" in self._page.url:
             try:
@@ -600,10 +724,20 @@ class ChatGPTClient:
 
     async def navigate_to_thread(self, thread_id: str) -> None:
         """Navigate to an existing conversation thread."""
-        url = f"{Config.CHATGPT_URL}/c/{thread_id}"
+        project_url = Config.chatgpt_project_url()
+        if project_url:
+            url = f"{project_url[: -len('/project')]}/c/{thread_id}"
+        else:
+            url = f"{Config.CHATGPT_URL}/c/{thread_id}"
         log.info(f"Navigating to thread: {thread_id}")
         await self._page.goto(url, wait_until="domcontentloaded")
         await random_delay(1500, 3000)
+        if project_url:
+            expected_prefix = project_url[: -len("/project")] + "/c/"
+            if not (self._page.url or "").startswith(expected_prefix):
+                raise RuntimeError(
+                    f"Thread {thread_id} is not available in configured ChatGPT project"
+                )
         log.info(f"Thread {thread_id} loaded")
 
     async def get_current_thread_url(self) -> str:
@@ -2265,3 +2399,15 @@ class ChatGPTClient:
         url = self._page.url
         match = re.search(r"/c/([a-f0-9-]+)", url)
         return match.group(1) if match else ""
+
+    def _verify_project_thread_scope(self, thread_id: str) -> None:
+        """Fail closed if a configured project produces a global conversation."""
+        project_url = Config.chatgpt_project_url()
+        if not project_url or not thread_id:
+            return
+        expected_prefix = project_url[: -len("/project")] + "/c/"
+        if not (self._page.url or "").startswith(expected_prefix):
+            raise RuntimeError(
+                "ChatGPT created the conversation outside the configured project; "
+                "refusing to persist or return a global-thread result"
+            )

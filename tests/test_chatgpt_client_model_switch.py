@@ -16,7 +16,7 @@ if "patchright" not in sys.modules and importlib.util.find_spec("patchright.asyn
     sys.modules["patchright"] = patchright_mod
     sys.modules["patchright.async_api"] = async_api_mod
 
-if "pydantic" not in sys.modules:
+if "pydantic" not in sys.modules and importlib.util.find_spec("pydantic") is None:
     pydantic_mod = types.ModuleType("pydantic")
 
     class _BaseModel:

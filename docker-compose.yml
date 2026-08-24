@@ -1,7 +1,8 @@
 services:
   # CatGPT Gateway - Enhanced Container Mock for Chat Apps
   catgpt:
-    image: ghcr.io/thebadfella/catgpt:latest
+    image: ${CATGPT_IMAGE:-ghcr.io/thebadfella/catgpt:latest}
+    pull_policy: ${CATGPT_PULL_POLICY:-missing}
     build:
       context: .
       dockerfile: docker/Dockerfile
@@ -41,6 +42,7 @@ services:
       PROVIDER: ${PROVIDER:-chatgpt}
       # ChatGPT
       CHATGPT_URL: "https://chatgpt.com"
+      CHATGPT_PROJECT_URL: ${CHATGPT_PROJECT_URL:-}
       # MiniMax API
       MINIMAX_REGION: ${MINIMAX_REGION:-global_en}
       MINIMAX_BASE_URL: ${MINIMAX_BASE_URL:-}
@@ -70,6 +72,10 @@ services:
       # Optional: merge header-only rows into the next item's note/context in structured JSON outputs
       API_HEADER_ROW_MERGE_MODE: "true"
       API_APP_THREAD_DELETE_EXPIRED: "true"
+      # Durable OpenAI conversation and Responses API routing
+      API_CONVERSATION_DB: /app/state/conversations.sqlite3
+      API_CONVERSATION_RETENTION_SECONDS: ${API_CONVERSATION_RETENTION_SECONDS:-2592000}
+      API_CONVERSATION_MAX_ROUTES: ${API_CONVERSATION_MAX_ROUTES:-10000}
       # VNC Authentication
       VNC_PASSWORD: ${CATGPT_VNC_PASSWORD:-catgpt}
       # Logging (verbose for Docker)
@@ -79,6 +85,7 @@ services:
       - ${DOCKERDIR:-.}/appdata/catgpt/config:/config
       - ${DOCKERDIR:-.}/appdata/catgpt/browser:/app/browser_data
       - ${DOCKERDIR:-.}/appdata/catgpt/logs:/app/logs
+      - ${DOCKERDIR:-.}/appdata/catgpt/state:/app/state
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
       interval: 30s

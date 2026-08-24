@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import sys
 import types
 import unittest
 
 
 # Keep importing the server module from requiring browser automation packages.
-if "patchright" not in sys.modules:
+if "patchright" not in sys.modules and importlib.util.find_spec("patchright.async_api") is None:
     patchright_mod = types.ModuleType("patchright")
     async_api_mod = types.ModuleType("patchright.async_api")
     async_api_mod.Page = object
@@ -34,7 +35,7 @@ if "patchright" not in sys.modules:
     sys.modules["patchright._impl"] = impl_mod
     sys.modules["patchright._impl._errors"] = errors_mod
 
-if "playwright_stealth" not in sys.modules:
+if "playwright_stealth" not in sys.modules and importlib.util.find_spec("playwright_stealth") is None:
     playwright_stealth_mod = types.ModuleType("playwright_stealth")
 
     class _FakeStealth:

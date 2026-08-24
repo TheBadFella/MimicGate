@@ -96,6 +96,10 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 | `max_tokens` | int | no | Ignored |
 | `stream` | bool | no | SSE is accepted for IDE clients such as Cline. The browser finishes first, then CatGPT emits the completed message as event-stream chunks. |
 | `read_aloud` | bool | no | ChatGPT only. Opens `More actions` -> `Read aloud`, downloads the browser-generated audio, and returns it at `choices[0].message.audio`. |
+| `reasoning_effort` | string | no | ChatGPT reasoning level. Available values are discovered from the model picker and unsupported values are clamped to the nearest available level. |
+| `conversation_id` | string | no | Durable logical conversation ID. CatGPT verifies history before reusing the mapped browser thread. |
+
+`conversation_id` may instead be supplied as `X-CatGPT-Conversation-Id`. Send either full history or only the next turn. If full history is a verified prefix of the stored transcript, CatGPT sends only the delta; divergent history starts a clean browser thread. Use `X-CatGPT-Thread-Mode: fresh` to force a new ephemeral thread. Fresh mode cannot be combined with `thread_id` or `conversation_id`.
 
 **Response:**
 
@@ -416,7 +420,7 @@ curl -X POST http://localhost:8000/v1/images/generations \
 
 **`GET /v1/models`**
 
-Returns the available model based on the active provider.
+Returns the available models for the active provider. For ChatGPT, CatGPT reads the live model and reasoning controls and caches the result; configured aliases remain available as a fallback if discovery fails.
 
 ```bash
 curl http://localhost:8000/v1/models -H "Authorization: Bearer dummy123"
@@ -472,6 +476,10 @@ curl -X POST http://localhost:8000/v1/responses \
 | `max_output_tokens` | int | no | Ignored |
 | `stream` | bool | no | Must be `false` (streaming not supported) |
 | `read_aloud` | bool | no | ChatGPT only (same as chat completions) |
+| `reasoning` | object | no | Reasoning options such as `{"effort":"high"}`. |
+| `conversation` | string/object | no | Durable conversation identifier. An object must contain a non-empty `id`. |
+| `previous_response_id` | string | no | Continue the response chain, or branch if the referenced response is no longer the chain head. |
+| `store` | bool | no | Retain response-chain state; defaults to `true`. |
 
 **Response:**
 
@@ -506,6 +514,12 @@ curl -X POST http://localhost:8000/v1/responses \
 **App-scoped (with app name in URL):**
 
 Both `/v1/responses` and `/{app_name}/v1/responses` are supported.
+
+`conversation` and `previous_response_id` are mutually exclusive. Stored routes are partitioned by app-scoped path and optional ChatGPT project. The SQLite route database contains prompt and response text in plaintext; protect and back up `/app/state` accordingly. The default retention is 30 days with a 10,000-route cap.
+
+### ChatGPT project confinement
+
+Set `CHATGPT_PROJECT_URL` to a URL shaped like `https://chatgpt.com/g/g-p-.../project` to keep new and resumed ChatGPT conversations inside that project. CatGPT validates the URL at runtime and fails the request if ChatGPT redirects a generated thread outside the configured project.
 
 ---
 

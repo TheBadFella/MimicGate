@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 try:
     from dotenv import load_dotenv
@@ -51,6 +52,7 @@ class Config:
     MAX_ACTIVE_TABS: int = max(1, int(os.getenv("MAX_ACTIVE_TABS", "4")))
     BROWSER_CHANNEL: str = os.getenv("BROWSER_CHANNEL", "chrome").strip().lower()
     CHATGPT_URL: str = os.getenv("CHATGPT_URL", "https://chatgpt.com")
+    CHATGPT_PROJECT_URL: str = os.getenv("CHATGPT_PROJECT_URL", "").strip()
     CLAUDE_URL: str = os.getenv("CLAUDE_URL", "https://claude.ai")
     MINIMAX_BASE_URLS: dict[str, str] = {
         "global_en": "https://api.minimax.io/v1",
@@ -75,6 +77,7 @@ class Config:
     )
     CHATGPT_MODEL_SWITCH_TIMEOUT: int = int(os.getenv("CHATGPT_MODEL_SWITCH_TIMEOUT", "10000"))
     CHATGPT_MODEL_SWITCH_STRICT: bool = os.getenv("CHATGPT_MODEL_SWITCH_STRICT", "false").lower() == "true"
+    CHATGPT_MODEL_DISCOVERY_TTL_SECONDS: int = int(os.getenv("CHATGPT_MODEL_DISCOVERY_TTL_SECONDS", "600"))
     # Browser UI-driven long-prompt fallback.  The threshold is optional because
     # ChatGPT's effective composer limit can vary by model/account.
     CHATGPT_LONG_PROMPT_FALLBACK: str = os.getenv(
@@ -101,6 +104,21 @@ class Config:
         if cls.PROVIDER == "minimax":
             return cls.MINIMAX_BASE_URL
         return cls.CHATGPT_URL
+
+    @classmethod
+    def chatgpt_project_url(cls) -> str:
+        """Return a validated optional ChatGPT project-root URL."""
+        value = (cls.CHATGPT_PROJECT_URL or "").strip().rstrip("/")
+        if not value:
+            return ""
+        parsed = urlparse(value)
+        host = (parsed.hostname or "").lower()
+        path = parsed.path.rstrip("/")
+        if parsed.scheme not in {"http", "https"} or host not in {"chatgpt.com", "www.chatgpt.com"}:
+            raise ValueError("CHATGPT_PROJECT_URL must use https://chatgpt.com")
+        if not path.startswith("/g/g-p-") or not path.endswith("/project"):
+            raise ValueError("CHATGPT_PROJECT_URL must be a ChatGPT project URL ending in /project")
+        return f"https://chatgpt.com{path}"
 
     @classmethod
     def provider_name(cls) -> str:
@@ -218,6 +236,13 @@ class Config:
     API_APP_THREAD_TTL_SECONDS: int = int(os.getenv("API_APP_THREAD_TTL_SECONDS", "86400"))
     # If true, delete expired app-thread ChatGPT conversations from the browser UI
     API_APP_THREAD_DELETE_EXPIRED: bool = os.getenv("API_APP_THREAD_DELETE_EXPIRED", "false").lower() == "true"
+    API_CONVERSATION_DB: Path = _PROJECT_ROOT / os.getenv(
+        "API_CONVERSATION_DB", "state/conversations.sqlite3"
+    )
+    API_CONVERSATION_RETENTION_SECONDS: int = int(
+        os.getenv("API_CONVERSATION_RETENTION_SECONDS", "2592000")
+    )
+    API_CONVERSATION_MAX_ROUTES: int = int(os.getenv("API_CONVERSATION_MAX_ROUTES", "10000"))
     # If true, merge header-only rows (null fields + note/context text) into next item note/context
     API_HEADER_ROW_MERGE_MODE: bool = os.getenv("API_HEADER_ROW_MERGE_MODE", "false").lower() == "true"
     RATE_LIMIT_SECONDS: int = int(os.getenv("RATE_LIMIT_SECONDS", "5"))

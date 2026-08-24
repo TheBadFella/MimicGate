@@ -26,6 +26,8 @@ These are the variables consumed directly by `docker-compose.yml`:
 | Variable | Default | Purpose |
 |---|---:|---|
 | `DOCKERDIR` | `.` | Host directory under which persistent `appdata/catgpt` volumes are created. |
+| `CATGPT_IMAGE` | `ghcr.io/thebadfella/catgpt:latest` | Container image used by Compose. |
+| `CATGPT_PULL_POLICY` | `missing` | Compose image pull policy. |
 | `CATGPT_USER_ID` | `1000` | Host user ID mapped to container `USER_ID`. |
 | `CATGPT_GROUP_ID` | `1000` | Host group ID mapped to container `GROUP_ID`. |
 | `CATGPT_API_KEY` | `dummy123` | Value passed to container `API_TOKEN`. |
@@ -37,6 +39,9 @@ These are the variables consumed directly by `docker-compose.yml`:
 | `MINIMAX_MODEL` | `MiniMax-M2.7` | MiniMax model passed through to the container. |
 | `MAX_CONCURRENT_REQUESTS` | `3` | Concurrency limit passed through to the container. |
 | `MAX_ACTIVE_TABS` | `4` | Browser-tab limit passed through to the container. |
+| `CHATGPT_PROJECT_URL` | _empty_ | Optional ChatGPT project URL passed through to the container. |
+| `API_CONVERSATION_RETENTION_SECONDS` | `2592000` | Durable route retention passed through to the container. |
+| `API_CONVERSATION_MAX_ROUTES` | `10000` | Durable route cap passed through to the container. |
 
 > [!IMPORTANT]
 > A variable in `.env` is not automatically available inside the container. For a runtime variable not listed above, add it under `services.catgpt.environment` in `docker-compose.yml` (or a Compose override).
@@ -51,6 +56,7 @@ When running Python directly, set these in the shell or root `.env`. In Docker, 
 |---|---:|---|
 | `PROVIDER` | `chatgpt` | Active provider: `chatgpt`, `claude`, or `minimax`. |
 | `CHATGPT_URL` | `https://chatgpt.com` | ChatGPT browser target. |
+| `CHATGPT_PROJECT_URL` | _empty_ | Optional ChatGPT project URL; new and resumed ChatGPT threads are confined to that project. |
 | `CLAUDE_URL` | `https://claude.ai` | Claude browser target. |
 | `MINIMAX_REGION` | `global_en` | MiniMax region: `global_en` or `cn_zh`. |
 | `MINIMAX_BASE_URL` | `derived from region` | Optional MiniMax API base URL override. |
@@ -76,6 +82,7 @@ When running Python directly, set these in the shell or root `.env`. In Docker, 
 | `CHATGPT_MODEL_SETTINGS` | `built-in settings map` | Comma-separated API-model to reasoning-setting mappings. |
 | `CHATGPT_MODEL_SWITCH_TIMEOUT` | `10000` | Model-switch timeout in milliseconds. |
 | `CHATGPT_MODEL_SWITCH_STRICT` | `false` | Fail instead of continuing when model switching cannot be verified. |
+| `CHATGPT_MODEL_DISCOVERY_TTL_SECONDS` | `600` | How long model and reasoning choices discovered from the ChatGPT UI remain cached. |
 | `CHATGPT_LONG_PROMPT_FALLBACK` | `attachment` | Long-prompt behavior: `attachment` or `error` (HTTP 413). |
 | `CHATGPT_LONG_PROMPT_THRESHOLD` | `0` | Character threshold for proactive attachment fallback; `0` waits for composer rejection. |
 
@@ -103,6 +110,9 @@ When running Python directly, set these in the shell or root `.env`. In Docker, 
 | `API_APP_THREAD_MODE` | `false` | Map `request.user` values to dedicated provider threads. |
 | `API_APP_THREAD_TTL_SECONDS` | `86400` | App-thread mapping lifetime. |
 | `API_APP_THREAD_DELETE_EXPIRED` | `false` | Delete expired app-thread conversations from the browser UI. |
+| `API_CONVERSATION_DB` | `state/conversations.sqlite3` | SQLite store for durable logical-conversation and Responses routing. |
+| `API_CONVERSATION_RETENTION_SECONDS` | `2592000` | Maximum age of durable conversation routes (30 days by default). |
+| `API_CONVERSATION_MAX_ROUTES` | `10000` | Maximum number of durable conversation routes retained. |
 | `API_HEADER_ROW_MERGE_MODE` | `false` | Merge header-only structured rows into the following item. |
 | `RATE_LIMIT_SECONDS` | `5` | Minimum interval used by the gateway rate limiter. |
 
