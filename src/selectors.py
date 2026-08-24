@@ -98,11 +98,14 @@ class Selectors:
     # ── Copy button (appears on each completed assistant message) ──────
     # This is the most reliable completion signal — it only appears
     # after the full response has been generated.
+    # Keep this ordered from the most specific current label to legacy
+    # fallbacks. Avoid bare/generic "copy" selectors that can match code or
+    # table copy controls inside an assistant turn.
     COPY_BUTTON = [
+        "button[aria-label='Copy response']",
         "button[data-testid='copy-turn-action-button']",
         "button[data-testid*='copy-turn' i]",
         "button[aria-label='Copy message']",
-        "button[aria-label='Copy response']",
     ]
 
     # ── Generated images inside assistant responses ───────────────────

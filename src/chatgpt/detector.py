@@ -50,20 +50,15 @@ _CONVERSATION_SNAPSHOT_JS = r"""
             style.display !== "none";
     };
 
-    const copySelector = [
-        'button[data-testid="copy-turn-action-button"]',
-        'button[data-testid*="copy" i]',
-        'button[aria-label*="copy" i]',
-        '[role="button"][aria-label*="copy" i]'
-    ].join(",");
-
-    const preferredTurnCopySelector = [
-        'button[data-testid="copy-turn-action-button"]',
+    const copySelectors = [
         'button[aria-label="Copy response" i]',
+        'button[data-testid="copy-turn-action-button"]',
+        'button[data-testid*="copy-turn" i]',
         'button[aria-label="Copy message" i]',
         '[role="button"][aria-label="Copy response" i]',
         '[role="button"][aria-label="Copy message" i]'
-    ].join(",");
+    ];
+    const copySelector = copySelectors.join(",");
 
     const isCodeCopyButton = (el) => {
         if (!el) return false;
@@ -88,16 +83,14 @@ _CONVERSATION_SNAPSHOT_JS = r"""
     const isTurnCopyButton = (el) => !isCodeCopyButton(el) && !isTableCopyButton(el);
 
     const findTurnCopyButton = (root) => {
-        const preferred = Array.from(root.querySelectorAll(preferredTurnCopySelector))
-            .filter(isTurnCopyButton);
-        const visiblePreferred = preferred.find(isVisible);
-        if (visiblePreferred) return visiblePreferred;
-        if (preferred.length) return preferred[preferred.length - 1];
-
-        const fallback = Array.from(root.querySelectorAll(copySelector))
-            .filter(isTurnCopyButton);
-        const visibleFallback = fallback.filter(isVisible);
-        return visibleFallback[visibleFallback.length - 1] || fallback[fallback.length - 1] || null;
+        for (const selector of copySelectors) {
+            const matches = Array.from(root.querySelectorAll(selector))
+                .filter(isTurnCopyButton);
+            const visible = matches.find(isVisible);
+            if (visible) return visible;
+            if (matches.length) return matches[matches.length - 1];
+        }
+        return null;
     };
 
     const stopSelector = [
@@ -331,19 +324,14 @@ _CLICK_LATEST_COPY_BUTTON_JS = r"""
             style.visibility !== "hidden" &&
             style.display !== "none";
     };
-    const copySelector = [
-        'button[data-testid="copy-turn-action-button"]',
-        'button[data-testid*="copy" i]',
-        'button[aria-label*="copy" i]',
-        '[role="button"][aria-label*="copy" i]'
-    ].join(",");
-    const preferredTurnCopySelector = [
-        'button[data-testid="copy-turn-action-button"]',
+    const copySelectors = [
         'button[aria-label="Copy response" i]',
+        'button[data-testid="copy-turn-action-button"]',
+        'button[data-testid*="copy-turn" i]',
         'button[aria-label="Copy message" i]',
         '[role="button"][aria-label="Copy response" i]',
         '[role="button"][aria-label="Copy message" i]'
-    ].join(",");
+    ];
     const hasGeneratedImage = (root) => {
         if (!root) return false;
         if (root.querySelector('img[alt="Generated image"], img[alt*="generated" i], div[id^="image-"], div[class*="imagegen-image"]')) return true;
@@ -377,16 +365,14 @@ _CLICK_LATEST_COPY_BUTTON_JS = r"""
     };
     const isTurnCopyButton = (el) => !isCodeCopyButton(el) && !isTableCopyButton(el);
     const findTurnCopyButton = (root) => {
-        const preferred = Array.from(root.querySelectorAll(preferredTurnCopySelector))
-            .filter(isTurnCopyButton);
-        const visiblePreferred = preferred.find(isVisible);
-        if (visiblePreferred) return visiblePreferred;
-        if (preferred.length) return preferred[preferred.length - 1];
-
-        const fallback = Array.from(root.querySelectorAll(copySelector))
-            .filter(isTurnCopyButton);
-        const visibleFallback = fallback.filter(isVisible);
-        return visibleFallback[visibleFallback.length - 1] || fallback[fallback.length - 1] || null;
+        for (const selector of copySelectors) {
+            const matches = Array.from(root.querySelectorAll(selector))
+                .filter(isTurnCopyButton);
+            const visible = matches.find(isVisible);
+            if (visible) return visible;
+            if (matches.length) return matches[matches.length - 1];
+        }
+        return null;
     };
     const roleOf = (root) => {
         const ownRole = root.getAttribute("data-message-author-role") || root.getAttribute("data-turn") || "";
@@ -488,17 +474,20 @@ _CLICK_LATEST_COPY_BUTTON_JS = r"""
     let btn = findTurnCopyButton(latest.root);
     if (!btn) {
         const rootRect = latest.root.getBoundingClientRect();
-        const nearby = Array.from(document.querySelectorAll(copySelector))
-            .filter((candidate) => {
-                const rect = candidate.getBoundingClientRect();
-                return isTurnCopyButton(candidate) &&
-                    rect.top >= rootRect.top - 10 &&
-                    rect.top <= rootRect.bottom + 120 &&
-                    rect.left >= rootRect.left - 60 &&
-                    rect.left <= rootRect.right + 60;
-            })
-            .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
-        btn = nearby[nearby.length - 1] || null;
+        for (const selector of copySelectors) {
+            const nearby = Array.from(document.querySelectorAll(selector))
+                .filter((candidate) => {
+                    const rect = candidate.getBoundingClientRect();
+                    return isTurnCopyButton(candidate) &&
+                        rect.top >= rootRect.top - 10 &&
+                        rect.top <= rootRect.bottom + 120 &&
+                        rect.left >= rootRect.left - 60 &&
+                        rect.left <= rootRect.right + 60;
+                })
+                .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+            btn = nearby[nearby.length - 1] || null;
+            if (btn) break;
+        }
     }
     if (!btn) return { clicked: false, reason: "no-copy-button", signature: latest.signature };
     btn.click();
