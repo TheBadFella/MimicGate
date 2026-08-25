@@ -7,24 +7,24 @@ requires-python = ">=3.11,<3.15"
 license = { file = "LICENSE" }
 dependencies = [
     "fastapi>=0.141.1",
-    "patchright>=1.61.2",
+    "patchright>=1.62.1",
     "pillow>=12.3.0",
     "playwright-stealth>=2.0.3",
     "pydantic>=2.13.4",
     "pymupdf>=1.28.2",
-    "python-dotenv>=1.2.2",
+    "python-dotenv>=1.2.3",
     "rich>=15.0.0",
     "textual>=8.2.8",
     "typer>=0.27.1",
-    "uvicorn>=0.52.3",
+    "uvicorn>=0.52.4",
 ]
 
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",
-    "langchain>=1.3.15",
-    "langchain-openai>=1.5.0",
-    "openai>=3.0.0",
+    "langchain>=1.3.16",
+    "langchain-openai>=1.6.0",
+    "openai>=3.3.1",
     "requests>=2.32.0",
 ]
 
