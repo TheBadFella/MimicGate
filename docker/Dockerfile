@@ -73,7 +73,8 @@ RUN mkdir -p /app/browser_data /app/logs /app/state /app/downloads/images /app/d
 # ── GUI initialization & startup scripts ────────────────────────
 COPY docker/50-catgpt-init.sh /etc/cont-init.d/50-catgpt-init.sh
 COPY docker/startapp.sh /startapp.sh
-RUN chmod +x /etc/cont-init.d/50-catgpt-init.sh /startapp.sh
+RUN sed -i 's/\r$//' /etc/cont-init.d/50-catgpt-init.sh /startapp.sh && \
+    chmod +x /etc/cont-init.d/50-catgpt-init.sh /startapp.sh
 
 # ── App Environment Variables ───────────────────────────────────
 ENV HEADLESS=false
