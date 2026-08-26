@@ -1,6 +1,6 @@
 [project]
 name = "catgpt-gateway"
-version = "7.0.0"
+version = "7.0.1"
 description = "Expose browser-backed AI providers through OpenAI-compatible APIs."
 readme = "README.md"
 requires-python = ">=3.11,<3.15"

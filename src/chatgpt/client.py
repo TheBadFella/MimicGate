@@ -13,6 +13,7 @@ import os
 import re
 import tempfile
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -54,6 +55,15 @@ SendButtonState = Literal["clicked", "disabled", "missing"]
 PromptSubmissionState = Literal["ready", "prompt-too-long", "disabled", "unknown"]
 
 
+@dataclass
+class _ModelSelectionState:
+    """Model selection state verified for one browser tab."""
+
+    last_model_label: str = ""
+    last_model_version_label: str = ""
+    last_model_setting_by_key: dict[str, str] = field(default_factory=dict)
+
+
 class ChatGPTClient:
     """
     High-level client for interacting with the ChatGPT web interface.
@@ -63,9 +73,11 @@ class ChatGPTClient:
 
     def __init__(self, page: Page) -> None:
         self._page = page
-        self._last_model_label = ""
-        self._last_model_version_label = ""
-        self._last_model_setting_by_key: dict[str, str] = {}
+        state = _ModelSelectionState()
+        self._model_selection_state = state
+        self._model_selection_state_by_page_id: dict[int, tuple[Page, _ModelSelectionState]] = {
+            id(page): (page, state)
+        }
         self._unavailable_model_keys: set[str] = set()
         self._model_capabilities_checked_at = 0.0
         self._discovered_model_labels: list[str] = []
@@ -76,12 +88,44 @@ class ChatGPTClient:
     def page(self) -> Page:
         return self._page
 
+    @property
+    def _last_model_label(self) -> str:
+        return self._model_selection_state.last_model_label
+
+    @_last_model_label.setter
+    def _last_model_label(self, value: str) -> None:
+        self._model_selection_state.last_model_label = value
+
+    @property
+    def _last_model_version_label(self) -> str:
+        return self._model_selection_state.last_model_version_label
+
+    @_last_model_version_label.setter
+    def _last_model_version_label(self, value: str) -> None:
+        self._model_selection_state.last_model_version_label = value
+
+    @property
+    def _last_model_setting_by_key(self) -> dict[str, str]:
+        return self._model_selection_state.last_model_setting_by_key
+
+    @_last_model_setting_by_key.setter
+    def _last_model_setting_by_key(self, value: dict[str, str]) -> None:
+        self._model_selection_state.last_model_setting_by_key = value
+
     def bind_page(self, page: Page | None) -> ChatGPTClient:
         """Return a client bound to a specific tab without mutating this instance."""
         if page is None or page is self._page:
             return self
         bound = copy.copy(self)
         bound._page = page
+        page_id = id(page)
+        cached = self._model_selection_state_by_page_id.get(page_id)
+        if cached is None or cached[0] is not page:
+            state = _ModelSelectionState()
+            self._model_selection_state_by_page_id[page_id] = (page, state)
+        else:
+            state = cached[1]
+        bound._model_selection_state = state
         return bound
 
     # ── Core: Send & Receive ────────────────────────────────────

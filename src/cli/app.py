@@ -53,7 +53,7 @@ log = setup_logging("cli", log_file="cli.log")
 cli = typer.Typer(no_args_is_help=False, add_completion=False)
 
 # ── Constants ────────────────────────────────────────────────────
-VERSION = "7.0.0"
+VERSION = "7.0.1"
 APP_NAME = "CATGPT"
 APP_TAGLINE = "OpenAI-Compatible Terminal Chat"
 

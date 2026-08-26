@@ -194,6 +194,51 @@ class _AdvancedEffortClient(ChatGPTClient):
 
 
 class ChatGPTClientModelSwitchTests(unittest.IsolatedAsyncioTestCase):
+    def test_bind_page_reuses_verified_model_state_for_same_tab(self) -> None:
+        root = ChatGPTClient(_FakePage())  # type: ignore[arg-type]
+        leased_page = _FakePage()
+
+        first_request = root.bind_page(leased_page)  # type: ignore[arg-type]
+        first_request._last_model_label = "Instant"
+        first_request._last_model_version_label = "5.4"
+        first_request._last_model_setting_by_key["gpt54"] = "High"
+
+        second_request = root.bind_page(leased_page)  # type: ignore[arg-type]
+
+        self.assertEqual(second_request._last_model_label, "Instant")
+        self.assertEqual(second_request._last_model_version_label, "5.4")
+        self.assertEqual(second_request._last_model_setting_by_key, {"gpt54": "High"})
+
+    def test_bind_page_isolates_verified_model_state_between_tabs(self) -> None:
+        root = ChatGPTClient(_FakePage())  # type: ignore[arg-type]
+        first_page = _FakePage()
+        second_page = _FakePage()
+
+        first_request = root.bind_page(first_page)  # type: ignore[arg-type]
+        first_request._last_model_label = "Instant"
+        first_request._last_model_version_label = "5.4"
+        first_request._last_model_setting_by_key["gpt54"] = "High"
+
+        second_request = root.bind_page(second_page)  # type: ignore[arg-type]
+
+        self.assertEqual(second_request._last_model_label, "")
+        self.assertEqual(second_request._last_model_version_label, "")
+        self.assertEqual(second_request._last_model_setting_by_key, {})
+
+    async def test_repeated_request_on_same_tab_does_not_reopen_configure(self) -> None:
+        root = _ConfigureOnlyClient(_FakePage())  # type: ignore[arg-type]
+        leased_page = _FakePage(open_picker=True)
+
+        with patch.object(Config, "CHATGPT_MODEL_ALIASES", "gpt-5.4=Thinking|GPT-5.4"), patch.object(
+            Config,
+            "CHATGPT_MODEL_SWITCH_STRICT",
+            True,
+        ), patch("src.chatgpt.client.asyncio.sleep", _noop_sleep):
+            await root.bind_page(leased_page).ensure_model("gpt-5.4")  # type: ignore[arg-type]
+            await root.bind_page(leased_page).ensure_model("gpt-5.4")  # type: ignore[arg-type]
+
+        self.assertEqual(root.configure_calls, [(("Thinking", "GPT-5.4"), "5.4")])
+
     async def test_current_picker_selects_advanced_effort(self) -> None:
         client = _AdvancedEffortClient(_FakePage())  # type: ignore[arg-type]
         option = types.SimpleNamespace(ui_label="GPT-5.6 Sol")
