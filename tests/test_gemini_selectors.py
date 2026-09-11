@@ -55,6 +55,17 @@ class GeminiSelectorsTests(unittest.TestCase):
         self.assertIn("conversation-action-menu button", GeminiSelectors.SIDEBAR_THREAD_MENU_BUTTON)
         self.assertIn("[role='menuitem']:has-text('Delete')", GeminiSelectors.THREAD_DELETE_OPTION)
 
+    def test_tts_and_media_selectors_defined(self) -> None:
+        """Verify TTS listen button, generated images, and error indicators are defined."""
+        self.assertTrue(len(GeminiSelectors.TTS_BUTTON) > 0)
+        self.assertTrue(len(GeminiSelectors.GENERATED_IMAGE) > 0)
+        self.assertTrue(len(GeminiSelectors.IMAGE_DOWNLOAD_BUTTON) > 0)
+        self.assertTrue(len(GeminiSelectors.ERROR_INDICATORS) > 0)
+        self.assertIn("button.tts-button", GeminiSelectors.TTS_BUTTON)
+        self.assertIn("button[aria-label='Listen' i]", GeminiSelectors.TTS_BUTTON)
+        self.assertIn("img[src*='googleusercontent.com/chat_attachment']", GeminiSelectors.GENERATED_IMAGE)
+        self.assertIn("div:has-text('reached your limit')", GeminiSelectors.ERROR_INDICATORS)
+
 
 if __name__ == "__main__":
     unittest.main()

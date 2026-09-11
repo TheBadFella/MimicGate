@@ -21,6 +21,108 @@ from src.config import Config
 
 log = setup_logging("gemini_detector")
 
+# Shared DOM helpers: pick the turn action-bar Copy button, never a code-cell Copy.
+_GEMINI_TURN_COPY_HELPERS_JS = r"""
+    const textOf = (el) => ((el && (el.innerText || el.textContent)) || "").trim();
+    const isVisible = (el) => {
+        if (!el) return false;
+        const rect = el.getBoundingClientRect();
+        const style = window.getComputedStyle(el);
+        return rect.width > 0 &&
+            rect.height > 0 &&
+            style.visibility !== "hidden" &&
+            style.display !== "none";
+    };
+    const isSnippetCopyButton = (el) => {
+        if (!el) return false;
+        const label = [
+            el.getAttribute("aria-label") || "",
+            el.getAttribute("title") || "",
+            textOf(el).slice(0, 80)
+        ].join(" ").toLowerCase();
+        if (label.includes("copy code") || label.includes("copy prompt") || label.includes("copy table")) {
+            return true;
+        }
+        return Boolean(el.closest("pre, code, code-block, .code-block, syntax-highlighter"));
+    };
+    const findTurnCopyButton = (root) => {
+        if (!root) return null;
+        const matches = Array.from(root.querySelectorAll(
+            'button[aria-label*="Copy response" i], button[aria-label="Copy" i], button[aria-label*="Copy" i], button:has(mat-icon[data-mat-icon-name="content_copy"])'
+        )).filter((el) => !isSnippetCopyButton(el));
+        const preferred = matches.find((el) => /copy response/i.test(el.getAttribute("aria-label") || ""));
+        if (preferred) return preferred;
+        const visible = matches.filter(isVisible);
+        if (visible.length) return visible[visible.length - 1];
+        return matches.length ? matches[matches.length - 1] : null;
+    };
+    const turnSignature = (turns, last) => {
+        const text = last && last.innerText ? last.innerText.trim().slice(0, 80) : "";
+        return `${turns.length - 1}:${text}`;
+    };
+"""
+
+_CLICK_GEMINI_TURN_COPY_JS = r"""
+(previousSignature) => {
+""" + _GEMINI_TURN_COPY_HELPERS_JS + r"""
+    const turns = Array.from(document.querySelectorAll('model-response, div.response-container'));
+    if (turns.length === 0) return { clicked: false, reason: "no-turns" };
+    const last = turns[turns.length - 1];
+    const signature = turnSignature(turns, last);
+    if (previousSignature && signature === previousSignature) {
+        return { clicked: false, reason: "same-turn", signature };
+    }
+    const copyBtn = findTurnCopyButton(last);
+    if (!copyBtn) return { clicked: false, reason: "no-turn-copy", signature };
+    copyBtn.click();
+    return { clicked: true, reason: "ok", signature };
+}
+"""
+
+_LATEST_TURN_SNAPSHOT_JS = r"""
+() => {
+""" + _GEMINI_TURN_COPY_HELPERS_JS + r"""
+    const turns = Array.from(document.querySelectorAll('model-response, div.response-container'));
+    const hasStopButton = Boolean(document.querySelector('button[aria-label*="Stop" i], .stop-button'));
+    if (turns.length === 0) {
+        return {
+            found: false,
+            index: -1,
+            signature: null,
+            hasCopyButton: false,
+            hasStopButton,
+            text: '',
+        };
+    }
+    const idx = turns.length - 1;
+    const last = turns[idx];
+    const text = last.innerText ? last.innerText.trim() : '';
+    return {
+        found: true,
+        index: idx,
+        signature: turnSignature(turns, last),
+        hasCopyButton: Boolean(findTurnCopyButton(last)),
+        hasStopButton,
+        text,
+    };
+}
+"""
+
+_DOM_EXTRACT_JS = r"""
+() => {
+    const turns = Array.from(document.querySelectorAll('model-response, div.response-container'));
+    if (turns.length === 0) return '';
+    const last = turns[turns.length - 1];
+    const content = last.querySelector('message-content, markdown, .markdown, .model-response-text');
+    const source = content || last;
+    const clone = source.cloneNode(true);
+    clone.querySelectorAll('code-block, pre, .code-block, syntax-highlighter').forEach((el) => el.remove());
+    const stripped = (clone.innerText || '').trim();
+    if (stripped) return stripped;
+    return (source.innerText || last.innerText || '').trim();
+}
+"""
+
 
 def normalize_assistant_text(text: str | None) -> str:
     """Normalize extracted assistant text for validation and comparisons."""
@@ -89,44 +191,7 @@ async def get_latest_assistant_turn_signature(page: Page) -> str | None:
 async def _latest_assistant_turn_snapshot(page: Page) -> dict:
     """Return metadata snapshot for the latest assistant turn in Gemini."""
     try:
-        return await page.evaluate(
-            """
-            () => {
-                const turns = Array.from(document.querySelectorAll('model-response, div.response-container'));
-                if (turns.length === 0) {
-                    return {
-                        found: false,
-                        index: -1,
-                        signature: null,
-                        hasCopyButton: false,
-                        hasStopButton: Boolean(document.querySelector('button[aria-label*="Stop" i], .stop-button')),
-                        text: '',
-                    };
-                }
-
-                const idx = turns.length - 1;
-                const last = turns[idx];
-                const text = last.innerText ? last.innerText.trim() : '';
-                const signature = `${idx}:${text.slice(0, 80)}`;
-
-                const hasCopyButton = Boolean(
-                    last.querySelector('button[aria-label*="Copy" i], button:has(mat-icon[data-mat-icon-name="content_copy"])')
-                );
-                const hasStopButton = Boolean(
-                    document.querySelector('button[aria-label*="Stop" i], .stop-button')
-                );
-
-                return {
-                    found: true,
-                    index: idx,
-                    signature,
-                    hasCopyButton,
-                    hasStopButton,
-                    text,
-                };
-            }
-            """
-        )
+        return await page.evaluate(_LATEST_TURN_SNAPSHOT_JS)
     except Exception as e:
         log.debug(f"Failed to snapshot latest assistant turn: {e}")
         return {
@@ -200,13 +265,19 @@ async def wait_for_response_complete(
                 pass
 
         if not snapshot["hasStopButton"]:
-            # If copy button is present on the new turn, it is definitely complete
             is_new = previous_turn_signature is None or snapshot["signature"] != previous_turn_signature
-            if is_new and snapshot["hasCopyButton"]:
+            if not is_new:
+                stable_count = 0
+                last_text = ""
+                await asyncio.sleep(poll_interval)
+                elapsed += poll_interval
+                continue
+
+            # If a turn-level copy button is present on the new turn, it is complete
+            if snapshot["hasCopyButton"]:
                 log.info(f"Response completed: copy button found on turn after {elapsed:.1f}s")
                 return True
 
-            # Text stability check
             current_text = snapshot["text"]
             if current_text and current_text == last_text:
                 stable_count += 1
@@ -230,34 +301,25 @@ async def extract_last_response_via_copy(
     previous_turn_signature: str | None = None,
 ) -> str:
     """
-    Extract the latest assistant response by clicking the native Copy button.
-    Falls back to DOM markdown/text extraction if clipboard is unavailable.
+    Extract the latest assistant response by clicking the native turn Copy button.
+    Skips code-block Copy buttons and previous-turn copies. Falls back to DOM text.
     """
     log.debug("Attempting extraction via Gemini copy button...")
 
     try:
+        snapshot = await _latest_assistant_turn_snapshot(page)
+        if (
+            previous_turn_signature
+            and snapshot.get("signature") == previous_turn_signature
+        ):
+            log.warning("Latest Gemini turn is unchanged; skipping copy of previous response")
+            return ""
+
         await page.context.grant_permissions(["clipboard-read", "clipboard-write"])
         await page.evaluate("navigator.clipboard.writeText('').catch(() => {})")
 
-        clicked = await page.evaluate(
-            """
-            (prevSig) => {
-                const turns = Array.from(document.querySelectorAll('model-response, div.response-container'));
-                if (turns.length === 0) return false;
-
-                const last = turns[turns.length - 1];
-                const copyBtn = last.querySelector(
-                    'button[aria-label*="Copy" i], button:has(mat-icon[data-mat-icon-name="content_copy"])'
-                );
-                if (copyBtn) {
-                    copyBtn.click();
-                    return true;
-                }
-                return false;
-            }
-            """,
-            previous_turn_signature,
-        )
+        click_result = await page.evaluate(_CLICK_GEMINI_TURN_COPY_JS, previous_turn_signature)
+        clicked = isinstance(click_result, dict) and click_result.get("clicked")
 
         if clicked:
             for _ in range(10):
@@ -266,33 +328,29 @@ async def extract_last_response_via_copy(
                 if text and text.strip():
                     log.info(f"Successfully extracted {len(text)} chars via Copy button")
                     return text.strip()
+        elif isinstance(click_result, dict):
+            log.debug("Gemini turn copy click not used: %s", click_result.get("reason"))
 
     except Exception as e:
         log.warning(f"Copy extraction failed ({e}), falling back to DOM extraction")
 
-    return await extract_last_response_via_dom(page)
+    return await extract_last_response_via_dom(page, previous_turn_signature=previous_turn_signature)
 
 
-async def extract_last_response_via_dom(page: Page) -> str:
+async def extract_last_response_via_dom(
+    page: Page,
+    previous_turn_signature: str | None = None,
+) -> str:
     """Extract assistant response text directly from DOM elements."""
     log.debug("Extracting response text via DOM queries...")
     try:
-        text = await page.evaluate(
-            """
-            () => {
-                const turns = Array.from(document.querySelectorAll('model-response, div.response-container'));
-                if (turns.length === 0) return '';
-                const last = turns[turns.length - 1];
-
-                // Check markdown / content container
-                const content = last.querySelector('message-content, markdown, .markdown, .model-response-text');
-                if (content && content.innerText) {
-                    return content.innerText.trim();
-                }
-                return last.innerText ? last.innerText.trim() : '';
-            }
-            """
-        )
+        snapshot = await _latest_assistant_turn_snapshot(page)
+        if (
+            previous_turn_signature
+            and snapshot.get("signature") == previous_turn_signature
+        ):
+            return ""
+        text = await page.evaluate(_DOM_EXTRACT_JS)
         return (text or "").strip()
     except Exception as e:
         log.error(f"Failed to extract response via DOM: {e}")

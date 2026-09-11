@@ -103,6 +103,68 @@ DEFAULT_GEMINI_MODELS: tuple[GeminiModelOption, ...] = (
     ),
 )
 
+REASONING_EFFORT_ORDER = ("none", "minimal", "low", "medium", "high", "xhigh", "extended", "max", "ultra")
+
+_REASONING_ALIASES = {
+    "off": "none",
+    "disabled": "none",
+    "min": "minimal",
+    "med": "medium",
+    "standard": "medium",
+    "deep": "extended",
+    "thinking": "extended",
+    "complex": "extended",
+}
+
+_discovered_models: list[GeminiModelOption] = []
+
+
+def canonical_reasoning_effort(value: str | None, *, substring: bool = False) -> str | None:
+    """Normalize user-facing reasoning effort tokens to canonical names."""
+    if not value:
+        return None
+    raw = value.strip().lower()
+    if raw in _REASONING_ALIASES:
+        return _REASONING_ALIASES[raw]
+    if raw in REASONING_EFFORT_ORDER:
+        return raw
+    if substring:
+        for name in REASONING_EFFORT_ORDER:
+            if name in raw:
+                return name
+        for alias, target in _REASONING_ALIASES.items():
+            if alias in raw:
+                return target
+    return None
+
+
+def register_discovered_gemini_models(labels: list[str]) -> list[str]:
+    """Register dynamically discovered models from the active Gemini browser UI."""
+    global _discovered_models
+    added_ids: list[str] = []
+    known_labels = {normalize_token(m.ui_label) for m in DEFAULT_GEMINI_MODELS + tuple(_discovered_models)}
+
+    for label in labels:
+        first_line = label.splitlines()[0].strip() if label else ""
+        if not first_line:
+            continue
+        norm = normalize_token(first_line)
+        if not norm or norm in known_labels:
+            continue
+
+        slug = re.sub(r"[^a-z0-9.]+", "-", first_line.lower()).strip("-")
+        public_id = f"gemini-{slug}" if not slug.startswith("gemini-") else slug
+        opt = GeminiModelOption(
+            public_id=public_id,
+            ui_label=first_line,
+            alternate_labels=(first_line, label.strip()),
+        )
+        _discovered_models.append(opt)
+        known_labels.add(norm)
+        added_ids.append(public_id)
+
+    return added_ids
+
 
 def normalize_token(value: str) -> str:
     """Normalize model tokens for resilient comparison."""
@@ -111,46 +173,89 @@ def normalize_token(value: str) -> str:
 
 def list_gemini_model_ids() -> tuple[str, ...]:
     """Return all public model IDs supported by the Gemini provider."""
-    return (PUBLIC_GEMINI_BROWSER_MODEL_ID,) + tuple(m.public_id for m in DEFAULT_GEMINI_MODELS)
+    all_models = DEFAULT_GEMINI_MODELS + tuple(_discovered_models)
+    seen: set[str] = set()
+    unique_ids: list[str] = [PUBLIC_GEMINI_BROWSER_MODEL_ID]
+    for m in all_models:
+        if m.public_id not in seen:
+            seen.add(m.public_id)
+            unique_ids.append(m.public_id)
+    return tuple(unique_ids)
 
 
-def resolve_gemini_model(requested_model: str | None) -> GeminiModelOption | None:
+def resolve_gemini_model(
+    requested_model: str | None,
+    reasoning_effort: str | None = None,
+) -> GeminiModelOption | None:
     """
-    Resolve a requested model ID to a GeminiModelOption.
+    Resolve a requested model ID and optional reasoning effort to a GeminiModelOption.
     Returns None if the requested model means 'use whatever is currently selected in browser'.
     """
-    if not requested_model or requested_model.strip().lower() in _AUTO_MODEL_IDS:
-        return None
+    effort = canonical_reasoning_effort(reasoning_effort)
+    thinking_model = GeminiModelOption(
+        public_id="gemini-extended-thinking",
+        ui_label="Extended thinking",
+        alternate_labels=("Thinking", "Complex problem solving"),
+    )
 
-    cleaned = requested_model.strip().lower()
+    # 1. Explicit reasoning effort takes precedence
+    if effort in {"high", "xhigh", "extended", "max", "ultra"}:
+        return thinking_model
+
+    cleaned = (requested_model or "").strip().lower()
     norm_req = normalize_token(cleaned)
 
-    # 1. Exact match by public_id
-    for model in DEFAULT_GEMINI_MODELS:
+    # 2. Check auto model
+    if is_auto_model(requested_model):
+        if effort in {"none", "minimal", "low"}:
+            # Ensure non-thinking Flash is used if auto was requested with low reasoning
+            return GeminiModelOption(
+                public_id="gemini-3.8-flash",
+                ui_label="3.8 Flash",
+                alternate_labels=("Flash", "3.6 Flash", "Fastest answers"),
+            )
+        return None
+
+    # If low/none reasoning effort requested with a thinking model, downgrade to Pro or Flash
+    if effort in {"none", "minimal", "low"}:
+        if "pro" in norm_req:
+            return GeminiModelOption(
+                public_id="gemini-3.1-pro",
+                ui_label="3.1 Pro",
+                alternate_labels=("Pro", "Advanced reasoning"),
+            )
+        return GeminiModelOption(
+            public_id="gemini-3.8-flash",
+            ui_label="3.8 Flash",
+            alternate_labels=("Flash", "3.6 Flash", "Fastest answers"),
+        )
+
+    all_models = DEFAULT_GEMINI_MODELS + tuple(_discovered_models)
+
+    # 3. Exact match by public_id
+    for model in all_models:
         if model.public_id == cleaned or normalize_token(model.public_id) == norm_req:
             return model
 
-    # 2. Match by ui_label or alternate_labels
-    for model in DEFAULT_GEMINI_MODELS:
+    # 4. Match by ui_label or alternate_labels
+    for model in all_models:
         for label in model.ui_labels:
             if normalize_token(label) == norm_req:
                 return model
 
-    # 3. Partial / substring match
+    # 5. Partial / substring match
     if "flashlite" in norm_req or "lite" in norm_req:
-        for model in DEFAULT_GEMINI_MODELS:
+        for model in all_models:
             if "lite" in model.public_id:
                 return model
     if "thinking" in norm_req:
-        for model in DEFAULT_GEMINI_MODELS:
-            if "thinking" in model.public_id:
-                return model
+        return thinking_model
     if "pro" in norm_req:
-        for model in DEFAULT_GEMINI_MODELS:
+        for model in all_models:
             if model.public_id == "gemini-3.1-pro":
                 return model
     if "flash" in norm_req:
-        for model in DEFAULT_GEMINI_MODELS:
+        for model in all_models:
             if model.public_id == "gemini-3.8-flash":
                 return model
 

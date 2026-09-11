@@ -19,7 +19,7 @@ from typing import AsyncGenerator
 from patchright.async_api import Page
 
 from src.browser.human import human_type, human_click, random_delay
-from src.chatgpt.models import ChatResponse
+from src.chatgpt.models import ChatResponse, ImageInfo
 from src.config import Config
 from src.gemini.detector import (
     count_assistant_messages,
@@ -30,7 +30,9 @@ from src.gemini.detector import (
 )
 from src.gemini.model_registry import (
     GeminiModelOption,
+    list_gemini_model_ids,
     normalize_token,
+    register_discovered_gemini_models,
     resolve_gemini_model,
 )
 from src.gemini.selectors import GeminiSelectors
@@ -48,6 +50,7 @@ class GeminiClient:
 
     def __init__(self, page: Page) -> None:
         self._page = page
+        self._model_discovery_checked_at: float = 0.0
         self._attach_debug_listeners(page)
 
     def _attach_debug_listeners(self, page: Page) -> None:
@@ -79,6 +82,7 @@ class GeminiClient:
         file_paths: list[str] | None = None,
         read_aloud: bool = False,
         model: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> ChatResponse:
         """
         Send a message to Gemini and wait for the complete response.
@@ -87,8 +91,9 @@ class GeminiClient:
             text: Prompt text.
             image_paths: Optional local image file paths.
             file_paths: Optional local file paths.
-            read_aloud: Accepted for API compatibility.
+            read_aloud: Triggers native Gemini Listen (TTS) when True.
             model: Optional model name to switch to before sending.
+            reasoning_effort: Optional reasoning effort (high/extended/low/none).
 
         Returns ChatResponse with the reply and metadata.
         """
@@ -107,9 +112,14 @@ class GeminiClient:
             if self._page.is_closed():
                 raise RuntimeError("Gemini browser page is closed")
 
-        # Switch model if requested
-        if model:
-            await self.switch_model(model)
+        page_err = await self._detect_page_error()
+        if page_err:
+            log.warning(f"Proactive Gemini page error detected: {page_err}")
+            raise RuntimeError(f"Gemini page error: {page_err}")
+
+        # Switch model and/or reasoning effort if requested
+        if model or reasoning_effort:
+            await self.switch_model(model or "gemini-browser", reasoning_effort=reasoning_effort)
 
         # 0. Count existing turns to detect new answer
         pre_count = await count_assistant_messages(self._page)
@@ -155,7 +165,11 @@ class GeminiClient:
         # 3. Handle attachments if any
         if all_attachments:
             await self._upload_files(all_attachments)
-            await self._wait_for_attachments_ready(timeout_s=120.0)
+            ready = await self._wait_for_attachments_ready(timeout_s=120.0)
+            if not ready:
+                raise RuntimeError(
+                    "Gemini attachment upload did not finish; send was not clicked"
+                )
 
         await random_delay(200, 400)
 
@@ -213,14 +227,23 @@ class GeminiClient:
         elapsed_ms = int((time.time() - start_time) * 1000)
         thread_id = self._extract_thread_id()
 
-        log.info(f"Response received ({elapsed_ms}ms, {len(response_text)} chars): {response_text[:80]}...")
+        images = await self._extract_response_images()
+        has_images = len(images) > 0
+
+        if read_aloud:
+            await self._trigger_tts()
+
+        log.info(
+            f"Response received ({elapsed_ms}ms, {len(response_text)} chars"
+            f"{f', {len(images)} images' if has_images else ''}): {response_text[:80]}..."
+        )
 
         return ChatResponse(
             message=response_text,
             thread_id=thread_id,
             response_time_ms=elapsed_ms,
-            images=[],
-            has_images=False,
+            images=images,
+            has_images=has_images,
             audio=None,
             has_audio=False,
         )
@@ -240,14 +263,17 @@ class GeminiClient:
                 continue
         return ""
 
-    async def switch_model(self, model_request: str) -> bool:
+    async def switch_model(self, model_request: str, reasoning_effort: str | None = None) -> bool:
         """
-        Switch the model via Gemini'\''s mode switcher (<bard-mode-switcher>).
+        Switch the model via Gemini's mode switcher (<bard-mode-switcher>).
         Returns True if already on the model or successfully switched.
         """
-        resolved: GeminiModelOption | None = resolve_gemini_model(model_request)
+        resolved: GeminiModelOption | None = resolve_gemini_model(model_request, reasoning_effort=reasoning_effort)
         if not resolved:
-            log.debug(f"Model request '{model_request}' resolves to current browser model; no switch needed")
+            log.debug(
+                f"Model request '{model_request}' (reasoning={reasoning_effort}) "
+                f"resolves to current browser model; no switch needed"
+            )
             return True
 
         current = await self.get_current_model()
@@ -626,6 +652,21 @@ class GeminiClient:
                         if "stop" in aria_label or "stop" in title:
                             log.debug(f"Skipping send click on stop button ({selector}): aria-label='{aria_label}'")
                             continue
+                        if (await el.get_attribute("aria-busy") or "").lower() == "true":
+                            continue
+                        try:
+                            progress = await el.query_selector(
+                                "mat-progress-spinner, [role='progressbar'], .mdc-circular-progress"
+                            )
+                        except Exception:
+                            progress = None
+                        if progress:
+                            try:
+                                if await progress.is_visible():
+                                    log.debug("Skipping send click; button still shows a progress spinner")
+                                    continue
+                            except Exception:
+                                pass
                         is_disabled = (
                             await el.get_attribute("disabled") is not None
                             or await el.get_attribute("aria-disabled") == "true"
@@ -840,3 +881,157 @@ class GeminiClient:
             Path(filename).unlink(missing_ok=True)
             raise
         return filename
+
+    async def discover_available_models(self, force: bool = False) -> list[str]:
+        """
+        Scrape the mode switcher in the Gemini web UI to discover and register
+        available models for the logged-in Google account.
+        """
+        now = time.time()
+        ttl = Config.GEMINI_MODEL_DISCOVERY_TTL_SECONDS
+        if not force and (now - self._model_discovery_checked_at) < ttl and self._model_discovery_checked_at > 0:
+            return list(list_gemini_model_ids())
+
+        switcher_btn = await self._find_selector(GeminiSelectors.MODEL_SWITCHER_BUTTON, "mode switcher")
+        if not switcher_btn:
+            return list(list_gemini_model_ids())
+
+        try:
+            await self._page.click(switcher_btn)
+            await asyncio.sleep(0.5)
+
+            menu_items = await self._page.query_selector_all(", ".join(GeminiSelectors.MODEL_MENU_ITEMS))
+            labels: list[str] = []
+            for item in menu_items:
+                try:
+                    txt = (await item.inner_text()).strip()
+                    if txt:
+                        labels.append(txt)
+                except Exception:
+                    continue
+
+            await self._page.keyboard.press("Escape")
+            await asyncio.sleep(0.3)
+
+            if labels:
+                registered = register_discovered_gemini_models(labels)
+                self._model_discovery_checked_at = now
+                log.info(f"Discovered Gemini models from UI: {labels} (registered: {registered})")
+        except Exception as e:
+            log.debug(f"Error during Gemini model discovery: {e}")
+            try:
+                await self._page.keyboard.press("Escape")
+            except Exception:
+                pass
+
+        return list(list_gemini_model_ids())
+
+    async def generate_image(
+        self,
+        prompt: str,
+        n: int = 1,
+        size: str = "1024x1024",
+        quality: str = "standard",
+        style: str = "vivid",
+    ) -> ChatResponse:
+        """Generate images through the Gemini web interface and download results."""
+        count = max(1, min(int(n or 1), 4))
+        prompt_parts = [
+            f"Generate an image: {prompt.strip()}",
+        ]
+        if size:
+            prompt_parts.append(f"Aspect ratio: {size}.")
+        if style:
+            prompt_parts.append(f"Style: {style}.")
+        prompt_parts.append("Return the generated image result directly.")
+
+        return await self.send_message("\n\n".join(prompt_parts))
+
+    async def _detect_page_error(self) -> str | None:
+        """Proactively detect error banners or quota limit dialogs."""
+        for selector in GeminiSelectors.ERROR_INDICATORS:
+            try:
+                el = await self._page.query_selector(selector)
+                if el and await el.is_visible():
+                    txt = (await el.inner_text()).strip()
+                    if txt:
+                        return txt
+            except Exception:
+                continue
+        return None
+
+    async def _trigger_tts(self) -> bool:
+        """Trigger the native Gemini Read Aloud (Listen) TTS button."""
+        for selector in GeminiSelectors.TTS_BUTTON:
+            try:
+                btn = await self._page.query_selector(selector)
+                if btn and await btn.is_visible():
+                    await btn.click()
+                    log.info("Triggered Gemini TTS Read Aloud")
+                    return True
+            except Exception:
+                continue
+        return False
+
+    async def _extract_response_images(self) -> list[ImageInfo]:
+        """Extract generated images from the latest assistant response."""
+        images: list[ImageInfo] = []
+        for selector in GeminiSelectors.GENERATED_IMAGE:
+            try:
+                elements = await self._page.query_selector_all(selector)
+                for el in elements:
+                    try:
+                        if not await el.is_visible():
+                            continue
+                        src = await el.get_attribute("src") or ""
+                        alt = await el.get_attribute("alt") or ""
+                        if src and not src.startswith("data:image/svg"):
+                            local_path = ""
+                            try:
+                                local_path = await self._download_image(src, filename_hint=alt)
+                            except Exception as e:
+                                log.debug(f"Image download skipped: {e}")
+                            images.append(ImageInfo(
+                                url=src,
+                                local_path=local_path,
+                                alt=alt,
+                                prompt_title="Gemini Generated Image",
+                            ))
+                    except Exception:
+                        continue
+                if images:
+                    break
+            except Exception:
+                continue
+        return images
+
+    async def _download_image(self, url: str, filename_hint: str = "") -> str:
+        """Download an image using the authenticated browser session."""
+        Config.ensure_dirs()
+        safe_name = re.sub(r"[^\w\s-]", "", filename_hint)[:60].strip() or "gemini_image"
+        safe_name = re.sub(r"\s+", "_", safe_name)
+        ts = int(time.time())
+        local_path = Config.IMAGES_DIR / f"{safe_name}_{ts}.png"
+
+        try:
+            image_data = await self._page.evaluate(
+                """async (url) => {
+                    const resp = await fetch(url);
+                    const blob = await resp.blob();
+                    return new Promise((resolve) => {
+                        const reader = new FileReader();
+                        reader.onloadend = () => resolve(reader.result);
+                        reader.readAsDataURL(blob);
+                    });
+                }""",
+                url,
+            )
+            if image_data and "," in image_data:
+                import base64
+                b64 = image_data.split(",", 1)[1]
+                local_path.write_bytes(base64.b64decode(b64))
+                log.info(f"Downloaded Gemini image to {local_path}")
+                return str(local_path)
+        except Exception as e:
+            log.warning(f"Failed to download image {url[:80]}: {e}")
+        return ""

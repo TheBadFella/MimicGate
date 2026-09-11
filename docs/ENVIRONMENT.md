@@ -62,6 +62,7 @@ When running Python directly, set these in the shell or root `.env`. In Docker, 
 | `GEMINI_DEFAULT_MODEL` | `gemini-browser` | Model selected when a Gemini request does not specify one. |
 | `GEMINI_MODEL_FALLBACK` | `true` | Fall back to `GEMINI_DEFAULT_MODEL` when an unknown model is requested; when false, reject with HTTP 400. |
 | `GEMINI_MODEL_ALIASES` | `built-in alias map` | Comma-separated API-model to UI-label mappings for Gemini. |
+| `GEMINI_MODEL_DISCOVERY_TTL_SECONDS` | `3600` | How long model choices discovered from the Gemini UI remain cached. |
 | `GEMINI_LONG_PROMPT_FALLBACK` | `attachment` | Long-prompt behavior for Gemini: `attachment` or `error`. |
 | `GEMINI_LONG_PROMPT_THRESHOLD` | `0` | Character threshold for proactive Gemini attachment fallback; `0` disables. |
 | `MINIMAX_REGION` | `global_en` | MiniMax region: `global_en` or `cn_zh`. |

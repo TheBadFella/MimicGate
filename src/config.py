@@ -61,6 +61,9 @@ class Config:
         "GEMINI_MODEL_ALIASES",
         "gemini-3.8-flash=3.8 Flash|Flash,gemini-3.6-flash=3.6 Flash|Flash,gemini-3.5-flash-lite=3.5 Flash-Lite,gemini-3.1-pro=3.1 Pro|Pro,gemini-extended-thinking=Extended thinking|Thinking",
     )
+    GEMINI_MODEL_DISCOVERY_TTL_SECONDS: int = max(
+        60, int(os.getenv("GEMINI_MODEL_DISCOVERY_TTL_SECONDS", "3600"))
+    )
     GEMINI_LONG_PROMPT_FALLBACK: str = os.getenv(
         "GEMINI_LONG_PROMPT_FALLBACK", "attachment"
     )

@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import HTTPException
 
 from src.api import openai_routes
+from src.chatgpt.models import ChatResponse, ImageInfo
 from src.config import Config
 from src.gemini.client import GeminiClient
 from src.gemini.model_registry import PUBLIC_GEMINI_BROWSER_MODEL_ID
@@ -274,6 +275,133 @@ class GeminiProviderTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(mock_client.delete_thread.await_count, 2)
             mock_client.delete_thread.assert_any_await("gem-thread-1")
             mock_client.delete_thread.assert_any_await("gem-thread-2")
+
+    async def test_gemini_client_switch_model_with_reasoning_effort(self) -> None:
+        mock_page = MagicMock()
+        mock_page.click = AsyncMock()
+        mock_page.wait_for_selector = AsyncMock()
+        mock_page.keyboard = MagicMock()
+        mock_page.keyboard.press = AsyncMock()
+
+        item_el = AsyncMock()
+        item_el.inner_text = AsyncMock(return_value="Extended thinking\nComplex problem solving")
+        item_el.click = AsyncMock()
+
+        mock_page.query_selector_all = AsyncMock(return_value=[item_el])
+
+        client = GeminiClient(mock_page)
+        client.get_current_model = AsyncMock(side_effect=["3.8 Flash", "Extended thinking"])
+        client._find_selector = AsyncMock(return_value="button[data-test-id='bard-mode-menu-button']")
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            switched = await client.switch_model("gemini-browser", reasoning_effort="high")
+            self.assertTrue(switched)
+            item_el.click.assert_awaited_once()
+
+    async def test_gemini_client_discover_available_models(self) -> None:
+        mock_page = MagicMock()
+        mock_page.click = AsyncMock()
+        mock_page.wait_for_selector = AsyncMock()
+        mock_page.keyboard = MagicMock()
+        mock_page.keyboard.press = AsyncMock()
+
+        item1 = AsyncMock()
+        item1.inner_text = AsyncMock(return_value="3.5 Flash-Lite\nFastest answers")
+        item1.get_attribute = AsyncMock(return_value="true")
+        item1.click = AsyncMock()
+
+        item2 = AsyncMock()
+        item2.inner_text = AsyncMock(return_value="3.6 Flash\nAll-around help")
+        item2.get_attribute = AsyncMock(return_value=None)
+
+        mock_page.query_selector_all = AsyncMock(return_value=[item1, item2])
+
+        client = GeminiClient(mock_page)
+        client._find_selector = AsyncMock(return_value="button[data-test-id='bard-mode-menu-button']")
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            models = await client.discover_available_models(force=True)
+            self.assertIn("gemini-3.5-flash-lite", models)
+            self.assertIn("gemini-3.6-flash", models)
+
+    async def test_gemini_client_trigger_tts(self) -> None:
+        mock_page = MagicMock()
+        btn = AsyncMock()
+        btn.is_visible = AsyncMock(return_value=True)
+        btn.click = AsyncMock()
+        mock_page.query_selector = AsyncMock(return_value=btn)
+
+        client = GeminiClient(mock_page)
+        result = await client._trigger_tts()
+        self.assertTrue(result)
+        btn.click.assert_awaited_once()
+
+    async def test_gemini_client_detect_page_error(self) -> None:
+        mock_page = MagicMock()
+        err_banner = AsyncMock()
+        err_banner.is_visible = AsyncMock(return_value=True)
+        err_banner.inner_text = AsyncMock(return_value="You have reached your limit")
+        mock_page.query_selector = AsyncMock(return_value=err_banner)
+
+        client = GeminiClient(mock_page)
+        err = await client._detect_page_error()
+        self.assertEqual(err, "You have reached your limit")
+
+    async def test_gemini_client_detect_page_error_raises_in_send_message(self) -> None:
+        mock_page = MagicMock()
+        mock_page.is_closed = MagicMock(return_value=False)
+        client = GeminiClient(mock_page)
+        client._detect_page_error = AsyncMock(return_value="Usage limit exceeded")
+
+        with self.assertRaises(RuntimeError) as cm:
+            await client.send_message("hello")
+        self.assertIn("Usage limit exceeded", str(cm.exception))
+
+    async def test_gemini_client_generate_image(self) -> None:
+        mock_page = MagicMock()
+        client = GeminiClient(mock_page)
+        fake_response = ChatResponse(
+            message="Here is your image",
+            has_images=True,
+            images=[
+                ImageInfo(
+                    url="https://googleusercontent.com/img123",
+                    local_path="/tmp/img123.png",
+                    alt="A majestic lion",
+                    prompt_title="Gemini Generated Image",
+                )
+            ],
+        )
+        client.send_message = AsyncMock(return_value=fake_response)
+
+        resp = await client.generate_image("a majestic lion", n=1, size="1024x1024", style="vivid")
+        self.assertTrue(resp.has_images)
+        self.assertEqual(len(resp.images), 1)
+        self.assertEqual(resp.images[0].url, "https://googleusercontent.com/img123")
+        client.send_message.assert_awaited_once()
+        sent_prompt = client.send_message.call_args[0][0]
+        self.assertIn("Generate an image: a majestic lion", sent_prompt)
+        self.assertIn("Aspect ratio: 1024x1024", sent_prompt)
+        self.assertIn("Style: vivid", sent_prompt)
+
+    async def test_gemini_client_extract_response_images(self) -> None:
+        mock_page = MagicMock()
+        img_el = AsyncMock()
+        img_el.is_visible = AsyncMock(return_value=True)
+        img_el.get_attribute = AsyncMock(side_effect=lambda attr: {
+            "src": "https://googleusercontent.com/chat_attachment_abc",
+            "alt": "Generated picture",
+        }.get(attr))
+        mock_page.query_selector_all = AsyncMock(return_value=[img_el])
+
+        client = GeminiClient(mock_page)
+        client._download_image = AsyncMock(return_value="/tmp/local_gemini_img.png")
+
+        images = await client._extract_response_images()
+        self.assertEqual(len(images), 1)
+        self.assertEqual(images[0].url, "https://googleusercontent.com/chat_attachment_abc")
+        self.assertEqual(images[0].local_path, "/tmp/local_gemini_img.png")
+        self.assertEqual(images[0].alt, "Generated picture")
 
 
 if __name__ == "__main__":

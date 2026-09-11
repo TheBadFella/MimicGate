@@ -109,10 +109,12 @@ class GeminiSelectors:
     ]
 
     # -- Action buttons on completed assistant turn --------------
+    # Prefer the turn action-bar copy. Code-block "Copy code" and user
+    # "Copy prompt" buttons must not win; those copy a snippet, not the reply.
     COPY_BUTTON = [
-        "button[aria-label*='Copy prompt' i]",
         "button[aria-label*='Copy response' i]",
-        "button[aria-label*='Copy' i]",
+        "button[aria-label='Copy' i]",
+        "button[aria-label*='Copy' i]:not([aria-label*='code' i]):not([aria-label*='prompt' i]):not([aria-label*='table' i])",
         "button:has(mat-icon[data-mat-icon-name='content_copy'])",
     ]
 
@@ -213,6 +215,32 @@ class GeminiSelectors:
         "div:has-text('Something went wrong')",
         "a[href*='p=no_access']",
         "div:has-text('Try again later')",
+        "div:has-text('reached your limit')",
+        "div:has-text('limit reached')",
+        "div:has-text('temporarily unavailable')",
+    ]
+
+    # -- Text-to-Speech (Listen / Read aloud) ---------------------
+    TTS_BUTTON = [
+        "button.tts-button",
+        "button[aria-label='Listen' i]",
+        "button[aria-label*='Listen' i]",
+    ]
+
+    # -- Generated Images inside assistant response --------------
+    GENERATED_IMAGE = [
+        "img[src*='googleusercontent.com/chat_attachment']",
+        "generated-image img",
+        "div.image-container img",
+        "img.generated-image",
+        "img[alt*='Generated' i]",
+    ]
+
+    # Download button for generated images
+    IMAGE_DOWNLOAD_BUTTON = [
+        "button[aria-label*='Download full size' i]",
+        "a[download]",
+        "button[aria-label*='Download' i]",
     ]
 
     # -- File / Attachment upload input --------------------------
@@ -250,9 +278,19 @@ class GeminiSelectors:
     ]
 
     # -- Upload spinner indicating attachment still processing ---
+    # Scoped to the attachment preview chip only. Do not include the composer
+    # send-button spinner: that indicator stays visible and is not upload state.
+    ATTACHMENT_PREVIEW_ROOT = [
+        "uploader-file-preview",
+        "uploader-file-preview-container",
+        "gem-media-attachment",
+        "div.file-preview-chip",
+        "div.attachment-preview-wrapper",
+        "images-files-uploader",
+        "div.file-preview-container",
+    ]
     ATTACHMENT_SPINNER = [
         "uploader-file-preview mat-progress-spinner",
-        "uploader mat-progress-spinner",
         "uploader-file-preview [role='progressbar']",
         "uploader-file-preview .mdc-circular-progress",
         "gem-media-attachment mat-progress-spinner",
@@ -262,11 +300,7 @@ class GeminiSelectors:
         ".attachment-preview-wrapper [role='progressbar']",
         ".attachment-preview-wrapper .mdc-circular-progress",
         "div.file-preview-container mat-progress-spinner",
-        "mat-mdc-progress-spinner",
-        ".attachment-preview-wrapper mat-progress-spinner",
         "div.file-preview-container [role='progressbar']",
-        "div[data-test-id='send-button-container'] mat-progress-spinner",
-        "div[data-test-id='send-button-container'] [role='progressbar']",
-        "div[data-test-id='send-button-container'] .mdc-circular-progress",
+        "div.file-preview-container .mdc-circular-progress",
     ]
 

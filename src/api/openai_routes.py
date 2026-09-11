@@ -1947,7 +1947,10 @@ async def _execute_image_generation(
 
     client = _get_client()
     if not hasattr(client, "generate_image"):
-        raise HTTPException(status_code=422, detail="Image generation is only supported by the ChatGPT provider")
+        raise HTTPException(
+            status_code=422,
+            detail=f"Image generation is not supported by provider '{Config.provider_name()}'",
+        )
 
     _deletion_pending: list[str] = []
     app_key = (app_key_override or "").strip()
@@ -2008,8 +2011,9 @@ async def _execute_image_generation(
                     style=request.style or "vivid",
                 )
             except Exception as e:
-                log.error(f"ChatGPT error during image generation: {e}", exc_info=True)
-                raise HTTPException(status_code=500, detail=f"ChatGPT error: {str(e)}")
+                provider_display = Config.provider_name()
+                log.error(f"{provider_display} error during image generation: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=f"{provider_display} error: {str(e)}")
 
             elapsed_ms = int((time.time() - start_time) * 1000)
 
@@ -2029,14 +2033,15 @@ async def _execute_image_generation(
                     log.info("Image app-thread mapping updated: app=%s -> thread=%s", app_name, thread_for_app)
 
             if not result.images:
+                provider_display = Config.provider_name()
                 log.warning(
                     f"No images detected in response ({elapsed_ms}ms). "
-                    f"ChatGPT replied: {result.message[:200]}"
+                    f"{provider_display} replied: {result.message[:200]}"
                 )
                 raise HTTPException(
                     status_code=422,
                     detail=(
-                        "ChatGPT did not generate an image. "
+                        f"{provider_display} did not generate an image. "
                         f"Model response: {result.message[:500]}"
                     ),
                 )
@@ -2092,7 +2097,21 @@ async def _execute_image_generation(
 @openai_router.get("/v1/models", response_model=ModelListResponse)
 async def list_models() -> ModelListResponse:
     """List model IDs exposed by the active provider."""
-    if Config.PROVIDER in {"minimax", "gemini"}:
+    if Config.PROVIDER == "gemini":
+        if isinstance(_client, GeminiClient):
+            try:
+                async with acquire_browser_page(CONTROL_SESSION) as lease:
+                    bound = _bind_client(_client, lease.page)
+                    await bound.discover_available_models()
+            except Exception as exc:
+                log.warning("Could not refresh models from the live Gemini picker: %s", exc)
+        return ModelListResponse(
+            data=[
+                ModelObject(id=model_id, owned_by=Config.provider_owner())
+                for model_id in Config.provider_model_ids()
+            ]
+        )
+    if Config.PROVIDER == "minimax":
         return ModelListResponse(
             data=[
                 ModelObject(id=model_id, owned_by=Config.provider_owner())
@@ -3170,7 +3189,7 @@ async def _execute_chat_completion(
             try:
                 reasoning_kwargs = (
                     {"reasoning_effort": _chat_reasoning_effort(request)}
-                    if isinstance(client, ChatGPTClient)
+                    if isinstance(client, (ChatGPTClient, GeminiClient))
                     else {}
                 )
                 send_kwargs = {
