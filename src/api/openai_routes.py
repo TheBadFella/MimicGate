@@ -1836,17 +1836,18 @@ def _resolve_model_id(requested: str | None) -> str:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if Config.PROVIDER == "gemini":
-        from src.gemini.model_registry import is_auto_model, resolve_gemini_model, list_gemini_model_ids
+        from src.gemini.model_registry import is_auto_model, resolve_gemini_model
         if is_auto_model(requested):
             return Config.default_model_id()
         resolved = resolve_gemini_model(requested)
         if resolved:
             return resolved.public_id
-        supported = ", ".join(list_gemini_model_ids())
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported model '{requested}'. Supported models: {supported}",
+        log.warning(
+            "Requested model %r is not a recognized Gemini model; falling back to default %r",
+            requested,
+            Config.default_model_id(),
         )
+        return Config.default_model_id()
 
     if not is_supported_chat_model(requested):
         supported = ", ".join(list_public_chat_models())

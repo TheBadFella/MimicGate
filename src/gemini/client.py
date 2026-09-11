@@ -53,7 +53,7 @@ class GeminiClient:
     def _attach_debug_listeners(self, page: Page) -> None:
         try:
             page.on("console", lambda msg: log.debug("GEMINI BROWSER CONSOLE [%s]: %s", msg.type, msg.text[:200]))
-            page.on("requestfailed", lambda req: log.warning("GEMINI REQ FAILED: %s -> %s", req.url[:120], req.failure))
+            page.on("requestfailed", lambda req: log.debug("GEMINI REQ FAILED: %s -> %s", req.url[:120], req.failure))
         except Exception:
             pass
 

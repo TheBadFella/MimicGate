@@ -53,10 +53,11 @@ class GeminiProviderTests(unittest.IsolatedAsyncioTestCase):
                 openai_routes._resolve_model_id("gemini-3.1-pro"),
                 "gemini-3.1-pro",
             )
-            # Unsupported model raises 400
-            with self.assertRaises(HTTPException) as ctx:
-                openai_routes._resolve_model_id("unknown-nonexistent-model")
-            self.assertEqual(ctx.exception.status_code, 400)
+            # Unknown model falls back to default model gracefully
+            self.assertEqual(
+                openai_routes._resolve_model_id("unknown-nonexistent-model"),
+                Config.GEMINI_DEFAULT_MODEL,
+            )
 
     async def test_list_models_for_gemini(self) -> None:
         with patch.object(Config, "PROVIDER", "gemini"), patch.object(openai_routes.Config, "PROVIDER", "gemini"):
