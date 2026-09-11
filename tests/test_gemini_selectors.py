@@ -43,6 +43,18 @@ class GeminiSelectorsTests(unittest.TestCase):
                 if "aria-label*='Send" not in selector:
                     self.assertIn("not([aria-label*='Stop' i])", selector)
 
+    def test_sidebar_and_deletion_selectors_defined(self) -> None:
+        """Verify sidebar toggle, items, menu, and deletion selectors are defined."""
+        self.assertTrue(len(GeminiSelectors.SIDEBAR_TOGGLE_BUTTON) > 0)
+        self.assertTrue(len(GeminiSelectors.SIDEBAR_THREAD_ITEM) > 0)
+        self.assertTrue(len(GeminiSelectors.SIDEBAR_THREAD_MENU_BUTTON) > 0)
+        self.assertTrue(len(GeminiSelectors.THREAD_DELETE_OPTION) > 0)
+        self.assertTrue(len(GeminiSelectors.THREAD_CONFIRM_DELETE_BUTTON) > 0)
+        self.assertTrue(len(GeminiSelectors.CONVERSATION_TITLE_ELEMENTS) > 0)
+        self.assertIn("button[aria-label*='Main menu' i]", GeminiSelectors.SIDEBAR_TOGGLE_BUTTON)
+        self.assertIn("conversation-action-menu button", GeminiSelectors.SIDEBAR_THREAD_MENU_BUTTON)
+        self.assertIn("[role='menuitem']:has-text('Delete')", GeminiSelectors.THREAD_DELETE_OPTION)
+
 
 if __name__ == "__main__":
     unittest.main()

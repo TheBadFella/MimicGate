@@ -132,9 +132,65 @@ class GeminiSelectors:
     ]
 
     # -- Sidebar conversation links ------------------------------
+    # -- Sidebar toggle / drawer buttons -------------------------
+    SIDEBAR_TOGGLE_BUTTON = [
+        "button[aria-label*='Main menu' i]",
+        "button[aria-label*='Expand menu' i]",
+        "button[data-test-id='side-nav-button']",
+        "button:has(mat-icon[data-mat-icon-name='menu'])",
+        "button:has(mat-icon:has-text('menu'))",
+    ]
+
+    # -- Sidebar conversation links & items ----------------------
     SIDEBAR_THREAD_LINKS = [
         "a[href^='/app/']",
         "a[href*='/app/']",
+        "gem-nav-list-item a[href*='/app/']",
+    ]
+
+    SIDEBAR_THREAD_ITEM = [
+        "gem-nav-list-item:has(a[href*='/app/'])",
+        "div[data-test-id*='conversation']:has(a[href*='/app/'])",
+        "a[href^='/app/']",
+        "a[href*='/app/']",
+    ]
+
+    # Three-dot / overflow menu button on a conversation row
+    SIDEBAR_THREAD_MENU_BUTTON = [
+        "conversation-action-menu button",
+        "button[aria-label*='actions' i]",
+        "button[aria-label*='More options' i]",
+        "button[aria-label*='options' i]",
+        "button:has(mat-icon[data-mat-icon-name='more_vert'])",
+        "button:has(mat-icon:has-text('more_vert'))",
+        "button[aria-haspopup='menu']",
+    ]
+
+    # "Delete" choice in the conversation context menu
+    THREAD_DELETE_OPTION = [
+        "[role='menuitem']:has-text('Delete')",
+        "button[role='menuitem']:has-text('Delete')",
+        "button:has-text('Delete')",
+        "button[aria-label*='Delete' i]",
+        "div[role='menu'] button:has-text('Delete')",
+        "div[role='menu'] [role='menuitem']:has-text('Delete')",
+    ]
+
+    # Confirm-delete action in the modal dialog
+    THREAD_CONFIRM_DELETE_BUTTON = [
+        "mat-dialog-container button:has-text('Delete')",
+        "div[role='dialog'] button:has-text('Delete')",
+        "div[role='alertdialog'] button:has-text('Delete')",
+        "button[data-test-id*='confirm-delete' i]",
+        "button[aria-label*='Confirm' i]",
+    ]
+
+    # Conversation title elements inside current chat or sidebar
+    CONVERSATION_TITLE_ELEMENTS = [
+        "div[data-test-id='conversation-title']",
+        "div.conversation-title",
+        "span.conversation-title",
+        "span.title",
     ]
 
     # -- Login / Authentication page detection -------------------

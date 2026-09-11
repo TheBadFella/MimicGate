@@ -188,6 +188,93 @@ class GeminiProviderTests(unittest.IsolatedAsyncioTestCase):
             # Crucial check: _click_send is called exactly once, preventing double send / stop click
             self.assertEqual(client._click_send.await_count, 1)
 
+    async def test_gemini_client_get_thread_title_from_page_title(self) -> None:
+        mock_page = MagicMock()
+        mock_page.url = "https://gemini.google.com/app/thread123"
+        mock_page.title = AsyncMock(return_value="Python Performance Guide - Gemini")
+        client = GeminiClient(mock_page)
+        title = await client.get_thread_title("thread123")
+        self.assertEqual(title, "Python Performance Guide")
+
+    async def test_gemini_client_get_thread_title_from_list_threads(self) -> None:
+        mock_page = MagicMock()
+        mock_page.url = "https://gemini.google.com/app/different_thread"
+        mock_page.title = AsyncMock(return_value="Gemini")
+        client = GeminiClient(mock_page)
+        client.list_threads = AsyncMock(return_value=[
+            {"id": "target_id", "title": "Data Engineering Discussion", "url": "/app/target_id"}
+        ])
+        title = await client.get_thread_title("target_id")
+        self.assertEqual(title, "Data Engineering Discussion")
+
+    async def test_gemini_client_delete_thread_success(self) -> None:
+        mock_page = MagicMock()
+        mock_page.url = "https://gemini.google.com/app/to_delete"
+        mock_page.goto = AsyncMock()
+
+        thread_item = AsyncMock()
+        thread_item.get_attribute = AsyncMock(return_value="/app/to_delete")
+        thread_item.hover = AsyncMock()
+
+        menu_btn = AsyncMock()
+        menu_btn.click = AsyncMock()
+
+        parent_handle = AsyncMock()
+        parent_handle.query_selector = AsyncMock(return_value=menu_btn)
+        thread_item.evaluate_handle = AsyncMock(return_value=parent_handle)
+
+        delete_opt = AsyncMock()
+        delete_opt.click = AsyncMock()
+
+        confirm_btn = AsyncMock()
+        confirm_btn.click = AsyncMock()
+
+        mock_page.query_selector_all = AsyncMock(return_value=[thread_item])
+        mock_page.query_selector = AsyncMock(return_value=None)
+        mock_page.wait_for_selector = AsyncMock(side_effect=[delete_opt, confirm_btn])
+
+        client = GeminiClient(mock_page)
+        client.navigate_to_thread = AsyncMock()
+
+        ok = await client.delete_thread("to_delete")
+        self.assertTrue(ok)
+        client.navigate_to_thread.assert_awaited_once_with("to_delete")
+        thread_item.hover.assert_awaited_once()
+        menu_btn.click.assert_awaited_once()
+        delete_opt.click.assert_awaited_once()
+        confirm_btn.click.assert_awaited_once()
+
+    async def test_gemini_client_delete_thread_not_found(self) -> None:
+        mock_page = MagicMock()
+        mock_page.query_selector_all = AsyncMock(return_value=[])
+        mock_page.query_selector = AsyncMock(return_value=None)
+
+        client = GeminiClient(mock_page)
+        client.navigate_to_thread = AsyncMock()
+
+        ok = await client.delete_thread("missing_thread")
+        self.assertFalse(ok)
+
+    async def test_maybe_delete_expired_app_threads_calls_gemini_delete(self) -> None:
+        mock_client = MagicMock(spec=GeminiClient)
+        mock_client.delete_thread = AsyncMock(return_value=True)
+
+        mock_page = MagicMock()
+        mock_lease = MagicMock()
+        mock_lease.page = mock_page
+
+        with patch.object(openai_routes.Config, "API_APP_THREAD_DELETE_EXPIRED", True), \
+             patch.object(openai_routes, "_get_client", return_value=mock_client), \
+             patch.object(openai_routes, "_bind_client", return_value=mock_client), \
+             patch("src.api.openai_routes.acquire_browser_page") as mock_acquire:
+            mock_acquire.return_value.__aenter__.return_value = mock_lease
+            mock_acquire.return_value.__aexit__.return_value = None
+
+            await openai_routes._maybe_delete_expired_app_threads(["gem-thread-1", "gem-thread-2"])
+            self.assertEqual(mock_client.delete_thread.await_count, 2)
+            mock_client.delete_thread.assert_any_await("gem-thread-1")
+            mock_client.delete_thread.assert_any_await("gem-thread-2")
+
 
 if __name__ == "__main__":
     unittest.main()

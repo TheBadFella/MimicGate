@@ -499,7 +499,7 @@ def _prune_app_threads(now: float) -> list[str]:
 
 
 async def _maybe_delete_expired_app_threads(thread_ids: list[str]) -> None:
-    """Best-effort deletion of expired app-tracked ChatGPT threads via the web UI.
+    """Best-effort deletion of expired app-tracked threads via the web UI.
 
     Acquires a cleanup tab (or the process lock when the pool is down) so
     deletion cannot race an in-flight request on the same page.
@@ -511,15 +511,19 @@ async def _maybe_delete_expired_app_threads(thread_ids: list[str]) -> None:
     except Exception:
         return
 
-    if not isinstance(client, ChatGPTClient):
-        log.debug("App-thread deletion is only supported for ChatGPT provider")
+    delete_fn = getattr(client, "delete_thread", None)
+    if not callable(delete_fn):
+        log.debug("App-thread deletion is not supported by current provider client")
         return
 
     async with acquire_browser_page(CLEANUP_SESSION) as lease:
         bound = _bind_client(client, lease.page)
+        bound_delete = getattr(bound, "delete_thread", None)
+        if not callable(bound_delete):
+            return
         for tid in thread_ids:
             try:
-                ok = await bound.delete_thread(tid)
+                ok = await bound_delete(tid)
                 if ok:
                     log.info(f"Deleted expired app-tracked thread: {tid}")
                 else:
@@ -552,8 +556,8 @@ def _display_app_name(app_key: str) -> str:
     return app_key
 
 
-async def _lookup_thread_title(client: ChatGPTClient, thread_id: str) -> str:
-    """Best-effort lookup for a conversation title from sidebar threads."""
+async def _lookup_thread_title(client: Any, thread_id: str) -> str:
+    """Best-effort lookup for a conversation title from sidebar threads or active page."""
     if not thread_id:
         return ""
 
@@ -564,8 +568,23 @@ async def _lookup_thread_title(client: ChatGPTClient, thread_id: str) -> str:
         if cached:
             return cached[1]
 
+    get_title = getattr(client, "get_thread_title", None)
+    if callable(get_title):
+        try:
+            resolved = await get_title(thread_id)
+            if resolved:
+                async with _thread_title_lock:
+                    _thread_titles[thread_id] = (now, resolved)
+                return resolved
+        except Exception as e:
+            log.debug(f"Direct thread title lookup skipped: {e}")
+
+    list_fn = getattr(client, "list_threads", None)
+    if not callable(list_fn):
+        return ""
+
     try:
-        threads = await client.list_threads()
+        threads = await list_fn()
     except Exception as e:
         log.debug(f"Thread title lookup skipped: {e}")
         return ""

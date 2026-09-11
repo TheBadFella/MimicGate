@@ -421,21 +421,185 @@ class GeminiClient:
     async def list_threads(self) -> list[dict]:
         """Scrape recent chat history items from the sidebar."""
         threads = []
+        try:
+            initial_check = await self._page.query_selector(GeminiSelectors.SIDEBAR_THREAD_LINKS[0])
+            if not initial_check or not await initial_check.is_visible():
+                await self._ensure_sidebar_open()
+        except Exception:
+            pass
+
         for selector in GeminiSelectors.SIDEBAR_THREAD_LINKS:
             try:
                 elements = await self._page.query_selector_all(selector)
                 for el in elements:
                     href = await el.get_attribute("href")
                     title = (await el.inner_text()).strip()
+                    title = ""
+                    try:
+                        title = (await el.get_attribute("aria-label") or "").strip()
+                    except Exception:
+                        pass
+                    if not title:
+                        try:
+                            title = (await el.inner_text()).strip()
+                        except Exception:
+                            pass
                     if href:
                         match = re.search(r"/app/([a-zA-Z0-9_-]+)", href)
                         t_id = match.group(1) if match else href
                         threads.append({"id": t_id, "title": title, "url": href})
+                        first_line_title = title.split("\n")[0].strip() if title else ""
+                        threads.append({"id": t_id, "title": first_line_title or title, "url": href})
                 if threads:
                     break
             except Exception:
                 continue
         return threads
+
+    async def get_thread_title(self, thread_id: str = "") -> str:
+        """Best-effort resolution of conversation title."""
+        current_id = self._extract_thread_id()
+        if not thread_id or thread_id == current_id:
+            try:
+                raw_title = await self._page.title()
+                cleaned = re.sub(r"\s*-\s*(Google\s+)?Gemini$", "", (raw_title or "").strip(), flags=re.I).strip()
+                if cleaned and cleaned.lower() not in {"gemini", "google gemini"}:
+                    return cleaned
+            except Exception:
+                pass
+
+            for sel in GeminiSelectors.CONVERSATION_TITLE_ELEMENTS:
+                try:
+                    el = await self._page.query_selector(sel)
+                    if el and await el.is_visible():
+                        text = (await el.inner_text()).strip()
+                        if text:
+                            return text
+                except Exception:
+                    continue
+
+        target_id = thread_id or current_id
+        if target_id:
+            try:
+                for t in await self.list_threads():
+                    if t.get("id") == target_id and t.get("title"):
+                        return t["title"]
+            except Exception:
+                pass
+        return ""
+
+    async def _ensure_sidebar_open(self) -> bool:
+        """Ensure the sidebar drawer is open so thread items and menus are accessible."""
+        for sel in GeminiSelectors.SIDEBAR_TOGGLE_BUTTON:
+            try:
+                btn = await self._page.query_selector(sel)
+                if btn and await btn.is_visible():
+                    await btn.click()
+                    await asyncio.sleep(0.5)
+                    return True
+            except Exception:
+                continue
+        return False
+
+    async def delete_thread(self, thread_id: str) -> bool:
+        """
+        Delete a Gemini conversation thread via the web UI.
+
+        Navigates to the thread, opens the sidebar context menu, clicks Delete,
+        and confirms in the modal dialog. Returns True on success, False otherwise.
+        """
+        log.info(f"Attempting to delete Gemini thread: {thread_id}")
+        try:
+            await self.navigate_to_thread(thread_id)
+            await asyncio.sleep(1.5)
+
+            await self._ensure_sidebar_open()
+
+            thread_href = f"/app/{thread_id}"
+            thread_el = None
+            for sel in GeminiSelectors.SIDEBAR_THREAD_ITEM:
+                try:
+                    elements = await self._page.query_selector_all(sel)
+                    for el in elements:
+                        href = (await el.get_attribute("href") or "").rstrip("/")
+                        if thread_href in href or href.endswith(f"/app/{thread_id}"):
+                            thread_el = el
+                            break
+                    if thread_el:
+                        break
+                except Exception:
+                    continue
+
+            if not thread_el:
+                log.warning(f"Could not find sidebar item for Gemini thread {thread_id}")
+                return False
+
+            try:
+                await thread_el.hover()
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                log.debug(f"Hover on thread item failed (non-fatal): {e}")
+
+            menu_clicked = False
+            for sel in GeminiSelectors.SIDEBAR_THREAD_MENU_BUTTON:
+                try:
+                    parent = await thread_el.evaluate_handle(
+                        "el => el.closest('gem-nav-list-item') || el.closest('div') || el"
+                    )
+                    btn = await parent.query_selector(sel)
+                    if not btn:
+                        btn = await self._page.query_selector(sel)
+                    if btn:
+                        await btn.click(timeout=3000)
+                        menu_clicked = True
+                        break
+                except Exception:
+                    continue
+
+            if not menu_clicked:
+                log.warning(f"Could not open context menu for Gemini thread {thread_id}")
+                return False
+
+            await asyncio.sleep(0.5)
+
+            delete_clicked = False
+            for sel in GeminiSelectors.THREAD_DELETE_OPTION:
+                try:
+                    btn = await self._page.wait_for_selector(sel, timeout=3000, state="visible")
+                    if btn:
+                        await btn.click(timeout=3000)
+                        delete_clicked = True
+                        break
+                except Exception:
+                    continue
+
+            if not delete_clicked:
+                log.warning(f"Could not click Delete option for Gemini thread {thread_id}")
+                return False
+
+            await asyncio.sleep(0.5)
+
+            confirm_clicked = False
+            for sel in GeminiSelectors.THREAD_CONFIRM_DELETE_BUTTON:
+                try:
+                    btn = await self._page.wait_for_selector(sel, timeout=3000, state="visible")
+                    if btn:
+                        await btn.click(timeout=3000)
+                        confirm_clicked = True
+                        break
+                except Exception:
+                    continue
+
+            if not confirm_clicked:
+                log.warning(f"Could not confirm deletion for Gemini thread {thread_id}")
+                return False
+
+            await asyncio.sleep(1.5)
+            log.info(f"Successfully deleted Gemini thread: {thread_id}")
+            return True
+        except Exception as e:
+            log.warning(f"Failed to delete Gemini thread {thread_id}: {e}", exc_info=True)
+            return False
 
     # -- Internal Helpers ----------------------------------------
 
