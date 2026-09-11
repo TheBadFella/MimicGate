@@ -118,6 +118,54 @@ class GeminiProviderTests(unittest.IsolatedAsyncioTestCase):
         # Should not need full goto because already on clean new chat
         mock_page.goto.assert_not_awaited()
 
+    async def test_click_send_skips_stop_button(self) -> None:
+        mock_page = MagicMock()
+        stop_el = AsyncMock()
+        stop_el.is_visible = AsyncMock(return_value=True)
+        stop_el.get_attribute = AsyncMock(side_effect=lambda attr: "Stop response" if attr == "aria-label" else None)
+        mock_page.query_selector = AsyncMock(return_value=stop_el)
+
+        client = GeminiClient(mock_page)
+        with patch("src.gemini.client.human_click", new_callable=AsyncMock) as mock_click:
+            result = await client._click_send(timeout_s=0.1)
+            self.assertFalse(result)
+            mock_click.assert_not_awaited()
+
+    async def test_click_send_clicks_valid_send_button(self) -> None:
+        mock_page = MagicMock()
+        send_el = AsyncMock()
+        send_el.is_visible = AsyncMock(return_value=True)
+        send_el.get_attribute = AsyncMock(side_effect=lambda attr: "Send message" if attr == "aria-label" else None)
+        mock_page.query_selector = AsyncMock(return_value=send_el)
+
+        client = GeminiClient(mock_page)
+        with patch("src.gemini.client.human_click", new_callable=AsyncMock) as mock_click:
+            result = await client._click_send(timeout_s=0.5)
+            self.assertTrue(result)
+            mock_click.assert_awaited_once()
+
+    async def test_send_message_calls_send_once(self) -> None:
+        mock_page = MagicMock()
+        mock_page.url = "https://gemini.google.com/app/test12345"
+        mock_page.is_closed = MagicMock(return_value=False)
+        mock_page.click = AsyncMock()
+        mock_page.keyboard = MagicMock()
+        mock_page.keyboard.press = AsyncMock()
+
+        client = GeminiClient(mock_page)
+        client._find_selector = AsyncMock(return_value="div.ql-editor")
+        client._click_send = AsyncMock(return_value=True)
+
+        with patch("src.gemini.client.human_type", new_callable=AsyncMock), \
+             patch("src.gemini.client.count_assistant_messages", new_callable=AsyncMock, return_value=0), \
+             patch("src.gemini.client.get_latest_assistant_turn_signature", new_callable=AsyncMock, return_value=None), \
+             patch("src.gemini.client.wait_for_response_complete", new_callable=AsyncMock, return_value=True), \
+             patch("src.gemini.client.extract_last_response_via_copy", new_callable=AsyncMock, return_value="Test response"):
+            resp = await client.send_message("Hello Gemini")
+            self.assertEqual(resp.message, "Test response")
+            # Crucial check: _click_send is called exactly once, preventing double send / stop click
+            self.assertEqual(client._click_send.await_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

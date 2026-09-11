@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import unittest
 
@@ -33,6 +33,15 @@ class GeminiSelectorsTests(unittest.TestCase):
             "button[data-test-id='bard-mode-menu-button']",
             GeminiSelectors.MODEL_SWITCHER_BUTTON,
         )
+
+    def test_send_button_excludes_stop_button(self) -> None:
+        """Verify generic and container send button selectors exclude the stop button."""
+        container_selector = "div[data-test-id='send-button-container'] button:not([aria-label*='Stop' i])"
+        self.assertIn(container_selector, GeminiSelectors.SEND_BUTTON)
+        for selector in GeminiSelectors.SEND_BUTTON:
+            if "send-button-container" in selector or "send-button" in selector:
+                if "aria-label*='Send" not in selector:
+                    self.assertIn("not([aria-label*='Stop' i])", selector)
 
 
 if __name__ == "__main__":

@@ -157,14 +157,8 @@ class GeminiClient:
             await self._upload_files(all_attachments)
             await self._wait_for_attachments_ready(timeout_s=120.0)
 
-        await random_delay(150, 300)
         await random_delay(200, 400)
 
-        # 4. Click Send or press Enter
-        sent = await self._click_send()
-        if not sent:
-            log.info("Send button not found or not clickable; pressing Enter")
-            await self._page.keyboard.press("Enter")
         # 4. Click Send
         if all_attachments:
             sent = await self._click_send(timeout_s=30.0)
@@ -463,13 +457,17 @@ class GeminiClient:
                 try:
                     el = await self._page.query_selector(selector)
                     if el and await el.is_visible():
+                        aria_label = (await el.get_attribute("aria-label") or "").lower()
+                        title = (await el.get_attribute("title") or "").lower()
+                        if "stop" in aria_label or "stop" in title:
+                            log.debug(f"Skipping send click on stop button ({selector}): aria-label='{aria_label}'")
+                            continue
                         is_disabled = (
                             await el.get_attribute("disabled") is not None
                             or await el.get_attribute("aria-disabled") == "true"
                         )
                         if not is_disabled:
                             await human_click(self._page, selector)
-                            log.debug(f"Clicked send button: {selector}")
                             log.info(f"Clicked send button: {selector}")
                             return True
                 except Exception:
@@ -522,6 +520,9 @@ class GeminiClient:
                 try:
                     btn = await self._page.query_selector(sel)
                     if btn and await btn.is_visible():
+                        aria_label = (await btn.get_attribute("aria-label") or "").lower()
+                        if "stop" in aria_label:
+                            continue
                         is_disabled = (
                             await btn.get_attribute("disabled") is not None
                             or await btn.get_attribute("aria-disabled") == "true"

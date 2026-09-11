@@ -26,18 +26,18 @@ class GeminiSelectors:
     # -- Send button ---------------------------------------------
     # When text is entered into the editor, the voice/dictate button transitions into send.
     SEND_BUTTON = [
-        "gem-icon-button.send-button.submit button",
-        "gem-icon-button.send-button.has-input button",
+        "gem-icon-button.send-button.submit button:not([aria-label*='Stop' i])",
+        "gem-icon-button.send-button.has-input button:not([aria-label*='Stop' i])",
         "button[aria-label*='Send message' i]",
-        "div[data-test-id='send-button-container'] button",
-        "gem-icon-button.send-button button",
+        "div[data-test-id='send-button-container'] button:not([aria-label*='Stop' i])",
+        "gem-icon-button.send-button button:not([aria-label*='Stop' i])",
         "button[aria-label*='Send prompt' i]",
         "button[aria-label*='Send' i]",
-        "button:has(mat-icon[data-mat-icon-name='arrow_upward'])",
-        "button:has(mat-icon[fonticon='arrow_upward'])",
-        "button:has(mat-icon[data-mat-icon-name='send'])",
-        "button:has(mat-icon[fonticon='send'])",
-        "button.send-button",
+        "button:has(mat-icon[data-mat-icon-name='arrow_upward']):not([aria-label*='Stop' i])",
+        "button:has(mat-icon[fonticon='arrow_upward']):not([aria-label*='Stop' i])",
+        "button:has(mat-icon[data-mat-icon-name='send']):not([aria-label*='Stop' i])",
+        "button:has(mat-icon[fonticon='send']):not([aria-label*='Stop' i])",
+        "button.send-button:not([aria-label*='Stop' i])",
     ]
 
     # -- Voice / Dictate button (visible when composer is empty) --
