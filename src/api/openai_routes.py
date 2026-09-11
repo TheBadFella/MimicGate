@@ -1836,16 +1836,45 @@ def _resolve_model_id(requested: str | None) -> str:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if Config.PROVIDER == "gemini":
-        from src.gemini.model_registry import is_auto_model, resolve_gemini_model
+        from src.gemini.model_registry import (
+            PUBLIC_GEMINI_BROWSER_MODEL_ID,
+            is_auto_model,
+            list_gemini_model_ids,
+            resolve_gemini_model,
+        )
         if is_auto_model(requested):
             return Config.default_model_id()
         resolved = resolve_gemini_model(requested)
         if resolved:
             return resolved.public_id
+
+        supported = ", ".join(list_gemini_model_ids())
+        docs_url = "https://github.com/TheBadFella/CatGPT/blob/main/docs/MODEL_SWITCHING.md"
+
+        if not Config.GEMINI_MODEL_FALLBACK:
+            log.error(
+                "Requested model %r is not supported by provider Gemini (GEMINI_MODEL_FALLBACK=false). "
+                "Supported models: %s. See documentation: %s or query GET /v1/models.",
+                requested,
+                supported,
+                docs_url,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Model '{requested}' is not supported by provider Gemini. "
+                    f"Supported models: {supported}. "
+                    f"See {docs_url} or enable GEMINI_MODEL_FALLBACK=true to fall back to default model."
+                ),
+            )
+
         log.warning(
-            "Requested model %r is not a recognized Gemini model; falling back to default %r",
+            "Requested model %r is not a recognized Gemini model; falling back to default %r. "
+            "Available models: %s. See documentation: %s or query GET /v1/models.",
             requested,
             Config.default_model_id(),
+            supported,
+            docs_url,
         )
         return Config.default_model_id()
 

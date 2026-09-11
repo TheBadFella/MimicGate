@@ -92,6 +92,11 @@ DEFAULT_GEMINI_MODELS: tuple[GeminiModelOption, ...] = (
         alternate_labels=("3.8 Flash", "3.6 Flash"),
     ),
     GeminiModelOption(
+        public_id="gemini-1.5-flash",
+        ui_label="Flash",
+        alternate_labels=("3.8 Flash", "3.6 Flash"),
+    ),
+    GeminiModelOption(
         public_id="gemini-1.5-pro",
         ui_label="3.1 Pro",
         alternate_labels=("Pro",),

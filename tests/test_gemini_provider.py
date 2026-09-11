@@ -26,23 +26,26 @@ class GeminiProviderTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(Config.default_model_id(), Config.GEMINI_DEFAULT_MODEL)
 
     def test_resolve_model_id_for_gemini(self) -> None:
-        with patch.object(Config, "PROVIDER", "gemini"), patch.object(openai_routes.Config, "PROVIDER", "gemini"):
-            # Default / auto fallback
+        with patch.object(Config, "PROVIDER", "gemini"), \
+             patch.object(openai_routes.Config, "PROVIDER", "gemini"), \
+             patch.object(Config, "GEMINI_DEFAULT_MODEL", "gemini-browser"), \
+             patch.object(openai_routes.Config, "GEMINI_DEFAULT_MODEL", "gemini-browser"):
+            # Default / auto fallback preserves browser model
             self.assertEqual(
                 openai_routes._resolve_model_id(None),
-                Config.GEMINI_DEFAULT_MODEL,
+                "gemini-browser",
             )
             self.assertEqual(
                 openai_routes._resolve_model_id("gemini-browser"),
-                Config.GEMINI_DEFAULT_MODEL,
+                "gemini-browser",
             )
             self.assertEqual(
                 openai_routes._resolve_model_id("catgpt-browser"),
-                Config.GEMINI_DEFAULT_MODEL,
+                "gemini-browser",
             )
             self.assertEqual(
                 openai_routes._resolve_model_id("gpt-4o"),
-                Config.GEMINI_DEFAULT_MODEL,
+                "gemini-browser",
             )
             # Concrete models
             self.assertEqual(
@@ -53,11 +56,30 @@ class GeminiProviderTests(unittest.IsolatedAsyncioTestCase):
                 openai_routes._resolve_model_id("gemini-3.1-pro"),
                 "gemini-3.1-pro",
             )
-            # Unknown model falls back to default model gracefully
             self.assertEqual(
-                openai_routes._resolve_model_id("unknown-nonexistent-model"),
-                Config.GEMINI_DEFAULT_MODEL,
+                openai_routes._resolve_model_id("gemini-1.5-flash"),
+                "gemini-1.5-flash",
             )
+            # When GEMINI_MODEL_FALLBACK=True, unknown model falls back to default model gracefully
+            with patch.object(Config, "GEMINI_MODEL_FALLBACK", True), patch.object(openai_routes.Config, "GEMINI_MODEL_FALLBACK", True):
+                self.assertEqual(
+                    openai_routes._resolve_model_id("unknown-nonexistent-model"),
+                    "gemini-browser",
+                )
+                self.assertEqual(
+                    openai_routes._resolve_model_id("gpt-5.6-sol"),
+                    "gemini-browser",
+                )
+            # When GEMINI_MODEL_FALLBACK=False, unknown model raises HTTP 400 with helpful documentation link
+            with patch.object(Config, "GEMINI_MODEL_FALLBACK", False), patch.object(openai_routes.Config, "GEMINI_MODEL_FALLBACK", False):
+                with self.assertRaises(HTTPException) as cm:
+                    openai_routes._resolve_model_id("unknown-nonexistent-model")
+                self.assertEqual(cm.exception.status_code, 400)
+                self.assertIn("not supported by provider Gemini", cm.exception.detail)
+                self.assertIn("MODEL_SWITCHING.md", cm.exception.detail)
+                # Auto and valid models should still succeed even with fallback disabled
+                self.assertEqual(openai_routes._resolve_model_id("gemini-3.8-flash"), "gemini-3.8-flash")
+                self.assertEqual(openai_routes._resolve_model_id("gemini-browser"), "gemini-browser")
 
     async def test_list_models_for_gemini(self) -> None:
         with patch.object(Config, "PROVIDER", "gemini"), patch.object(openai_routes.Config, "PROVIDER", "gemini"):

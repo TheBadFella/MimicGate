@@ -55,7 +55,8 @@ class Config:
     CHATGPT_PROJECT_URL: str = os.getenv("CHATGPT_PROJECT_URL", "").strip()
     CLAUDE_URL: str = os.getenv("CLAUDE_URL", "https://claude.ai")
     GEMINI_URL: str = os.getenv("GEMINI_URL", "https://gemini.google.com")
-    GEMINI_DEFAULT_MODEL: str = os.getenv("GEMINI_DEFAULT_MODEL", "gemini-3.8-flash")
+    GEMINI_DEFAULT_MODEL: str = os.getenv("GEMINI_DEFAULT_MODEL", "gemini-browser")
+    GEMINI_MODEL_FALLBACK: bool = os.getenv("GEMINI_MODEL_FALLBACK", "true").lower() == "true"
     GEMINI_MODEL_ALIASES: str = os.getenv(
         "GEMINI_MODEL_ALIASES",
         "gemini-3.8-flash=3.8 Flash|Flash,gemini-3.6-flash=3.6 Flash|Flash,gemini-3.5-flash-lite=3.5 Flash-Lite,gemini-3.1-pro=3.1 Pro|Pro,gemini-extended-thinking=Extended thinking|Thinking",

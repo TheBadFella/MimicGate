@@ -47,7 +47,8 @@ services:
       CLAUDE_URL: ${CLAUDE_URL:-https://claude.ai}
       # Gemini
       GEMINI_URL: ${GEMINI_URL:-https://gemini.google.com}
-      GEMINI_DEFAULT_MODEL: ${GEMINI_DEFAULT_MODEL:-gemini-3.8-flash}
+      GEMINI_DEFAULT_MODEL: ${GEMINI_DEFAULT_MODEL:-gemini-browser}
+      GEMINI_MODEL_FALLBACK: ${GEMINI_MODEL_FALLBACK:-true}
       # MiniMax API
       MINIMAX_REGION: ${MINIMAX_REGION:-global_en}
       MINIMAX_BASE_URL: ${MINIMAX_BASE_URL:-}
