@@ -25,6 +25,7 @@ from src.browser.manager import BrowserManager
 from src.browser.auto_login import can_prompt_for_login, ensure_logged_in
 from src.chatgpt.client import ChatGPTClient
 from src.claude.client import ClaudeClient
+from src.gemini.client import GeminiClient
 from src.minimax.client import MiniMaxClient
 from src.config import Config
 from src.api.ollama_routes import ollama_router
@@ -62,7 +63,7 @@ _install_uvicorn_access_filters()
 
 # Global instances — needed for lifespan
 _browser: BrowserManager | None = None
-_client: ChatGPTClient | ClaudeClient | MiniMaxClient | None = None
+_client: ChatGPTClient | ClaudeClient | GeminiClient | MiniMaxClient | None = None
 
 
 @asynccontextmanager
@@ -120,6 +121,8 @@ async def lifespan(app: FastAPI):
 
         if Config.PROVIDER == "claude":
             _client = ClaudeClient(page)
+        elif Config.PROVIDER == "gemini":
+            _client = GeminiClient(page)
         else:
             _client = ChatGPTClient(page)
 

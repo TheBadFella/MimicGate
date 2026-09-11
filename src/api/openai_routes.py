@@ -67,6 +67,7 @@ from src.api.browser_gate import (
 from src.chatgpt.client import ChatGPTClient
 from src.chatgpt.errors import PromptAttachmentFallbackError, PromptTooLongError
 from src.claude.client import ClaudeClient
+from src.gemini.client import GeminiClient
 from src.minimax.client import MiniMaxClient
 from src.chatgpt.model_registry import (
     PUBLIC_BROWSER_MODEL_ID,
@@ -81,7 +82,7 @@ log = setup_logging("openai_routes")
 openai_router = APIRouter()
 
 # Global reference - set by server.py at startup
-ProviderClient = ChatGPTClient | ClaudeClient | MiniMaxClient
+ProviderClient = ChatGPTClient | ClaudeClient | GeminiClient | MiniMaxClient
 _client: ProviderClient | None = None
 
 # Kept for compatibility with integrations that reset the legacy route state.
@@ -1834,6 +1835,19 @@ def _resolve_model_id(requested: str | None) -> str:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    if Config.PROVIDER == "gemini":
+        from src.gemini.model_registry import resolve_gemini_model, list_gemini_model_ids
+        if not requested or requested.strip().lower() in {"", "auto", "default", "browser", "gemini", "gemini-browser"}:
+            return Config.default_model_id()
+        resolved = resolve_gemini_model(requested)
+        if resolved:
+            return resolved.public_id
+        supported = ", ".join(list_gemini_model_ids())
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported model '{requested}'. Supported models: {supported}",
+        )
+
     if not is_supported_chat_model(requested):
         supported = ", ".join(list_public_chat_models())
         raise HTTPException(
@@ -2029,7 +2043,7 @@ async def _execute_image_generation(
 @openai_router.get("/v1/models", response_model=ModelListResponse)
 async def list_models() -> ModelListResponse:
     """List model IDs exposed by the active provider."""
-    if Config.PROVIDER == "minimax":
+    if Config.PROVIDER in {"minimax", "gemini"}:
         return ModelListResponse(
             data=[
                 ModelObject(id=model_id, owned_by=Config.provider_owner())

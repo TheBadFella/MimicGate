@@ -54,10 +54,15 @@ When running Python directly, set these in the shell or root `.env`. In Docker, 
 
 | Variable | Default | Purpose |
 |---|---:|---|
-| `PROVIDER` | `chatgpt` | Active provider: `chatgpt`, `claude`, or `minimax`. |
+| `PROVIDER` | `chatgpt` | Active provider: `chatgpt`, `claude`, `gemini`, or `minimax`. |
 | `CHATGPT_URL` | `https://chatgpt.com` | ChatGPT browser target. |
 | `CHATGPT_PROJECT_URL` | _empty_ | Optional ChatGPT project URL; new and resumed ChatGPT threads are confined to that project. |
 | `CLAUDE_URL` | `https://claude.ai` | Claude browser target. |
+| `GEMINI_URL` | `https://gemini.google.com` | Google Gemini browser target. |
+| `GEMINI_DEFAULT_MODEL` | `gemini-3.8-flash` | Model selected when a Gemini request does not specify one. |
+| `GEMINI_MODEL_ALIASES` | `built-in alias map` | Comma-separated API-model to UI-label mappings for Gemini. |
+| `GEMINI_LONG_PROMPT_FALLBACK` | `attachment` | Long-prompt behavior for Gemini: `attachment` or `error`. |
+| `GEMINI_LONG_PROMPT_THRESHOLD` | `0` | Character threshold for proactive Gemini attachment fallback; `0` disables. |
 | `MINIMAX_REGION` | `global_en` | MiniMax region: `global_en` or `cn_zh`. |
 | `MINIMAX_BASE_URL` | `derived from region` | Optional MiniMax API base URL override. |
 | `MINIMAX_API_KEY` | _empty_ | MiniMax API key; required when MiniMax is selected. |

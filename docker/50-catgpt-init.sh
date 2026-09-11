@@ -46,6 +46,35 @@ claude_domains = [
     'www.anthropic.com',
 ]
 domains = common_domains + (claude_domains if provider == 'claude' else chatgpt_domains)
+gemini_domains = [
+    'gemini.google.com',
+    'accounts.google.com',
+    'myaccount.google.com',
+    'google.com',
+    'www.google.com',
+    'google.ca',
+    'www.google.ca',
+    'ssl.gstatic.com',
+    'www.gstatic.com',
+    'gemini.gstatic.com',
+    'fonts.gstatic.com',
+    'fonts.googleapis.com',
+    'apis.google.com',
+    'lh3.googleusercontent.com',
+    'play.google.com',
+    'clients6.google.com',
+    'signaler-pa.clients6.google.com',
+    'push.clients6.google.com',
+    'content-push.googleapis.com',
+    'recaptcha.net',
+    'www.recaptcha.net',
+]
+if provider == 'claude':
+    domains = common_domains + claude_domains
+elif provider == 'gemini':
+    domains = common_domains + gemini_domains
+else:
+    domains = common_domains + chatgpt_domains
 resolved = []
 for d in domains:
     try:

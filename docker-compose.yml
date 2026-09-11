@@ -38,11 +38,14 @@ services:
       # Browser (headed on virtual display)
       HEADLESS: "false"
       SLOW_MO: 50
-      # Provider: "chatgpt", "claude", or "minimax"
+      # Provider: "chatgpt", "claude", "gemini", or "minimax"
       PROVIDER: ${PROVIDER:-chatgpt}
       # ChatGPT
       CHATGPT_URL: "https://chatgpt.com"
       CHATGPT_PROJECT_URL: ${CHATGPT_PROJECT_URL:-}
+      # Gemini
+      GEMINI_URL: ${GEMINI_URL:-https://gemini.google.com}
+      GEMINI_DEFAULT_MODEL: ${GEMINI_DEFAULT_MODEL:-gemini-3.8-flash}
       # MiniMax API
       MINIMAX_REGION: ${MINIMAX_REGION:-global_en}
       MINIMAX_BASE_URL: ${MINIMAX_BASE_URL:-}

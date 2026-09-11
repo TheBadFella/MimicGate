@@ -68,8 +68,33 @@ def _resolve_domains_for_chrome() -> str:
         "anthropic.com",
         "www.anthropic.com",
     ]
+    gemini_domains = [
+        "gemini.google.com",
+        "accounts.google.com",
+        "myaccount.google.com",
+        "google.com",
+        "www.google.com",
+        "google.ca",
+        "www.google.ca",
+        "ssl.gstatic.com",
+        "www.gstatic.com",
+        "gemini.gstatic.com",
+        "fonts.gstatic.com",
+        "fonts.googleapis.com",
+        "apis.google.com",
+        "lh3.googleusercontent.com",
+        "play.google.com",
+        "clients6.google.com",
+        "signaler-pa.clients6.google.com",
+        "push.clients6.google.com",
+        "content-push.googleapis.com",
+        "recaptcha.net",
+        "www.recaptcha.net",
+    ]
     if Config.PROVIDER == "claude":
         domains = common_domains + claude_domains
+    elif Config.PROVIDER == "gemini":
+        domains = common_domains + gemini_domains
     else:
         domains = common_domains + chatgpt_domains
     rules = []
@@ -511,6 +536,11 @@ class BrowserManager:
             chat_inputs = ClaudeSelectors.CHAT_INPUT
             login_indicators = ClaudeSelectors.LOGIN_INDICATORS
             logged_in_indicators = ClaudeSelectors.LOGGED_IN_INDICATORS
+        elif Config.PROVIDER == "gemini":
+            from src.gemini.selectors import GeminiSelectors
+            chat_inputs = GeminiSelectors.CHAT_INPUT
+            login_indicators = GeminiSelectors.LOGIN_INDICATORS
+            logged_in_indicators = GeminiSelectors.LOGGED_IN_INDICATORS
         else:
             chat_inputs = Selectors.CHAT_INPUT
             login_indicators = Selectors.LOGIN_INDICATORS

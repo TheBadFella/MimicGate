@@ -35,7 +35,7 @@ load_dotenv(_PROJECT_ROOT / ".env")
 class Config:
     """All project settings in one place."""
 
-    SUPPORTED_PROVIDERS: tuple[str, ...] = ("chatgpt", "claude", "minimax")
+    SUPPORTED_PROVIDERS: tuple[str, ...] = ("chatgpt", "claude", "gemini", "minimax")
 
     # Paths
     PROJECT_ROOT: Path = _PROJECT_ROOT
@@ -54,6 +54,18 @@ class Config:
     CHATGPT_URL: str = os.getenv("CHATGPT_URL", "https://chatgpt.com")
     CHATGPT_PROJECT_URL: str = os.getenv("CHATGPT_PROJECT_URL", "").strip()
     CLAUDE_URL: str = os.getenv("CLAUDE_URL", "https://claude.ai")
+    GEMINI_URL: str = os.getenv("GEMINI_URL", "https://gemini.google.com")
+    GEMINI_DEFAULT_MODEL: str = os.getenv("GEMINI_DEFAULT_MODEL", "gemini-3.8-flash")
+    GEMINI_MODEL_ALIASES: str = os.getenv(
+        "GEMINI_MODEL_ALIASES",
+        "gemini-3.8-flash=3.8 Flash|Flash,gemini-3.6-flash=3.6 Flash|Flash,gemini-3.5-flash-lite=3.5 Flash-Lite,gemini-3.1-pro=3.1 Pro|Pro,gemini-extended-thinking=Extended thinking|Thinking",
+    )
+    GEMINI_LONG_PROMPT_FALLBACK: str = os.getenv(
+        "GEMINI_LONG_PROMPT_FALLBACK", "attachment"
+    )
+    GEMINI_LONG_PROMPT_THRESHOLD: int = max(
+        0, int(os.getenv("GEMINI_LONG_PROMPT_THRESHOLD", "0"))
+    )
     MINIMAX_BASE_URLS: dict[str, str] = {
         "global_en": "https://api.minimax.io/v1",
         "cn_zh": "https://api.minimaxi.com/v1",
@@ -101,6 +113,9 @@ class Config:
         """Return the target URL for the active provider."""
         if cls.PROVIDER == "claude":
             return cls.CLAUDE_URL
+        if cls.PROVIDER == "gemini":
+            base = (cls.GEMINI_URL or "https://gemini.google.com").rstrip("/")
+            return base if base.endswith("/app") else f"{base}/app"
         if cls.PROVIDER == "minimax":
             return cls.MINIMAX_BASE_URL
         return cls.CHATGPT_URL
@@ -126,6 +141,7 @@ class Config:
         names = {
             "chatgpt": "ChatGPT",
             "claude": "Claude",
+            "gemini": "Gemini",
             "minimax": "MiniMax",
         }
         return names.get(cls.PROVIDER, cls.PROVIDER)
@@ -166,6 +182,9 @@ class Config:
         """Return model IDs exposed by the active provider."""
         if cls.PROVIDER == "claude":
             return ("claude-browser",)
+        if cls.PROVIDER == "gemini":
+            from src.gemini.model_registry import list_gemini_model_ids
+            return list_gemini_model_ids()
         if cls.PROVIDER == "minimax":
             return cls.MINIMAX_MODEL_IDS
         return ("catgpt-browser",)
@@ -173,6 +192,8 @@ class Config:
     @classmethod
     def default_model_id(cls) -> str:
         """Return the default model ID for the active provider."""
+        if cls.PROVIDER == "gemini":
+            return cls.GEMINI_DEFAULT_MODEL or "gemini-browser"
         if cls.PROVIDER == "minimax":
             return cls.MINIMAX_MODEL
         return cls.provider_model_ids()[0]
@@ -183,7 +204,7 @@ class Config:
         if cls.PROVIDER != "minimax":
             return requested or cls.default_model_id()
 
-        if not requested or requested in {"catgpt-browser", "claude-browser"}:
+        if not requested or requested in {"catgpt-browser", "claude-browser", "gemini-browser"}:
             return cls.MINIMAX_MODEL
         if requested not in cls.MINIMAX_MODEL_IDS:
             supported = ", ".join(cls.MINIMAX_MODEL_IDS)
@@ -198,6 +219,7 @@ class Config:
         owners = {
             "chatgpt": "catgpt",
             "claude": "anthropic",
+            "gemini": "google",
             "minimax": "minimax",
         }
         return owners.get(cls.PROVIDER, cls.PROVIDER)
