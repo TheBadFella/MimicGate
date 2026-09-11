@@ -36,6 +36,14 @@ class GeminiProviderTests(unittest.IsolatedAsyncioTestCase):
                 openai_routes._resolve_model_id("gemini-browser"),
                 Config.GEMINI_DEFAULT_MODEL,
             )
+            self.assertEqual(
+                openai_routes._resolve_model_id("catgpt-browser"),
+                Config.GEMINI_DEFAULT_MODEL,
+            )
+            self.assertEqual(
+                openai_routes._resolve_model_id("gpt-4o"),
+                Config.GEMINI_DEFAULT_MODEL,
+            )
             # Concrete models
             self.assertEqual(
                 openai_routes._resolve_model_id("gemini-3.8-flash"),

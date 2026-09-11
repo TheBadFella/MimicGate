@@ -1836,8 +1836,8 @@ def _resolve_model_id(requested: str | None) -> str:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if Config.PROVIDER == "gemini":
-        from src.gemini.model_registry import resolve_gemini_model, list_gemini_model_ids
-        if not requested or requested.strip().lower() in {"", "auto", "default", "browser", "gemini", "gemini-browser"}:
+        from src.gemini.model_registry import is_auto_model, resolve_gemini_model, list_gemini_model_ids
+        if is_auto_model(requested):
             return Config.default_model_id()
         resolved = resolve_gemini_model(requested)
         if resolved:

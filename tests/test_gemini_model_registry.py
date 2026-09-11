@@ -1,9 +1,10 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import unittest
 
 from src.gemini.model_registry import (
     PUBLIC_GEMINI_BROWSER_MODEL_ID,
+    is_auto_model,
     list_gemini_model_ids,
     normalize_token,
     resolve_gemini_model,
@@ -26,8 +27,10 @@ class GeminiModelRegistryTests(unittest.TestCase):
         self.assertIn("gemini-extended-thinking", ids)
 
     def test_resolve_auto_model_ids_return_none(self) -> None:
-        for model in ("", "auto", "default", "browser", PUBLIC_GEMINI_BROWSER_MODEL_ID):
+        for model in ("", "auto", "default", "browser", PUBLIC_GEMINI_BROWSER_MODEL_ID, "catgpt-browser", "claude-browser", "gpt-4o", "gpt-4", "gpt-3.5-turbo"):
             self.assertIsNone(resolve_gemini_model(model))
+            self.assertTrue(is_auto_model(model))
+
 
     def test_resolve_concrete_models(self) -> None:
         # Flash 3.8

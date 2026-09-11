@@ -19,7 +19,20 @@ _AUTO_MODEL_IDS = {
     "browser",
     "gemini",
     PUBLIC_GEMINI_BROWSER_MODEL_ID,
+    "catgpt-browser",
+    "claude-browser",
+    "gpt-4o",
+    "gpt-4o-mini",
+    "gpt-4",
+    "gpt-3.5-turbo",
 }
+
+
+def is_auto_model(model_id: str | None) -> bool:
+    """Return True if the requested model means 'use default browser model'."""
+    if not model_id:
+        return True
+    return model_id.strip().lower() in _AUTO_MODEL_IDS
 
 
 @dataclass(frozen=True)
