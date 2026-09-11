@@ -377,14 +377,10 @@ class GeminiClient:
         except Exception:
             await self._page.goto(target_url, wait_until="domcontentloaded")
 
-        # Wait for chat input
         # Wait for chat input or detect error/login
         chat_ready = False
         for selector in GeminiSelectors.CHAT_INPUT:
             try:
-                await self._page.wait_for_selector(selector, timeout=10000, state="visible")
-                break
-                el = await self._page.wait_for_selector(selector, timeout=8000, state="visible")
                 el = await self._page.wait_for_selector(selector, timeout=10000, state="visible")
                 if el:
                     chat_ready = True

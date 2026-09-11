@@ -90,6 +90,34 @@ class GeminiProviderTests(unittest.IsolatedAsyncioTestCase):
         model = await client.get_current_model()
         self.assertEqual(model, "3.8 Flash")
 
+    async def test_gemini_client_new_chat_from_existing_thread(self) -> None:
+        mock_page = MagicMock()
+        mock_page.url = "https://gemini.google.com/app/1a2b3c4d5e"
+        mock_page.goto = AsyncMock()
+        mock_page.click = AsyncMock()
+        mock_el = MagicMock()
+        mock_page.wait_for_selector = AsyncMock(return_value=mock_el)
+        mock_page.query_selector = AsyncMock(return_value=None)
+
+        client = GeminiClient(mock_page)
+        # Must succeed and not raise RuntimeError
+        await client.new_chat()
+        mock_page.wait_for_selector.assert_awaited()
+
+    async def test_gemini_client_new_chat_already_clean(self) -> None:
+        mock_page = MagicMock()
+        mock_page.url = "https://gemini.google.com/app"
+        mock_page.query_selector_all = AsyncMock(return_value=[])
+        mock_page.query_selector = AsyncMock(return_value=MagicMock())
+        mock_page.wait_for_selector = AsyncMock(return_value=MagicMock())
+        mock_page.evaluate = AsyncMock(return_value=0)
+        mock_page.goto = AsyncMock()
+
+        client = GeminiClient(mock_page)
+        await client.new_chat()
+        # Should not need full goto because already on clean new chat
+        mock_page.goto.assert_not_awaited()
+
 
 if __name__ == "__main__":
     unittest.main()
