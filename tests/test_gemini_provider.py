@@ -13,6 +13,7 @@ from src.chatgpt.models import ChatResponse, ImageInfo
 from src.config import Config
 from src.gemini.client import GeminiClient
 from src.gemini.model_registry import PUBLIC_GEMINI_BROWSER_MODEL_ID
+from src.gemini.selectors import GeminiSelectors
 
 
 class GeminiProviderTests(unittest.IsolatedAsyncioTestCase):
@@ -397,6 +398,60 @@ class GeminiProviderTests(unittest.IsolatedAsyncioTestCase):
         result = await client._trigger_tts()
         self.assertTrue(result)
         btn.click.assert_awaited_once()
+
+    async def test_gemini_client_trigger_tts_from_response_menu(self) -> None:
+        mock_page = MagicMock()
+        mock_page.keyboard = MagicMock()
+        mock_page.keyboard.press = AsyncMock()
+        response_root = AsyncMock()
+        more_btn = AsyncMock()
+        more_btn.is_visible = AsyncMock(return_value=True)
+        more_btn.click = AsyncMock()
+        menu_item = AsyncMock()
+        menu_item.is_visible = AsyncMock(return_value=True)
+        menu_item.click = AsyncMock()
+
+        async def root_query(selector: str):
+            if selector == GeminiSelectors.RESPONSE_MORE_BUTTON[0]:
+                return more_btn
+            return None
+
+        response_root.query_selector = AsyncMock(side_effect=root_query)
+        mock_page.query_selector_all = AsyncMock(return_value=[response_root])
+        mock_page.query_selector = AsyncMock(return_value=menu_item)
+
+        client = GeminiClient(mock_page)
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await client._trigger_tts()
+
+        self.assertTrue(result)
+        more_btn.click.assert_awaited_once()
+        menu_item.click.assert_awaited_once()
+
+    async def test_gemini_client_trigger_tts_closes_empty_response_menu(self) -> None:
+        mock_page = MagicMock()
+        mock_page.keyboard = MagicMock()
+        mock_page.keyboard.press = AsyncMock()
+        response_root = AsyncMock()
+        more_btn = AsyncMock()
+        more_btn.is_visible = AsyncMock(return_value=True)
+        more_btn.click = AsyncMock()
+
+        async def root_query(selector: str):
+            if selector == GeminiSelectors.RESPONSE_MORE_BUTTON[0]:
+                return more_btn
+            return None
+
+        response_root.query_selector = AsyncMock(side_effect=root_query)
+        mock_page.query_selector_all = AsyncMock(return_value=[response_root])
+        mock_page.query_selector = AsyncMock(return_value=None)
+
+        client = GeminiClient(mock_page)
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await client._trigger_tts()
+
+        self.assertFalse(result)
+        mock_page.keyboard.press.assert_awaited_once_with("Escape")
 
     async def test_gemini_client_detect_page_error(self) -> None:
         mock_page = MagicMock()

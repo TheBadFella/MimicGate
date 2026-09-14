@@ -994,10 +994,12 @@ class GeminiClient:
         return None
 
     async def _trigger_tts(self) -> bool:
-        """Trigger the native Gemini Read Aloud (Listen) TTS button."""
+        """Trigger native Gemini TTS from either the response or its menu."""
         root = await self._latest_assistant_root()
         if not root:
             return False
+
+        # Some Gemini layouts expose Listen directly on the response.
         for selector in GeminiSelectors.TTS_BUTTON:
             try:
                 btn = await root.query_selector(selector)
@@ -1005,6 +1007,27 @@ class GeminiClient:
                     await btn.click()
                     log.info("Triggered Gemini TTS Read Aloud")
                     return True
+            except Exception:
+                continue
+
+        # Current layouts place Listen in a document-level overlay opened from
+        # the latest response. Keep the opener scoped to that response so an
+        # older turn (or an unrelated page menu) cannot be activated.
+        for selector in GeminiSelectors.RESPONSE_MORE_BUTTON:
+            try:
+                more_btn = await root.query_selector(selector)
+                if not more_btn or not await more_btn.is_visible():
+                    continue
+                await more_btn.click()
+                await asyncio.sleep(0.2)
+                for menu_selector in GeminiSelectors.TTS_MENU_ITEM:
+                    menu_item = await self._page.query_selector(menu_selector)
+                    if menu_item and await menu_item.is_visible():
+                        await menu_item.click()
+                        log.info("Triggered Gemini TTS Read Aloud from response menu")
+                        return True
+                await self._page.keyboard.press("Escape")
+                return False
             except Exception:
                 continue
         return False

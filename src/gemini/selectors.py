@@ -227,6 +227,17 @@ class GeminiSelectors:
         "button[aria-label*='Listen' i]",
     ]
 
+    # Newer Gemini builds move Listen into a per-response overflow menu.
+    RESPONSE_MORE_BUTTON = [
+        "button[aria-label='Show more options' i]",
+        "button[aria-label*='More options' i]",
+    ]
+
+    TTS_MENU_ITEM = [
+        "[role='menuitem']:has-text('Listen')",
+        "button:has-text('Listen')",
+    ]
+
     # -- Generated Images inside assistant response --------------
     GENERATED_IMAGE = [
         "img[src*='googleusercontent.com/chat_attachment']",
