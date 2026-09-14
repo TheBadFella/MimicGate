@@ -64,6 +64,8 @@ RUN uv sync --frozen --no-dev
 RUN patchright install chromium
 
 # Copy application source code and scripts
+ARG CACHE_BUST=1
+RUN echo "Cache bust: $CACHE_BUST"
 COPY src/ src/
 COPY scripts/ scripts/
 

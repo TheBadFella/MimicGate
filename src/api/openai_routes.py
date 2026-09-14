@@ -67,6 +67,7 @@ from src.api.browser_gate import (
 from src.chatgpt.client import ChatGPTClient
 from src.chatgpt.errors import PromptAttachmentFallbackError, PromptTooLongError
 from src.claude.client import ClaudeClient
+from src.gemini.client import GeminiClient
 from src.minimax.client import MiniMaxClient
 from src.chatgpt.model_registry import (
     PUBLIC_BROWSER_MODEL_ID,
@@ -81,7 +82,7 @@ log = setup_logging("openai_routes")
 openai_router = APIRouter()
 
 # Global reference - set by server.py at startup
-ProviderClient = ChatGPTClient | ClaudeClient | MiniMaxClient
+ProviderClient = ChatGPTClient | ClaudeClient | GeminiClient | MiniMaxClient
 _client: ProviderClient | None = None
 
 # Kept for compatibility with integrations that reset the legacy route state.
@@ -498,7 +499,7 @@ def _prune_app_threads(now: float) -> list[str]:
 
 
 async def _maybe_delete_expired_app_threads(thread_ids: list[str]) -> None:
-    """Best-effort deletion of expired app-tracked ChatGPT threads via the web UI.
+    """Best-effort deletion of expired app-tracked threads via the web UI.
 
     Acquires a cleanup tab (or the process lock when the pool is down) so
     deletion cannot race an in-flight request on the same page.
@@ -510,15 +511,19 @@ async def _maybe_delete_expired_app_threads(thread_ids: list[str]) -> None:
     except Exception:
         return
 
-    if not isinstance(client, ChatGPTClient):
-        log.debug("App-thread deletion is only supported for ChatGPT provider")
+    delete_fn = getattr(client, "delete_thread", None)
+    if not callable(delete_fn):
+        log.debug("App-thread deletion is not supported by current provider client")
         return
 
     async with acquire_browser_page(CLEANUP_SESSION) as lease:
         bound = _bind_client(client, lease.page)
+        bound_delete = getattr(bound, "delete_thread", None)
+        if not callable(bound_delete):
+            return
         for tid in thread_ids:
             try:
-                ok = await bound.delete_thread(tid)
+                ok = await bound_delete(tid)
                 if ok:
                     log.info(f"Deleted expired app-tracked thread: {tid}")
                 else:
@@ -551,8 +556,8 @@ def _display_app_name(app_key: str) -> str:
     return app_key
 
 
-async def _lookup_thread_title(client: ChatGPTClient, thread_id: str) -> str:
-    """Best-effort lookup for a conversation title from sidebar threads."""
+async def _lookup_thread_title(client: Any, thread_id: str) -> str:
+    """Best-effort lookup for a conversation title from sidebar threads or active page."""
     if not thread_id:
         return ""
 
@@ -563,8 +568,23 @@ async def _lookup_thread_title(client: ChatGPTClient, thread_id: str) -> str:
         if cached:
             return cached[1]
 
+    get_title = getattr(client, "get_thread_title", None)
+    if callable(get_title):
+        try:
+            resolved = await get_title(thread_id)
+            if resolved:
+                async with _thread_title_lock:
+                    _thread_titles[thread_id] = (now, resolved)
+                return resolved
+        except Exception as e:
+            log.debug(f"Direct thread title lookup skipped: {e}")
+
+    list_fn = getattr(client, "list_threads", None)
+    if not callable(list_fn):
+        return ""
+
     try:
-        threads = await client.list_threads()
+        threads = await list_fn()
     except Exception as e:
         log.debug(f"Thread title lookup skipped: {e}")
         return ""
@@ -1234,7 +1254,10 @@ async def _latest_lossless_tool_payload(client: ProviderClient) -> str:
     if page is None:
         return ""
     try:
-        from src.chatgpt.detector import extract_latest_assistant_code_block_text
+        if client.__class__.__module__.startswith("src.gemini"):
+            from src.gemini.detector import extract_latest_assistant_code_block_text
+        else:
+            from src.chatgpt.detector import extract_latest_assistant_code_block_text
 
         text = await extract_latest_assistant_code_block_text(page)
         return text if '"tool_calls"' in text else ""
@@ -1834,6 +1857,49 @@ def _resolve_model_id(requested: str | None) -> str:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    if Config.PROVIDER == "gemini":
+        from src.gemini.model_registry import (
+            PUBLIC_GEMINI_BROWSER_MODEL_ID,
+            is_auto_model,
+            list_gemini_model_ids,
+            resolve_gemini_model,
+        )
+        if is_auto_model(requested):
+            return Config.default_model_id()
+        resolved = resolve_gemini_model(requested)
+        if resolved:
+            return resolved.public_id
+
+        supported = ", ".join(list_gemini_model_ids())
+        docs_url = "https://github.com/TheBadFella/CatGPT/blob/main/docs/MODEL_SWITCHING.md"
+
+        if not Config.GEMINI_MODEL_FALLBACK:
+            log.error(
+                "Requested model %r is not supported by provider Gemini (GEMINI_MODEL_FALLBACK=false). "
+                "Supported models: %s. See documentation: %s or query GET /v1/models.",
+                requested,
+                supported,
+                docs_url,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Model '{requested}' is not supported by provider Gemini. "
+                    f"Supported models: {supported}. "
+                    f"See {docs_url} or enable GEMINI_MODEL_FALLBACK=true to fall back to default model."
+                ),
+            )
+
+        log.warning(
+            "Requested model %r is not a recognized Gemini model; falling back to default %r. "
+            "Available models: %s. See documentation: %s or query GET /v1/models.",
+            requested,
+            Config.default_model_id(),
+            supported,
+            docs_url,
+        )
+        return Config.default_model_id()
+
     if not is_supported_chat_model(requested):
         supported = ", ".join(list_public_chat_models())
         raise HTTPException(
@@ -1884,7 +1950,10 @@ async def _execute_image_generation(
 
     client = _get_client()
     if not hasattr(client, "generate_image"):
-        raise HTTPException(status_code=422, detail="Image generation is only supported by the ChatGPT provider")
+        raise HTTPException(
+            status_code=422,
+            detail=f"Image generation is not supported by provider '{Config.provider_name()}'",
+        )
 
     _deletion_pending: list[str] = []
     app_key = (app_key_override or "").strip()
@@ -1945,8 +2014,9 @@ async def _execute_image_generation(
                     style=request.style or "vivid",
                 )
             except Exception as e:
-                log.error(f"ChatGPT error during image generation: {e}", exc_info=True)
-                raise HTTPException(status_code=500, detail=f"ChatGPT error: {str(e)}")
+                provider_display = Config.provider_name()
+                log.error(f"{provider_display} error during image generation: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=f"{provider_display} error: {str(e)}")
 
             elapsed_ms = int((time.time() - start_time) * 1000)
 
@@ -1966,14 +2036,15 @@ async def _execute_image_generation(
                     log.info("Image app-thread mapping updated: app=%s -> thread=%s", app_name, thread_for_app)
 
             if not result.images:
+                provider_display = Config.provider_name()
                 log.warning(
                     f"No images detected in response ({elapsed_ms}ms). "
-                    f"ChatGPT replied: {result.message[:200]}"
+                    f"{provider_display} replied: {result.message[:200]}"
                 )
                 raise HTTPException(
                     status_code=422,
                     detail=(
-                        "ChatGPT did not generate an image. "
+                        f"{provider_display} did not generate an image. "
                         f"Model response: {result.message[:500]}"
                     ),
                 )
@@ -2029,6 +2100,20 @@ async def _execute_image_generation(
 @openai_router.get("/v1/models", response_model=ModelListResponse)
 async def list_models() -> ModelListResponse:
     """List model IDs exposed by the active provider."""
+    if Config.PROVIDER == "gemini":
+        if isinstance(_client, GeminiClient):
+            try:
+                async with acquire_browser_page(CONTROL_SESSION) as lease:
+                    bound = _bind_client(_client, lease.page)
+                    await bound.discover_available_models()
+            except Exception as exc:
+                log.warning("Could not refresh models from the live Gemini picker: %s", exc)
+        return ModelListResponse(
+            data=[
+                ModelObject(id=model_id, owned_by=Config.provider_owner())
+                for model_id in Config.provider_model_ids()
+            ]
+        )
     if Config.PROVIDER == "minimax":
         return ModelListResponse(
             data=[
@@ -3107,7 +3192,7 @@ async def _execute_chat_completion(
             try:
                 reasoning_kwargs = (
                     {"reasoning_effort": _chat_reasoning_effort(request)}
-                    if isinstance(client, ChatGPTClient)
+                    if isinstance(client, (ChatGPTClient, GeminiClient))
                     else {}
                 )
                 send_kwargs = {

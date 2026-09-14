@@ -28,6 +28,7 @@ from src.chatgpt.client import ChatGPTClient
 from src.chatgpt.errors import PromptAttachmentFallbackError, PromptTooLongError
 from src.chatgpt.model_registry import is_supported_chat_model, list_public_chat_models
 from src.claude.client import ClaudeClient
+from src.gemini.client import GeminiClient
 from src.minimax.client import MiniMaxClient
 from src.config import Config
 from src.log import setup_logging
@@ -37,12 +38,12 @@ log = setup_logging("api_routes")
 router = APIRouter()
 
 # Global reference — set by the server on startup
-_client: ChatGPTClient | ClaudeClient | MiniMaxClient | None = None
+_client: ChatGPTClient | ClaudeClient | GeminiClient | MiniMaxClient | None = None
 _browser: BrowserManager | None = None
 
 
 def set_client(
-    client: ChatGPTClient | ClaudeClient | MiniMaxClient,
+    client: ChatGPTClient | ClaudeClient | GeminiClient | MiniMaxClient,
     browser: BrowserManager | None,
 ) -> None:
     """Called by server.py to inject the active provider client instance."""

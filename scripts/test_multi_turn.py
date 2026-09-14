@@ -29,6 +29,8 @@ from src.log import setup_logging
 # Provider-aware client import
 if Config.PROVIDER == "claude":
     from src.claude.client import ClaudeClient as ProviderClient
+elif Config.PROVIDER == "gemini":
+    from src.gemini.client import GeminiClient as ProviderClient
 else:
     from src.chatgpt.client import ChatGPTClient as ProviderClient
 

@@ -110,7 +110,7 @@ class BrowserTabPool:
                     url = page.url or ""
                 except Exception:
                     url = ""
-                if "/c/" in url or "/chat/" in url:
+                if "/c/" in url or "/chat/" in url or "/app/" in url:
                     self._urls[session_key] = url
                 await self._close_page(page)
                 self._pages.pop(session_key, None)
@@ -144,13 +144,17 @@ class BrowserTabPool:
             url = page.url or ""
         except Exception:
             return
-        if "/c/" in url or "/chat/" in url:
+        if "/c/" in url or "/chat/" in url or "/app/" in url:
             self._urls[session_key] = url
 
     async def _open_persistent_page(self, session_key: str) -> tuple[Any, bool]:
         page = self._pages.get(session_key)
         if self._page_is_open(page):
             self._touch(session_key)
+            try:
+                await page.bring_to_front()
+            except Exception:
+                pass
             first_turn = session_key not in self._initialized
             self._initialized.add(session_key)
             return page, first_turn
@@ -159,6 +163,10 @@ class BrowserTabPool:
             page = self._control_page()
             if not self._page_is_open(page):
                 raise RuntimeError("Control browser page is not available")
+            try:
+                await page.bring_to_front()
+            except Exception:
+                pass
             self._pages[session_key] = page
             self._touch(session_key)
             first_turn = session_key not in self._initialized
@@ -179,6 +187,10 @@ class BrowserTabPool:
                 known_url = None
         if not known_url:
             await page.goto(Config.provider_url(), wait_until="domcontentloaded", timeout=25000)
+        try:
+            await page.bring_to_front()
+        except Exception:
+            pass
         self._pages[session_key] = page
         self._initialized.add(session_key)
         self._touch(session_key)

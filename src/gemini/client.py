@@ -1,0 +1,1112 @@
+"""
+Google Gemini client -- core interaction logic for gemini.google.com.
+
+Sends messages, waits for responses, switches models, and manages conversations.
+Adheres to the same interface as ChatGPTClient and ClaudeClient for provider polymorphism.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import copy
+import os
+import re
+import tempfile
+import time
+from pathlib import Path
+from patchright.async_api import Page
+
+from src.browser.human import human_type, human_click, random_delay
+from src.chatgpt.errors import PromptAttachmentFallbackError, PromptTooLongError
+from src.chatgpt.models import ChatResponse, ImageInfo
+from src.config import Config
+from src.gemini.detector import (
+    count_assistant_messages,
+    extract_last_response_via_copy,
+    get_latest_assistant_turn_signature,
+    is_incomplete_response_text,
+    wait_for_response_complete,
+)
+from src.gemini.model_registry import (
+    GeminiModelOption,
+    list_gemini_model_ids,
+    normalize_token,
+    register_discovered_gemini_models,
+    resolve_gemini_model,
+)
+from src.gemini.selectors import GeminiSelectors
+from src.log import setup_logging
+
+log = setup_logging("gemini_client")
+
+
+class GeminiClient:
+    """
+    High-level client for interacting with the Google Gemini web interface.
+
+    Requires a Playwright/Patchright Page authenticated and loaded on gemini.google.com.
+    """
+
+    def __init__(self, page: Page) -> None:
+        self._page = page
+        self._model_discovery_checked_at: float = 0.0
+        self._attach_debug_listeners(page)
+
+    def _attach_debug_listeners(self, page: Page) -> None:
+        try:
+            page.on("console", lambda msg: log.debug("GEMINI BROWSER CONSOLE [%s]: %s", msg.type, msg.text[:200]))
+            page.on("requestfailed", lambda req: log.debug("GEMINI REQ FAILED: %s -> %s", req.url[:120], req.failure))
+        except Exception:
+            pass
+
+    @property
+    def page(self) -> Page:
+        return self._page
+
+    def bind_page(self, page: Page | None) -> GeminiClient:
+        """Return a client bound to a specific tab without mutating this instance."""
+        if page is None or page is self._page:
+            return self
+        bound = copy.copy(self)
+        bound._page = page
+        bound._attach_debug_listeners(page)
+        return bound
+
+    # -- Core: Send & Receive ------------------------------------
+
+    async def send_message(
+        self,
+        text: str,
+        image_paths: list[str] | None = None,
+        file_paths: list[str] | None = None,
+        read_aloud: bool = False,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
+    ) -> ChatResponse:
+        """Send a message and always remove any temporary long-prompt attachment."""
+        temporary_paths: list[str] = []
+        try:
+            return await self._send_message_impl(
+                text,
+                image_paths=image_paths,
+                file_paths=file_paths,
+                read_aloud=read_aloud,
+                model=model,
+                reasoning_effort=reasoning_effort,
+                temporary_paths=temporary_paths,
+            )
+        finally:
+            for temporary_path in temporary_paths:
+                try:
+                    Path(temporary_path).unlink(missing_ok=True)
+                except OSError as exc:
+                    log.warning("Could not remove temporary Gemini prompt file %s: %s", temporary_path, exc)
+
+    async def _send_message_impl(
+        self,
+        text: str,
+        image_paths: list[str] | None = None,
+        file_paths: list[str] | None = None,
+        read_aloud: bool = False,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
+        temporary_paths: list[str] | None = None,
+    ) -> ChatResponse:
+        """
+        Send a message to Gemini and wait for the complete response.
+
+        Args:
+            text: Prompt text.
+            image_paths: Optional local image file paths.
+            file_paths: Optional local file paths.
+            read_aloud: Triggers native Gemini Listen (TTS) when True.
+            model: Optional model name to switch to before sending.
+            reasoning_effort: Optional reasoning effort (high/extended/low/none).
+
+        Returns ChatResponse with the reply and metadata.
+        """
+        all_attachments = (image_paths or []) + (file_paths or [])
+        log.info(f"Sending message to Gemini ({len(text)} chars, {len(all_attachments)} attachments): {text[:80]}...")
+        start_time = time.time()
+        if self._page.is_closed():
+            context = getattr(self._page, "context", None)
+            if context and getattr(context, "pages", None):
+                for p in context.pages:
+                    if not p.is_closed():
+                        log.warning("GeminiClient page was closed; recovered active page from context")
+                        self._page = p
+                        self._attach_debug_listeners(p)
+                        break
+            if self._page.is_closed():
+                raise RuntimeError("Gemini browser page is closed")
+
+        page_err = await self._detect_page_error()
+        if page_err:
+            log.warning(f"Proactive Gemini page error detected: {page_err}")
+            raise RuntimeError(f"Gemini page error: {page_err}")
+
+        # Switch model and/or reasoning effort if requested
+        if model or reasoning_effort:
+            await self.switch_model(model or "gemini-browser", reasoning_effort=reasoning_effort)
+
+        # 0. Count existing turns to detect new answer
+        pre_count = await count_assistant_messages(self._page)
+        pre_turn_signature = await get_latest_assistant_turn_signature(self._page)
+        log.debug(f"Gemini turns before send: count={pre_count}, sig={pre_turn_signature}")
+
+        await random_delay(200, 500)
+
+        # 1. Find and focus the chat input
+        input_selector = await self._find_selector(GeminiSelectors.CHAT_INPUT, "chat input")
+        if not input_selector:
+            raise RuntimeError("Could not find Gemini chat input element")
+
+        # Click to focus the Quill editor
+        try:
+            await self._page.click(input_selector)
+        except Exception:
+            pass
+
+        # Check for long prompt fallback
+        submitted_text = text
+        fallback = Config.GEMINI_LONG_PROMPT_FALLBACK.strip().lower()
+        exceeds_threshold = (
+            Config.GEMINI_LONG_PROMPT_THRESHOLD > 0
+            and len(text) >= Config.GEMINI_LONG_PROMPT_THRESHOLD
+        )
+        if exceeds_threshold and fallback == "error":
+            raise PromptTooLongError(
+                f"Prompt is {len(text)} characters and exceeds the configured Gemini threshold "
+                f"of {Config.GEMINI_LONG_PROMPT_THRESHOLD}"
+            )
+        if exceeds_threshold and fallback == "attachment":
+            temporary_prompt_path = self._create_prompt_attachment(text)
+            if temporary_paths is not None:
+                temporary_paths.append(temporary_prompt_path)
+            attachment_name = Path(temporary_prompt_path).name
+            submitted_text = (
+                f"Read the attached file `{attachment_name}` as the complete user request. "
+                "Follow its instructions exactly and use all of its content before answering."
+            )
+            log.info(
+                "Prompt is too long for the Gemini composer (%d chars); using attachment fallback (%s)",
+                len(text),
+                attachment_name,
+            )
+            all_attachments = [*all_attachments, temporary_prompt_path]
+
+        # 2. Type message
+        await human_type(self._page, input_selector, submitted_text)
+
+        # 3. Handle attachments if any
+        if all_attachments:
+            await self._upload_files(all_attachments)
+            ready = await self._wait_for_attachments_ready(timeout_s=120.0)
+            if not ready:
+                raise RuntimeError(
+                    "Gemini attachment upload did not finish; send was not clicked"
+                )
+
+        await random_delay(200, 400)
+
+        # 4. Click Send
+        if all_attachments:
+            sent = await self._click_send(timeout_s=30.0)
+            if not sent:
+                raise RuntimeError("Failed to send message: attachment upload did not complete or send button was not ready")
+        else:
+            sent = await self._click_send(timeout_s=25.0)
+            if not sent:
+                log.info("Send button not found or not clickable; pressing Enter")
+                await self._page.keyboard.press("Enter")
+
+        # 5. Wait for response
+        log.info("Waiting for Gemini response...")
+        expected_count = pre_count + 1
+        completed = await wait_for_response_complete(
+            self._page,
+            expected_msg_count=expected_count,
+            previous_turn_signature=pre_turn_signature,
+            timeout_ms=Config.RESPONSE_TIMEOUT,
+        )
+
+        if not completed:
+            log.warning("Response may not be complete (timeout)")
+
+        await asyncio.sleep(0.5)
+
+        # 6. Extract response text
+        response_text = await extract_last_response_via_copy(
+            self._page,
+            previous_turn_signature=pre_turn_signature,
+        )
+
+        # Retry if transient thinking marker captured
+        if is_incomplete_response_text(response_text):
+            log.warning("Extracted text looks transient; waiting for final answer")
+            for attempt in range(1, 3):
+                await asyncio.sleep(3)
+                await wait_for_response_complete(
+                    self._page,
+                    timeout_ms=60000,
+                    previous_turn_signature=pre_turn_signature,
+                )
+                retry_text = await extract_last_response_via_copy(
+                    self._page,
+                    previous_turn_signature=pre_turn_signature,
+                )
+                if retry_text and not is_incomplete_response_text(retry_text):
+                    response_text = retry_text
+                    log.info(f"Recovered response text on retry {attempt}")
+                    break
+
+        elapsed_ms = int((time.time() - start_time) * 1000)
+        thread_id = self._extract_thread_id()
+
+        images = await self._extract_response_images()
+        has_images = len(images) > 0
+
+        if read_aloud:
+            await self._trigger_tts()
+
+        log.info(
+            f"Response received ({elapsed_ms}ms, {len(response_text)} chars"
+            f"{f', {len(images)} images' if has_images else ''}): {response_text[:80]}..."
+        )
+
+        return ChatResponse(
+            message=response_text,
+            thread_id=thread_id,
+            response_time_ms=elapsed_ms,
+            images=images,
+            has_images=has_images,
+            audio=None,
+            has_audio=False,
+        )
+
+    # -- Model Switching -----------------------------------------
+
+    async def get_current_model(self) -> str:
+        """Return the label of the currently active model from the UI."""
+        for selector in GeminiSelectors.CURRENT_MODEL_LABEL:
+            try:
+                el = await self._page.query_selector(selector)
+                if el:
+                    text = (await el.inner_text()).strip()
+                    if text:
+                        return text
+            except Exception:
+                continue
+        return ""
+
+    async def switch_model(self, model_request: str, reasoning_effort: str | None = None) -> bool:
+        """
+        Switch the model via Gemini's mode switcher (<bard-mode-switcher>).
+        Returns True if already on the model or successfully switched.
+        """
+        resolved: GeminiModelOption | None = resolve_gemini_model(model_request, reasoning_effort=reasoning_effort)
+        if not resolved:
+            log.debug(
+                f"Model request '{model_request}' (reasoning={reasoning_effort}) "
+                f"resolves to current browser model; no switch needed"
+            )
+            return True
+
+        current = await self.get_current_model()
+        # Check if already active
+        if self._model_label_matches(resolved, current):
+            log.debug(f"Already on target model '{resolved.ui_label}' (UI shows '{current}')")
+            return True
+
+        log.info(f"Switching model from '{current}' to '{resolved.ui_label}'...")
+
+        # 1. Click mode switcher button to open menu
+        switcher_btn = await self._find_selector(GeminiSelectors.MODEL_SWITCHER_BUTTON, "mode switcher button")
+        if not switcher_btn:
+            log.warning("Could not find mode switcher button; skipping switch")
+            return False
+
+        await self._page.click(switcher_btn)
+        await asyncio.sleep(0.5)
+
+        # 2. Wait for menu panel to open
+        for panel_sel in GeminiSelectors.MODEL_MENU_PANEL:
+            try:
+                await self._page.wait_for_selector(panel_sel, timeout=3000, state="visible")
+                break
+            except Exception:
+                continue
+
+        # 3. Find target menu item
+        clicked = False
+        try:
+            items = await self._page.query_selector_all(", ".join(GeminiSelectors.MODEL_MENU_ITEMS))
+            ranked: list[tuple[int, object, str]] = []
+            for item in items:
+                item_text = (await item.inner_text()).strip()
+                score = self._model_match_score(resolved, item_text)
+                if score is not None:
+                    ranked.append((score, item, item_text))
+            if ranked:
+                _, item, item_text = min(ranked, key=lambda candidate: candidate[0])
+                log.info(f"Clicking menu option: {item_text.splitlines()[0]}")
+                await item.click()
+                clicked = True
+        except Exception as e:
+            log.warning(f"Error clicking model item: {e}")
+
+        if not clicked:
+            log.warning(f"Could not find menu item for '{resolved.ui_label}'; closing menu")
+            # Click outside to dismiss menu
+            await self._page.keyboard.press("Escape")
+            return False
+
+        await asyncio.sleep(0.6)
+        new_model = await self.get_current_model()
+        if not self._model_label_matches(resolved, new_model):
+            log.warning(
+                "Gemini model selection did not stick: requested '%s', UI shows '%s'",
+                resolved.ui_label,
+                new_model,
+            )
+            return False
+        log.info(f"Switched model. Active model is now: '{new_model}'")
+        return True
+
+    @staticmethod
+    def _model_match_score(model: GeminiModelOption, visible_text: str) -> int | None:
+        """Rank a menu label without allowing one Gemini version to match another."""
+        first_line = visible_text.splitlines()[0].strip()
+        norm_item = normalize_token(first_line)
+        if not norm_item:
+            return None
+        target_version = re.search(r"\d+(?:\.\d+)+", model.ui_label)
+        item_version = re.search(r"\d+(?:\.\d+)+", first_line)
+        if target_version and item_version and target_version.group() != item_version.group():
+            return None
+        target_tokens = [normalize_token(label) for label in model.ui_labels]
+        if norm_item == target_tokens[0]:
+            return 0
+        if norm_item in target_tokens[1:]:
+            return 1
+        if target_tokens[0] and (target_tokens[0] in norm_item or norm_item in target_tokens[0]):
+            return 2
+        if any(token and (token in norm_item or norm_item in token) for token in target_tokens[1:]):
+            return 3
+        return None
+
+    @classmethod
+    def _model_label_matches(cls, model: GeminiModelOption, visible_text: str) -> bool:
+        return cls._model_match_score(model, visible_text) is not None
+
+    # -- Navigation & Thread Management --------------------------
+
+    async def new_chat(self) -> None:
+        """Start a new Gemini conversation."""
+        log.info("Starting new Gemini chat...")
+        base = (Config.GEMINI_URL or "https://gemini.google.com").rstrip("/")
+        target_url = base if base.endswith("/app") else f"{base}/app"
+
+        # If already on /app with empty conversation, avoid full reload
+        try:
+            current_url = self._page.url
+            if "/app" in current_url and not re.search(r"/app/[a-zA-Z0-9_-]{5,}", current_url):
+                assistant_turns = await count_assistant_messages(self._page)
+                if assistant_turns == 0:
+                    input_selector = await self._find_selector(GeminiSelectors.CHAT_INPUT, "chat input")
+                    if input_selector:
+                        try:
+                            await self._page.evaluate(
+                                "(sel) => { const el = document.querySelector(sel); if (el) el.innerHTML = '<p><br></p>'; }",
+                                input_selector,
+                            )
+                        except Exception:
+                            pass
+                        log.info("Already on clean new chat page")
+                        return
+        except Exception:
+            pass
+
+        try:
+            btn = await self._find_selector(GeminiSelectors.NEW_CHAT_BUTTON, "new chat button")
+            if btn:
+                await self._page.click(btn)
+                await asyncio.sleep(1.0)
+            else:
+                await self._page.goto(target_url, wait_until="domcontentloaded")
+        except Exception:
+            await self._page.goto(target_url, wait_until="domcontentloaded")
+
+        # Wait for chat input or detect error/login
+        chat_ready = False
+        for selector in GeminiSelectors.CHAT_INPUT:
+            try:
+                el = await self._page.wait_for_selector(selector, timeout=10000, state="visible")
+                if el:
+                    chat_ready = True
+                    break
+            except Exception:
+                continue
+
+        if not chat_ready:
+            for selector in GeminiSelectors.ERROR_INDICATORS:
+                try:
+                    err_el = await self._page.query_selector(selector)
+                    if err_el and await err_el.is_visible():
+                        raise RuntimeError(
+                            "Gemini returned 'Something went wrong' (p=no_access). "
+                            "This Google account is not eligible or restricted for Gemini web app access."
+                        )
+                except Exception as e:
+                    if "Gemini returned" in str(e):
+                        raise
+            for selector in GeminiSelectors.LOGIN_INDICATORS:
+                try:
+                    login_el = await self._page.query_selector(selector)
+                    if login_el and await login_el.is_visible():
+                        raise RuntimeError("Gemini is not logged in — sign in required.")
+                except Exception as e:
+                    if "Gemini is not logged in" in str(e):
+                        raise
+            raise RuntimeError("Could not find Gemini chat input element after navigation")
+
+        await random_delay(200, 400)
+        log.info("New chat ready")
+
+    async def navigate_to_thread(self, thread_id: str) -> None:
+        """Navigate to an existing Gemini conversation thread."""
+        base = (Config.GEMINI_URL or "https://gemini.google.com").rstrip("/")
+        url = f"{base}/app/{thread_id}"
+        log.info(f"Navigating to Gemini thread: {thread_id}")
+        await self._page.goto(url, wait_until="domcontentloaded")
+        await random_delay(600, 1200)
+
+    async def get_current_thread_url(self) -> str:
+        return self._page.url
+
+    async def list_threads(self) -> list[dict]:
+        """Scrape recent chat history items from the sidebar."""
+        threads = []
+        try:
+            initial_check = await self._page.query_selector(GeminiSelectors.SIDEBAR_THREAD_LINKS[0])
+            if not initial_check or not await initial_check.is_visible():
+                await self._ensure_sidebar_open()
+        except Exception:
+            pass
+
+        for selector in GeminiSelectors.SIDEBAR_THREAD_LINKS:
+            try:
+                elements = await self._page.query_selector_all(selector)
+                for el in elements:
+                    href = await el.get_attribute("href")
+                    title = ""
+                    try:
+                        title = (await el.get_attribute("aria-label") or "").strip()
+                    except Exception:
+                        pass
+                    if not title:
+                        try:
+                            title = (await el.inner_text()).strip()
+                        except Exception:
+                            pass
+                    if href:
+                        match = re.search(r"/app/([a-zA-Z0-9_-]+)", href)
+                        t_id = match.group(1) if match else href
+                        first_line_title = title.split("\n")[0].strip() if title else ""
+                        threads.append({"id": t_id, "title": first_line_title or title, "url": href})
+                if threads:
+                    break
+            except Exception:
+                continue
+        return threads
+
+    async def get_thread_title(self, thread_id: str = "") -> str:
+        """Best-effort resolution of conversation title."""
+        current_id = self._extract_thread_id()
+        if not thread_id or thread_id == current_id:
+            try:
+                raw_title = await self._page.title()
+                cleaned = re.sub(r"\s*-\s*(Google\s+)?Gemini$", "", (raw_title or "").strip(), flags=re.I).strip()
+                if cleaned and cleaned.lower() not in {"gemini", "google gemini"}:
+                    return cleaned
+            except Exception:
+                pass
+
+            for sel in GeminiSelectors.CONVERSATION_TITLE_ELEMENTS:
+                try:
+                    el = await self._page.query_selector(sel)
+                    if el and await el.is_visible():
+                        text = (await el.inner_text()).strip()
+                        if text:
+                            return text
+                except Exception:
+                    continue
+
+        target_id = thread_id or current_id
+        if target_id:
+            try:
+                for t in await self.list_threads():
+                    if t.get("id") == target_id and t.get("title"):
+                        return t["title"]
+            except Exception:
+                pass
+        return ""
+
+    async def _ensure_sidebar_open(self) -> bool:
+        """Ensure the sidebar drawer is open so thread items and menus are accessible."""
+        for sel in GeminiSelectors.SIDEBAR_THREAD_LINKS:
+            try:
+                link = await self._page.query_selector(sel)
+                if link and await link.is_visible():
+                    return True
+            except Exception:
+                continue
+        for sel in GeminiSelectors.SIDEBAR_TOGGLE_BUTTON:
+            try:
+                btn = await self._page.query_selector(sel)
+                if btn and await btn.is_visible():
+                    await btn.click()
+                    await asyncio.sleep(0.5)
+                    return True
+            except Exception:
+                continue
+        return False
+
+    async def delete_thread(self, thread_id: str) -> bool:
+        """
+        Delete a Gemini conversation thread via the web UI.
+
+        Navigates to the thread, opens the sidebar context menu, clicks Delete,
+        and confirms in the modal dialog. Returns True on success, False otherwise.
+        """
+        log.info(f"Attempting to delete Gemini thread: {thread_id}")
+        try:
+            await self.navigate_to_thread(thread_id)
+            await asyncio.sleep(1.5)
+
+            await self._ensure_sidebar_open()
+
+            thread_href = f"/app/{thread_id}"
+            thread_el = None
+            for sel in GeminiSelectors.SIDEBAR_THREAD_ITEM:
+                try:
+                    elements = await self._page.query_selector_all(sel)
+                    for el in elements:
+                        href = (await el.get_attribute("href") or "").rstrip("/")
+                        if not href:
+                            link = await el.query_selector("a[href*='/app/']")
+                            if link:
+                                href = (await link.get_attribute("href") or "").rstrip("/")
+                        if thread_href in href or href.endswith(f"/app/{thread_id}"):
+                            thread_el = el
+                            break
+                    if thread_el:
+                        break
+                except Exception:
+                    continue
+
+            if not thread_el:
+                log.warning(f"Could not find sidebar item for Gemini thread {thread_id}")
+                return False
+
+            try:
+                await thread_el.hover()
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                log.debug(f"Hover on thread item failed (non-fatal): {e}")
+
+            menu_clicked = False
+            for sel in GeminiSelectors.SIDEBAR_THREAD_MENU_BUTTON:
+                try:
+                    parent = await thread_el.evaluate_handle(
+                        "el => el.closest('gem-nav-list-item') || el.closest('div') || el"
+                    )
+                    btn = await parent.query_selector(sel)
+                    if btn:
+                        await btn.click(timeout=3000)
+                        menu_clicked = True
+                        break
+                except Exception:
+                    continue
+
+            if not menu_clicked:
+                log.warning(f"Could not open context menu for Gemini thread {thread_id}")
+                return False
+
+            await asyncio.sleep(0.5)
+
+            delete_clicked = False
+            for sel in GeminiSelectors.THREAD_DELETE_OPTION:
+                try:
+                    btn = await self._page.wait_for_selector(sel, timeout=3000, state="visible")
+                    if btn:
+                        await btn.click(timeout=3000)
+                        delete_clicked = True
+                        break
+                except Exception:
+                    continue
+
+            if not delete_clicked:
+                log.warning(f"Could not click Delete option for Gemini thread {thread_id}")
+                return False
+
+            await asyncio.sleep(0.5)
+
+            confirm_clicked = False
+            for sel in GeminiSelectors.THREAD_CONFIRM_DELETE_BUTTON:
+                try:
+                    btn = await self._page.wait_for_selector(sel, timeout=3000, state="visible")
+                    if btn:
+                        await btn.click(timeout=3000)
+                        confirm_clicked = True
+                        break
+                except Exception:
+                    continue
+
+            if not confirm_clicked:
+                log.warning(f"Could not confirm deletion for Gemini thread {thread_id}")
+                return False
+
+            await asyncio.sleep(1.5)
+            log.info(f"Successfully deleted Gemini thread: {thread_id}")
+            return True
+        except Exception as e:
+            log.warning(f"Failed to delete Gemini thread {thread_id}: {e}", exc_info=True)
+            return False
+
+    # -- Internal Helpers ----------------------------------------
+
+    async def _find_selector(self, selectors: list[str], description: str = "") -> str | None:
+        for selector in selectors:
+            try:
+                el = await self._page.wait_for_selector(selector, timeout=1500, state="visible")
+                if el:
+                    return selector
+            except Exception:
+                continue
+        return None
+
+    async def _click_send(self, timeout_s: float = 20.0) -> bool:
+        """Wait up to timeout_s for the send button to become visible and enabled, then click it."""
+        start = time.monotonic()
+        while time.monotonic() - start < timeout_s:
+            for selector in GeminiSelectors.SEND_BUTTON:
+                try:
+                    el = await self._page.query_selector(selector)
+                    if el and await el.is_visible():
+                        aria_label = (await el.get_attribute("aria-label") or "").lower()
+                        title = (await el.get_attribute("title") or "").lower()
+                        if "stop" in aria_label or "stop" in title:
+                            log.debug(f"Skipping send click on stop button ({selector}): aria-label='{aria_label}'")
+                            continue
+                        if (await el.get_attribute("aria-busy") or "").lower() == "true":
+                            continue
+                        try:
+                            progress = await el.query_selector(
+                                "mat-progress-spinner, [role='progressbar'], .mdc-circular-progress"
+                            )
+                        except Exception:
+                            progress = None
+                        if progress:
+                            try:
+                                if await progress.is_visible():
+                                    log.debug("Skipping send click; button still shows a progress spinner")
+                                    continue
+                            except Exception:
+                                pass
+                        is_disabled = (
+                            await el.get_attribute("disabled") is not None
+                            or await el.get_attribute("aria-disabled") == "true"
+                        )
+                        if not is_disabled:
+                            await human_click(self._page, selector)
+                            log.info(f"Clicked send button: {selector}")
+                            return True
+                except Exception:
+                    continue
+            await asyncio.sleep(0.5)
+        return False
+
+    async def _wait_for_attachments_ready(self, timeout_s: float = 120.0) -> bool:
+        """
+        Wait for attached files/images to finish uploading.
+        Specifically, wait until the upload spinning wheel on the image preview disappears
+        and the send button becomes active and enabled.
+        """
+        log.info("Waiting for Gemini attachment upload to complete (spinning wheel to finish)...")
+        start = time.monotonic()
+
+        # 1. First ensure attachment preview chip is in the DOM
+        badge_selector = ", ".join(GeminiSelectors.ATTACHMENT_BADGE)
+        try:
+            await self._page.wait_for_selector(badge_selector, timeout=10000, state="attached")
+            log.info("Attachment preview detected in composer")
+        except Exception:
+            log.warning("Attachment preview element was not detected within 10s")
+            return False
+
+        # 2. Give the UI a moment to show the in-flight upload spinner
+        await asyncio.sleep(1.0)
+
+        # 3. Poll until no upload spinner is visible
+        spinner_selector = ", ".join(GeminiSelectors.ATTACHMENT_SPINNER)
+
+        while time.monotonic() - start < timeout_s:
+            is_spinning = False
+            try:
+                spinners = await self._page.query_selector_all(spinner_selector)
+                for sp in spinners:
+                    if await sp.is_visible():
+                        is_spinning = True
+                        break
+            except Exception:
+                pass
+
+            if is_spinning:
+                log.info("Gemini attachment upload in progress (spinning wheel active)...")
+                await asyncio.sleep(1.0)
+                continue
+
+            # Check if send button is visible and enabled
+            send_btn_ready = False
+            for sel in GeminiSelectors.SEND_BUTTON:
+                try:
+                    btn = await self._page.query_selector(sel)
+                    if btn and await btn.is_visible():
+                        aria_label = (await btn.get_attribute("aria-label") or "").lower()
+                        if "stop" in aria_label:
+                            continue
+                        is_disabled = (
+                            await btn.get_attribute("disabled") is not None
+                            or await btn.get_attribute("aria-disabled") == "true"
+                        )
+                        if not is_disabled:
+                            send_btn_ready = True
+                            break
+                except Exception:
+                    continue
+
+            if send_btn_ready:
+                # Settle confirmation: ensure no spinner reappears
+                await asyncio.sleep(1.0)
+                recheck_spinning = False
+                try:
+                    spinners = await self._page.query_selector_all(spinner_selector)
+                    for sp in spinners:
+                        if await sp.is_visible():
+                            recheck_spinning = True
+                            break
+                except Exception:
+                    pass
+
+                if not recheck_spinning:
+                    log.info("Gemini attachment upload finished: spinning wheel completed and send button ready")
+                    return True
+
+            await asyncio.sleep(0.8)
+
+        log.warning("Timed out waiting for Gemini attachment upload spinner to finish")
+        return False
+
+    async def _upload_files(self, file_paths: list[str]) -> None:
+        """Upload file attachments via the file input element."""
+        missing_paths = [p for p in file_paths if not os.path.exists(p)]
+        if missing_paths:
+            raise PromptAttachmentFallbackError(
+                f"Gemini attachment file does not exist: {missing_paths[0]}"
+            )
+        valid_paths = [str(Path(p).resolve()) for p in file_paths]
+        if not valid_paths:
+            raise PromptAttachmentFallbackError("No files were provided for Gemini upload")
+
+        log.info(f"Uploading {len(valid_paths)} attachment(s) to Gemini...")
+
+        # 1. Try finding an existing file input element first
+        file_input = None
+        for selector in GeminiSelectors.FILE_UPLOAD_INPUT:
+            try:
+                elements = await self._page.query_selector_all(selector)
+                if elements:
+                    file_input = elements[0]
+                    log.debug(f"Found file input: {selector}")
+                    break
+            except Exception:
+                continue
+
+        # 2. If not found, click the attach button to trigger menu and input injection
+        if not file_input:
+            for btn_sel in GeminiSelectors.ATTACH_BUTTON:
+                try:
+                    btn = await self._page.query_selector(btn_sel)
+                    if btn and await btn.is_visible():
+                        await btn.click()
+                        await asyncio.sleep(0.6)
+                        break
+                except Exception as e:
+                    log.debug(f"Could not click attach button {btn_sel}: {e}")
+
+            # Re-check for file input now that menu was triggered
+            for selector in GeminiSelectors.FILE_UPLOAD_INPUT:
+                try:
+                    elements = await self._page.query_selector_all(selector)
+                    if elements:
+                        file_input = elements[0]
+                        log.debug(f"Found file input after opening menu: {selector}")
+                        break
+                except Exception:
+                    continue
+
+        upload_dispatched = False
+        if file_input:
+            try:
+                await file_input.set_input_files(valid_paths)
+                upload_dispatched = True
+                log.info(f"Set {len(valid_paths)} file(s) on file input")
+            except Exception as e:
+                raise PromptAttachmentFallbackError(f"Could not set Gemini attachment input: {e}") from e
+        else:
+            # Fallback: click Upload files menu item with expect_file_chooser
+            for uploader_sel in GeminiSelectors.UPLOAD_FILES_MENU_BUTTON:
+                try:
+                    uploader_btn = await self._page.query_selector(uploader_sel)
+                    if uploader_btn and await uploader_btn.is_visible():
+                        async with self._page.expect_file_chooser(timeout=5000) as fc_info:
+                            await uploader_btn.click()
+                        file_chooser = await fc_info.value
+                        await file_chooser.set_files(valid_paths)
+                        upload_dispatched = True
+                        log.info(f"Set {len(valid_paths)} file(s) via file chooser")
+                        break
+                except Exception as e:
+                    log.debug(f"File chooser upload failed with {uploader_sel}: {e}")
+
+        if not upload_dispatched:
+            raise PromptAttachmentFallbackError("Could not find a usable Gemini file upload control")
+
+        # Close any lingering menu by pressing Escape
+        try:
+            await self._page.keyboard.press("Escape")
+        except Exception:
+            pass
+
+        log.info("File upload dispatched to input element")
+
+    def _extract_thread_id(self) -> str:
+        """Extract conversation UUID / id from current URL."""
+        match = re.search(r"/app/([a-zA-Z0-9_-]+)", self._page.url)
+        return match.group(1) if match else ""
+
+    @staticmethod
+    def _create_prompt_attachment(text: str) -> str:
+        """Persist a prompt as a UTF-8 temporary file for Gemini upload."""
+        fd, filename = tempfile.mkstemp(
+            prefix="catgpt-gemini-prompt-",
+            suffix=".txt",
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+                handle.write(text)
+        except Exception:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            Path(filename).unlink(missing_ok=True)
+            raise
+        return filename
+
+    async def discover_available_models(self, force: bool = False) -> list[str]:
+        """
+        Scrape the mode switcher in the Gemini web UI to discover and register
+        available models for the logged-in Google account.
+        """
+        now = time.time()
+        ttl = Config.GEMINI_MODEL_DISCOVERY_TTL_SECONDS
+        if not force and (now - self._model_discovery_checked_at) < ttl and self._model_discovery_checked_at > 0:
+            return list(list_gemini_model_ids())
+
+        switcher_btn = await self._find_selector(GeminiSelectors.MODEL_SWITCHER_BUTTON, "mode switcher")
+        if not switcher_btn:
+            return list(list_gemini_model_ids())
+
+        try:
+            await self._page.click(switcher_btn)
+            await asyncio.sleep(0.5)
+
+            menu_items = await self._page.query_selector_all(", ".join(GeminiSelectors.MODEL_MENU_ITEMS))
+            labels: list[str] = []
+            for item in menu_items:
+                try:
+                    txt = (await item.inner_text()).strip()
+                    if txt:
+                        labels.append(txt)
+                except Exception:
+                    continue
+
+            await self._page.keyboard.press("Escape")
+            await asyncio.sleep(0.3)
+
+            if labels:
+                registered = register_discovered_gemini_models(labels)
+                self._model_discovery_checked_at = now
+                log.info(f"Discovered Gemini models from UI: {labels} (registered: {registered})")
+        except Exception as e:
+            log.debug(f"Error during Gemini model discovery: {e}")
+            try:
+                await self._page.keyboard.press("Escape")
+            except Exception:
+                pass
+
+        return list(list_gemini_model_ids())
+
+    async def generate_image(
+        self,
+        prompt: str,
+        n: int = 1,
+        size: str = "1024x1024",
+        quality: str = "standard",
+        style: str = "vivid",
+    ) -> ChatResponse:
+        """Generate images through the Gemini web interface and download results."""
+        count = max(1, min(int(n or 1), 4))
+        prompt_parts = [
+            f"Generate {count} image{'s' if count != 1 else ''}: {prompt.strip()}",
+        ]
+        if size:
+            prompt_parts.append(f"Aspect ratio: {size}.")
+        if style:
+            prompt_parts.append(f"Style: {style}.")
+        prompt_parts.append("Return the generated image result directly.")
+
+        return await self.send_message("\n\n".join(prompt_parts))
+
+    async def _detect_page_error(self) -> str | None:
+        """Proactively detect error banners or quota limit dialogs."""
+        for selector in GeminiSelectors.ERROR_INDICATORS:
+            try:
+                el = await self._page.query_selector(selector)
+                if el and await el.is_visible():
+                    txt = (await el.inner_text()).strip()
+                    if txt:
+                        return txt
+            except Exception:
+                continue
+        return None
+
+    async def _trigger_tts(self) -> bool:
+        """Trigger native Gemini TTS from either the response or its menu."""
+        root = await self._latest_assistant_root()
+        if not root:
+            return False
+
+        # Some Gemini layouts expose Listen directly on the response.
+        for selector in GeminiSelectors.TTS_BUTTON:
+            try:
+                btn = await root.query_selector(selector)
+                if btn and await btn.is_visible():
+                    await btn.click()
+                    log.info("Triggered Gemini TTS Read Aloud")
+                    return True
+            except Exception:
+                continue
+
+        # Current layouts place Listen in a document-level overlay opened from
+        # the latest response. Keep the opener scoped to that response so an
+        # older turn (or an unrelated page menu) cannot be activated.
+        for selector in GeminiSelectors.RESPONSE_MORE_BUTTON:
+            try:
+                more_btn = await root.query_selector(selector)
+                if not more_btn or not await more_btn.is_visible():
+                    continue
+                await more_btn.click()
+                await asyncio.sleep(0.2)
+                for menu_selector in GeminiSelectors.TTS_MENU_ITEM:
+                    menu_item = await self._page.query_selector(menu_selector)
+                    if menu_item and await menu_item.is_visible():
+                        await menu_item.click()
+                        log.info("Triggered Gemini TTS Read Aloud from response menu")
+                        return True
+                await self._page.keyboard.press("Escape")
+                return False
+            except Exception:
+                continue
+        return False
+
+    async def _extract_response_images(self) -> list[ImageInfo]:
+        """Extract generated images from the latest assistant response."""
+        images: list[ImageInfo] = []
+        seen_urls: set[str] = set()
+        root = await self._latest_assistant_root()
+        if not root:
+            return images
+        for selector in GeminiSelectors.GENERATED_IMAGE:
+            try:
+                elements = await root.query_selector_all(selector)
+                for el in elements:
+                    try:
+                        if not await el.is_visible():
+                            continue
+                        src = await el.get_attribute("src") or ""
+                        alt = await el.get_attribute("alt") or ""
+                        if src and src not in seen_urls and not src.startswith("data:image/svg"):
+                            seen_urls.add(src)
+                            local_path = ""
+                            try:
+                                local_path = await self._download_image(src, filename_hint=alt)
+                            except Exception as e:
+                                log.debug(f"Image download skipped: {e}")
+                            images.append(ImageInfo(
+                                url=src,
+                                local_path=local_path,
+                                alt=alt,
+                                prompt_title="Gemini Generated Image",
+                            ))
+                    except Exception:
+                        continue
+                if images:
+                    break
+            except Exception:
+                continue
+        return images
+
+    async def _latest_assistant_root(self):
+        """Return the newest assistant turn, preferring Gemini's canonical element."""
+        for selector in GeminiSelectors.ASSISTANT_MESSAGE:
+            try:
+                elements = await self._page.query_selector_all(selector)
+                if elements:
+                    return elements[-1]
+            except Exception:
+                continue
+        return None
+
+    async def _download_image(self, url: str, filename_hint: str = "") -> str:
+        """Download an image using the authenticated browser session."""
+        Config.ensure_dirs()
+        safe_name = re.sub(r"[^\w\s-]", "", filename_hint)[:60].strip() or "gemini_image"
+        safe_name = re.sub(r"\s+", "_", safe_name)
+        ts = int(time.time())
+        local_path = Config.IMAGES_DIR / f"{safe_name}_{ts}.png"
+
+        try:
+            image_data = await self._page.evaluate(
+                """async (url) => {
+                    const resp = await fetch(url);
+                    const blob = await resp.blob();
+                    return new Promise((resolve) => {
+                        const reader = new FileReader();
+                        reader.onloadend = () => resolve(reader.result);
+                        reader.readAsDataURL(blob);
+                    });
+                }""",
+                url,
+            )
+            if image_data and "," in image_data:
+                import base64
+                b64 = image_data.split(",", 1)[1]
+                local_path.write_bytes(base64.b64decode(b64))
+                log.info(f"Downloaded Gemini image to {local_path}")
+                return str(local_path)
+        except Exception as e:
+            log.warning(f"Failed to download image {url[:80]}: {e}")
+        return ""

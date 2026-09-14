@@ -16,10 +16,17 @@ COMPOSE = ROOT / "docker-compose.yml"
 # name: (default outside Compose, purpose)
 SECTIONS: tuple[tuple[str, tuple[tuple[str, str, str], ...]], ...] = (
     ("Provider and browser", (
-        ("PROVIDER", "chatgpt", "Active provider: `chatgpt`, `claude`, or `minimax`."),
+        ("PROVIDER", "chatgpt", "Active provider: `chatgpt`, `claude`, `gemini`, or `minimax`."),
         ("CHATGPT_URL", "https://chatgpt.com", "ChatGPT browser target."),
         ("CHATGPT_PROJECT_URL", "empty", "Optional ChatGPT project URL; new and resumed ChatGPT threads are confined to that project."),
         ("CLAUDE_URL", "https://claude.ai", "Claude browser target."),
+        ("GEMINI_URL", "https://gemini.google.com", "Google Gemini browser target."),
+        ("GEMINI_DEFAULT_MODEL", "gemini-browser", "Model selected when a Gemini request does not specify one."),
+        ("GEMINI_MODEL_FALLBACK", "true", "Fall back to `GEMINI_DEFAULT_MODEL` when an unknown model is requested; when false, reject with HTTP 400."),
+        ("GEMINI_MODEL_ALIASES", "built-in alias map", "Comma-separated API-model to UI-label mappings for Gemini."),
+        ("GEMINI_MODEL_DISCOVERY_TTL_SECONDS", "3600", "How long model choices discovered from the Gemini UI remain cached."),
+        ("GEMINI_LONG_PROMPT_FALLBACK", "attachment", "Long-prompt behavior for Gemini: `attachment` or `error`."),
+        ("GEMINI_LONG_PROMPT_THRESHOLD", "0", "Character threshold for proactive Gemini attachment fallback; `0` disables."),
         ("MINIMAX_REGION", "global_en", "MiniMax region: `global_en` or `cn_zh`."),
         ("MINIMAX_BASE_URL", "derived from region", "Optional MiniMax API base URL override."),
         ("MINIMAX_API_KEY", "empty", "MiniMax API key; required when MiniMax is selected."),
@@ -244,12 +251,13 @@ def main() -> int:
     args = parser.parse_args()
     content = render()
     if args.check:
-        if not OUTPUT.exists() or OUTPUT.read_text(encoding="utf-8") != content:
+        current = OUTPUT.read_text(encoding="utf-8").replace("\r\n", "\n") if OUTPUT.exists() else ""
+        if current != content:
             print(f"{OUTPUT.relative_to(ROOT)} is stale; run {Path(__file__).name}")
             return 1
         print(f"{OUTPUT.relative_to(ROOT)} is up to date")
         return 0
-    OUTPUT.write_text(content, encoding="utf-8")
+    OUTPUT.write_text(content, encoding="utf-8", newline="\n")
     print(f"Wrote {OUTPUT.relative_to(ROOT)}")
     return 0
 
