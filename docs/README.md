@@ -87,3 +87,4 @@ Welcome to the CatGPT Gateway documentation. This directory contains detailed ar
   - Checking environment variable documentation accuracy via `scripts/generate_env_reference.py --check`.
   - Running manual browser diagnostic scripts (`scripts/diagnose_chatgpt.py`, `scripts/diagnose_gemini.py`, `scripts/test_multi_turn.py`).
   - Guidelines for adding new regression tests.
+
