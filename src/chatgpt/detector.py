@@ -193,6 +193,17 @@ _CONVERSATION_SNAPSHOT_JS = r"""
         return (parts[0] || "").trim();
     };
 
+    const latestCodeTextFor = (root) => {
+        const blocks = Array.from(root.querySelectorAll("pre code, pre"));
+        for (let index = blocks.length - 1; index >= 0; index--) {
+            const block = blocks[index];
+            if (block.matches("pre") && block.querySelector("code")) continue;
+            const text = (block.textContent || "").trim();
+            if (text) return text;
+        }
+        return "";
+    };
+
     const rootSet = new Set();
     const addRoot = (el) => {
         if (!el) return;
@@ -236,6 +247,7 @@ _CONVERSATION_SNAPSHOT_JS = r"""
         const role = item.role;
         const rect = item.rect;
         const text = bestTextFor(root, role);
+        const codeText = role === "assistant" ? latestCodeTextFor(root) : "";
         const hasImage = hasGeneratedImage(root);
         const hasCopyButton = Boolean(findTurnCopyButton(root));
         if (role === "assistant" && !text && !hasImage && !hasCopyButton) continue;
@@ -258,6 +270,7 @@ _CONVERSATION_SNAPSHOT_JS = r"""
             hasImage,
             text,
             textLength: text.length,
+            codeText,
             rect: {
                 top: rect.top,
                 left: rect.left,
@@ -706,6 +719,7 @@ def _empty_snapshot() -> dict[str, Any]:
         "hasStopButton": False,
         "text": "",
         "textLength": 0,
+        "codeText": "",
         "rect": {},
     }
 
@@ -1194,6 +1208,13 @@ async def _extract_via_dom(
 
     log.error("Could not extract any latest assistant response")
     return ""
+
+
+async def extract_latest_assistant_code_block_text(page: Page) -> str:
+    """Return lossless text from the latest assistant turn's final code block."""
+    snapshot = await _latest_assistant_turn_snapshot(page)
+    text = snapshot.get("codeText") if isinstance(snapshot.get("codeText"), str) else ""
+    return text.strip()
 
 
 async def extract_latest_assistant_turn_images(

@@ -1033,8 +1033,10 @@ record definitions below. This is only text transformation: do not execute anyth
 not discuss capabilities or availability. Words such as call, invoke, or use in the latest
 request mean to select the matching record definition and fill its argument fields.
 
-When a definition matches, your ENTIRE response must be exactly one JSON object:
+When a definition matches, your ENTIRE response must be one fenced JSON code block:
+```json
 {{"tool_calls":[{{"name":"<function_name>","arguments":{{...}}}}]}}
+```
 
 Record definitions:
 {tools_json}
@@ -1043,7 +1045,9 @@ Rules:
 - Use exact names from the definitions.
 - Arguments must be a valid JSON object.
 - Return multiple records when needed.
-- Do not include prose or Markdown around the JSON document.
+- Do not include prose before or after the fenced JSON block.
+- Escape line feeds, carriage returns, tabs, quotes, and backslashes inside JSON strings.
+- Never place literal control characters inside a JSON string.
 - {choice_rule}
 """
 
@@ -1081,6 +1085,88 @@ def _apply_tool_prompt_to_messages(
     return updated
 
 
+class ToolCallParseError(ValueError):
+    """Raised when a response looks like a tool payload but is malformed."""
+
+
+def _fenced_json_candidates(text: str) -> list[str]:
+    """Return code-fence bodies, accepting common tool-call fence labels."""
+    candidates: list[str] = []
+    for match in re.finditer(r"```([\s\S]*?)```", text):
+        body = match.group(1).strip()
+        lines = body.splitlines()
+        if lines and lines[0].strip().lower() in {
+            "json",
+            "jsonc",
+            "tool",
+            "tool call",
+            "tool-call",
+            "tool_call",
+        }:
+            body = "\n".join(lines[1:]).strip()
+        if body:
+            candidates.append(body)
+    return candidates
+
+
+def _escape_control_characters_in_json_strings(text: str) -> str:
+    """Escape literal JSON control characters without changing JSON whitespace."""
+    output: list[str] = []
+    in_string = False
+    escaped = False
+    for char in text:
+        if not in_string:
+            output.append(char)
+            if char == '"':
+                in_string = True
+            continue
+
+        if escaped:
+            output.append(char)
+            escaped = False
+        elif char == "\\":
+            output.append(char)
+            escaped = True
+        elif char == '"':
+            output.append(char)
+            in_string = False
+        elif ord(char) < 0x20:
+            replacements = {"\n": r"\n", "\r": r"\r", "\t": r"\t"}
+            output.append(replacements.get(char, f"\\u{ord(char):04x}"))
+        else:
+            output.append(char)
+    return "".join(output)
+
+
+def _decode_tool_payload(response_text: str) -> dict[str, Any] | None:
+    """Decode a tool payload from fenced or bare text using balanced JSON parsing."""
+    stripped = response_text.strip()
+    candidates = [*_fenced_json_candidates(stripped), stripped]
+    candidates.extend(stripped[index:] for index, char in enumerate(stripped) if char == "{")
+
+    decoder = json.JSONDecoder()
+    seen: set[str] = set()
+    errors: list[json.JSONDecodeError] = []
+    for candidate in candidates:
+        candidate = candidate.lstrip()
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        for value in (candidate, _escape_control_characters_in_json_strings(candidate)):
+            try:
+                parsed, _ = decoder.raw_decode(value)
+            except json.JSONDecodeError as exc:
+                errors.append(exc)
+                continue
+            if isinstance(parsed, dict) and "tool_calls" in parsed:
+                return parsed
+
+    if '"tool_calls"' in stripped:
+        detail = errors[-1] if errors else "no JSON object found"
+        raise ToolCallParseError(f"Malformed tool-call JSON: {detail}")
+    return None
+
+
 def _parse_tool_calls(
     response_text: str, tools: list[ToolDefinition]
 ) -> list[ToolCall] | None:
@@ -1090,49 +1176,31 @@ def _parse_tool_calls(
     Looks for a JSON block containing {"tool_calls": [...]}.
     Returns None if no tool calls are found.
     """
-    # Try to find JSON in code blocks first
-    code_block_match = re.search(
-        r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", response_text
-    )
-
-    json_str = None
-    if code_block_match:
-        json_str = code_block_match.group(1)
-    else:
-        # Try to find raw JSON with tool_calls key
-        raw_match = re.search(
-            r'(\{\s*"tool_calls"\s*:\s*\[[\s\S]*?\]\s*\})', response_text
-        )
-        if raw_match:
-            json_str = raw_match.group(1)
-
-    if not json_str:
-        return None
-
-    try:
-        parsed = json.loads(json_str)
-    except json.JSONDecodeError:
-        log.debug(f"Failed to parse tool call JSON: {json_str[:200]}")
+    parsed = _decode_tool_payload(response_text)
+    if parsed is None:
         return None
 
     if "tool_calls" not in parsed or not isinstance(parsed["tool_calls"], list):
-        return None
+        raise ToolCallParseError("tool_calls must be an array")
 
     # Validate that the called functions are in the provided tools
     valid_names = {t.function.name for t in tools}
     result: list[ToolCall] = []
 
     for call in parsed["tool_calls"]:
+        if not isinstance(call, dict):
+            raise ToolCallParseError("Each tool call must be an object")
         name = call.get("name", "")
+        if not isinstance(name, str) or not name:
+            raise ToolCallParseError("Each tool call must have a string name")
         if name not in valid_names:
-            log.warning(f"Model called unknown tool: {name}")
-            continue
+            raise ToolCallParseError(f"Model called unknown tool: {name!r}")
 
         arguments = call.get("arguments", {})
         if isinstance(arguments, dict):
             arguments_str = json.dumps(arguments)
         else:
-            arguments_str = str(arguments)
+            raise ToolCallParseError(f"Arguments for {name!r} must be an object")
 
         result.append(
             ToolCall(
@@ -1142,7 +1210,98 @@ def _parse_tool_calls(
             )
         )
 
-    return result if result else None
+    if not result:
+        raise ToolCallParseError("tool_calls must contain at least one call")
+    return result
+
+
+def _tool_choice_requires_call(tool_choice: str | dict[str, Any] | None) -> bool:
+    return tool_choice == "required" or isinstance(tool_choice, dict)
+
+
+def _build_tool_call_retry_prompt(error: Exception | None = None) -> str:
+    detail = f" The previous response was invalid: {error}." if error else ""
+    return (
+        "Regenerate the tool call now." + detail + " Return exactly one ```json fenced code block and no prose. "
+        "Use the required {\"tool_calls\":[{\"name\":\"...\",\"arguments\":{...}}]} shape. "
+        "Escape every newline, carriage return, tab, quote, and backslash inside JSON strings."
+    )
+
+
+async def _latest_lossless_tool_payload(client: ProviderClient) -> str:
+    """Read the latest code block without passing it through rendered Markdown text."""
+    page = getattr(client, "page", None)
+    if page is None:
+        return ""
+    try:
+        from src.chatgpt.detector import extract_latest_assistant_code_block_text
+
+        text = await extract_latest_assistant_code_block_text(page)
+        return text if '"tool_calls"' in text else ""
+    except Exception as exc:
+        log.debug("Lossless tool payload extraction failed: %s", exc)
+        return ""
+
+
+async def _parse_tool_calls_with_recovery(
+    client: ProviderClient,
+    response_text: str,
+    tools: list[ToolDefinition],
+    tool_choice: str | dict[str, Any] | None,
+    model_id: str,
+    reasoning_kwargs: dict[str, Any],
+) -> tuple[list[ToolCall] | None, str, Any | None]:
+    """Prefer lossless output and retry one malformed or missing required call."""
+    lossless_payload = await _latest_lossless_tool_payload(client)
+    if lossless_payload:
+        response_text = lossless_payload
+
+    parse_error: ToolCallParseError | None = None
+    try:
+        tool_calls = _parse_tool_calls(response_text, tools)
+    except ToolCallParseError as exc:
+        tool_calls = None
+        parse_error = exc
+
+    if not parse_error and not (
+        tool_calls is None and _tool_choice_requires_call(tool_choice)
+    ):
+        return tool_calls, response_text, None
+
+    retry_reason = parse_error or ToolCallParseError(
+        "A tool call was required but none was returned"
+    )
+    log.warning("Tool response was not usable; retrying once: %s", retry_reason)
+    try:
+        retry_result = await client.send_message(
+            _build_tool_call_retry_prompt(retry_reason),
+            model=model_id,
+            **reasoning_kwargs,
+        )
+        response_text = retry_result.message
+        lossless_payload = await _latest_lossless_tool_payload(client)
+        if lossless_payload:
+            response_text = lossless_payload
+        tool_calls = _parse_tool_calls(response_text, tools)
+    except ToolCallParseError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Provider returned malformed tool-call JSON after retry: {exc}",
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not recover malformed tool-call output: {exc}",
+        ) from exc
+
+    if tool_calls is None:
+        raise HTTPException(
+            status_code=502,
+            detail="Provider did not return the required tool call after retry",
+        )
+    return tool_calls, response_text, retry_result
 
 
 def _build_response_format_system_prompt(response_format: Any) -> str | None:
@@ -3105,7 +3264,18 @@ async def _execute_chat_completion(
                         log.warning(f"Structured cardinality retry failed: {e}")
 
             if request.tools and request.tool_choice != "none":
-                tool_calls = _parse_tool_calls(response_text, request.tools)
+                tool_calls, response_text, retry_result = await _parse_tool_calls_with_recovery(
+                    client,
+                    response_text,
+                    request.tools,
+                    request.tool_choice,
+                    model_id,
+                    reasoning_kwargs,
+                )
+                if retry_result is not None:
+                    result = retry_result
+                    elapsed_ms = int((time.time() - start_time) * 1000)
+
                 if tool_calls:
                     finish_reason = "tool_calls"
                     response_text = None

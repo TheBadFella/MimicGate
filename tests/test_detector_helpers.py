@@ -39,6 +39,7 @@ from patchright.async_api import async_playwright
 from src.chatgpt.detector import (
     _CLICK_LATEST_COPY_BUTTON_JS,
     _conversation_snapshot,
+    extract_latest_assistant_code_block_text,
     is_incomplete_response_text,
     normalize_assistant_text,
 )
@@ -192,6 +193,29 @@ class DetectorCopyButtonTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(snapshot.get("copyButtonCount"), 0)
         self.assertFalse(snapshot["latestAssistant"]["hasCopyButton"])
+        await context.close()
+
+    async def test_latest_code_block_text_preserves_markdown_metacharacters(self) -> None:
+        context = await self.browser.new_context()
+        page = await context.new_page()
+        await page.set_content(
+            """
+            <!doctype html>
+            <main>
+              <article data-message-author-role="assistant" data-message-id="a1">
+                <div class="markdown">
+                  <p>{"tool_calls":[{"arguments":{"command":"find pycache"}}]}</p>
+                  <pre><code>{"tool_calls":[{"name":"bash","arguments":{"command":"find __pycache__ node_modules"}}]}</code></pre>
+                </div>
+              </article>
+            </main>
+            """
+        )
+
+        text = await extract_latest_assistant_code_block_text(page)
+
+        self.assertIn("__pycache__", text)
+        self.assertIn("node_modules", text)
         await context.close()
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 import sys
 import types
 import unittest
@@ -61,6 +62,8 @@ from src.api.openai_routes import (
     _infer_expected_item_count,
     _latest_turn_messages,
     _looks_like_instruction_prefix,
+    _parse_tool_calls,
+    _parse_tool_calls_with_recovery,
     _merge_header_rows_in_array,
     _structured_cardinality_mismatch,
     _should_use_line_cardinality_fallback,
@@ -151,6 +154,124 @@ class OpenAIRoutesHelpersTests(unittest.TestCase):
         self.assertIn("MUST contain at least one", required)
         self.assertIn("JSON name value MUST be 'add_numbers'", specific)
         self.assertIn("only text transformation", specific)
+        self.assertIn("```json", specific)
+        self.assertIn("Never place literal control characters", specific)
+
+    def test_tool_parser_preserves_shell_metacharacters_and_escaped_newlines(self) -> None:
+        tools = [ToolDefinition(function=FunctionDefinition(name="bash"))]
+        response = r'''```json
+{"tool_calls":[{"name":"bash","arguments":{"command":"find . -name '__pycache__' -o -name 'node_modules'\nprintf 'a\\b'"}}]}
+```'''
+
+        calls = _parse_tool_calls(response, tools)
+
+        self.assertIsNotNone(calls)
+        arguments = json.loads(calls[0].function.arguments)
+        self.assertEqual(
+            arguments["command"],
+            "find . -name '__pycache__' -o -name 'node_modules'\nprintf 'a\\b'",
+        )
+
+    def test_tool_parser_handles_nested_arrays_and_json_like_string_content(self) -> None:
+        tools = [ToolDefinition(function=FunctionDefinition(name="run"))]
+        response = (
+            'prefix {"tool_calls":[{"name":"run","arguments":'
+            '{"items":[1,{"value":"]}"}],"text":"literal ]} content"}}]} suffix'
+        )
+
+        calls = _parse_tool_calls(response, tools)
+
+        arguments = json.loads(calls[0].function.arguments)
+        self.assertEqual(arguments["items"][1]["value"], "]}")
+        self.assertEqual(arguments["text"], "literal ]} content")
+
+    def test_tool_parser_repairs_literal_newline_inside_json_string(self) -> None:
+        tools = [ToolDefinition(function=FunctionDefinition(name="bash"))]
+        response = '{"tool_calls":[{"name":"bash","arguments":{"command":"pwd\necho ok"}}]}'
+
+        calls = _parse_tool_calls(response, tools)
+
+        arguments = json.loads(calls[0].function.arguments)
+        self.assertEqual(arguments["command"], "pwd\necho ok")
+
+    def test_tool_parser_rejects_malformed_tool_payload(self) -> None:
+        tools = [ToolDefinition(function=FunctionDefinition(name="bash"))]
+        with self.assertRaisesRegex(ValueError, "Malformed tool-call JSON"):
+            _parse_tool_calls('{"tool_calls":[{"name":"bash"}', tools)
+
+    def test_tool_recovery_retries_malformed_payload_once(self) -> None:
+        tools = [ToolDefinition(function=FunctionDefinition(name="bash"))]
+
+        class FakeClient:
+            def __init__(self) -> None:
+                self.prompts: list[str] = []
+
+            async def send_message(self, prompt: str, **_kwargs):
+                self.prompts.append(prompt)
+                return types.SimpleNamespace(
+                    message='```json\n{"tool_calls":[{"name":"bash","arguments":{"command":"find __pycache__"}}]}\n```'
+                )
+
+        client = FakeClient()
+        calls, _, retry_result = asyncio.run(
+            _parse_tool_calls_with_recovery(
+                client,
+                '{"tool_calls":[{"name":"bash"}',
+                tools,
+                "auto",
+                "catgpt-browser",
+                {},
+            )
+        )
+
+        self.assertEqual(len(client.prompts), 1)
+        self.assertIn("fenced code block", client.prompts[0])
+        self.assertIsNotNone(retry_result)
+        arguments = json.loads(calls[0].function.arguments)
+        self.assertEqual(arguments["command"], "find __pycache__")
+
+    def test_tool_recovery_does_not_retry_normal_auto_mode_prose(self) -> None:
+        tools = [ToolDefinition(function=FunctionDefinition(name="bash"))]
+
+        class FakeClient:
+            async def send_message(self, *_args, **_kwargs):
+                raise AssertionError("normal prose must not trigger a retry")
+
+        calls, text, retry_result = asyncio.run(
+            _parse_tool_calls_with_recovery(
+                FakeClient(),
+                "There is no tool call to make.",
+                tools,
+                "auto",
+                "catgpt-browser",
+                {},
+            )
+        )
+
+        self.assertIsNone(calls)
+        self.assertEqual(text, "There is no tool call to make.")
+        self.assertIsNone(retry_result)
+
+    def test_tool_recovery_returns_502_when_required_retry_is_still_prose(self) -> None:
+        tools = [ToolDefinition(function=FunctionDefinition(name="bash"))]
+
+        class FakeClient:
+            async def send_message(self, *_args, **_kwargs):
+                return types.SimpleNamespace(message="Still no tool call.")
+
+        with self.assertRaises(HTTPException) as context:
+            asyncio.run(
+                _parse_tool_calls_with_recovery(
+                    FakeClient(),
+                    "No tool call.",
+                    tools,
+                    "required",
+                    "catgpt-browser",
+                    {},
+                )
+            )
+
+        self.assertEqual(context.exception.status_code, 502)
 
     def test_tool_prompt_prefixes_latest_text_user_turn_without_mutation(self) -> None:
         messages = [
