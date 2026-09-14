@@ -1871,7 +1871,7 @@ def _resolve_model_id(requested: str | None) -> str:
             return resolved.public_id
 
         supported = ", ".join(list_gemini_model_ids())
-        docs_url = "https://github.com/TheBadFella/CatGPT/blob/main/docs/MODEL_SWITCHING.md"
+        docs_url = "https://github.com/TheBadFella/CatGPT/blob/main/docs/MODEL_AND_REASONING_SELECTION.md"
 
         if not Config.GEMINI_MODEL_FALLBACK:
             log.error(

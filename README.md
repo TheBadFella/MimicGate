@@ -19,11 +19,12 @@
   <a href="#quick-start">Quick Start</a> ·
   <a href="#why-this-fork">Features</a> ·
   <a href="#fork-vs-upstream">Fork vs Upstream</a> ·
-  <a href="docs/API.md">API</a> ·
-  <a href="docs/ENVIRONMENT.md">Environment</a> ·
-  <a href="docs/SETUP.md">Setup</a> ·
-  <a href="docs/GEMINI_SETUP.md">Gemini</a> ·
-  <a href="docs/ARCHITECTURE.md">Architecture</a>
+  <a href="docs/README.md">Documentation</a> ·
+  <a href="docs/API_REFERENCE.md">API</a> ·
+  <a href="docs/ENVIRONMENT_VARIABLES.md">Environment</a> ·
+  <a href="docs/INSTALLATION_AND_SETUP.md">Setup</a> ·
+  <a href="docs/GEMINI_PROVIDER_GUIDE.md">Gemini</a> ·
+  <a href="docs/SYSTEM_ARCHITECTURE.md">Architecture</a>
 </p>
 
 ---
@@ -111,7 +112,7 @@ CATGPT_USER_ID=1000
 CATGPT_GROUP_ID=1000
 ```
 
-See the [generated environment reference](docs/ENVIRONMENT.md) for every setting and its default.
+See the [generated environment reference](docs/ENVIRONMENT_VARIABLES.md) for every setting and its default.
 
 ### 2. Start the container
 
@@ -168,20 +169,22 @@ In Cline, choose **OpenAI Compatible**, set Base URL to `http://localhost:8650/c
 | `CHATGPT_PROJECT_URL` | Empty | Confine ChatGPT threads to one project |
 | `CHATGPT_LONG_PROMPT_FALLBACK` | `attachment` | Upload oversized prompts or use `error` for HTTP 413 |
 
-See the [generated environment reference](docs/ENVIRONMENT.md), [docker-compose.yml](docker-compose.yml), and the [Setup Guide](docs/SETUP.md) for advanced options. Add runtime-only Docker overrides under `services.catgpt.environment`.
+See the [generated environment reference](docs/ENVIRONMENT_VARIABLES.md), [docker-compose.yml](docker-compose.yml), and the [Installation & Setup Guide](docs/INSTALLATION_AND_SETUP.md) for advanced options. Add runtime-only Docker overrides under `services.catgpt.environment`.
 
 ## Documentation
 
+Explore the full [CatGPT Documentation Index](docs/README.md) or browse directly:
+
 | Guide | What it covers |
 |---|---|
-| [API Reference](docs/API.md) | Request formats, tools, vision, files, images, audio, and native routes |
-| [Environment Reference](docs/ENVIRONMENT.md) | Every runtime and Docker Compose variable, default, and purpose |
-| [Setup Guide](docs/SETUP.md) | Docker, local installation, login, persistence, and troubleshooting |
-| [Gemini Setup Guide](docs/GEMINI_SETUP.md) | Dedicated Gemini configuration, login, model list, and TTS/image options |
-| [Model Switching](docs/MODEL_SWITCHING.md) | ChatGPT and Gemini model aliases, versions, and effort settings |
-| [Architecture](docs/ARCHITECTURE.md) | Browser lifecycle, routing, extraction, and response detection |
-| [Chrome Runbook](docs/CHROME_PLAYWRIGHT_RUNBOOK.md) | Browser automation diagnostics and recovery |
-| [Testing Guide](docs/TESTING.md) | Reproducible unit, environment, container, and browser smoke checks |
+| [Installation & Setup](docs/INSTALLATION_AND_SETUP.md) | Docker, local installation, login, persistence, and troubleshooting |
+| [Gemini Provider Guide](docs/GEMINI_PROVIDER_GUIDE.md) | Dedicated Gemini configuration, login, model list, and TTS/image options |
+| [API Reference](docs/API_REFERENCE.md) | Request formats, tools, vision, files, images, audio, and native routes |
+| [Environment Variables](docs/ENVIRONMENT_VARIABLES.md) | Every runtime and Docker Compose variable, default, and purpose |
+| [Model & Reasoning Selection](docs/MODEL_AND_REASONING_SELECTION.md) | ChatGPT and Gemini model aliases, versions, and effort settings |
+| [System Architecture](docs/SYSTEM_ARCHITECTURE.md) | Browser lifecycle, routing, extraction, and response detection |
+| [Browser Automation Runbook](docs/BROWSER_AUTOMATION_RUNBOOK.md) | Browser automation diagnostics and recovery |
+| [Testing & Verification](docs/TESTING_AND_VERIFICATION.md) | Reproducible unit, environment, container, and browser smoke checks |
 
 ## Operational Notes
 

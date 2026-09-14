@@ -154,3 +154,13 @@ GEMINI_MODEL_FALLBACK=false
 
 When `GEMINI_MODEL_FALLBACK=true`, CatGPT logs a warning and routes the request to `GEMINI_DEFAULT_MODEL`.
 When `GEMINI_MODEL_FALLBACK=false`, CatGPT rejects the request with HTTP 400 and logs an error listing available models.
+
+---
+
+## Related Documentation
+
+- [Documentation Index](README.md): Overview of all CatGPT Gateway guides and manuals.
+- [Gemini Provider Guide](GEMINI_PROVIDER_GUIDE.md): Dedicated Gemini setup, models, and features.
+- [API Reference](API_REFERENCE.md): Complete endpoint specifications and parameters.
+- [Environment Variables](ENVIRONMENT_VARIABLES.md): Full reference of model configuration variables.
+- [Installation & Setup Guide](INSTALLATION_AND_SETUP.md): Getting started with CatGPT.

@@ -81,7 +81,7 @@ class GeminiProviderTests(unittest.IsolatedAsyncioTestCase):
                     openai_routes._resolve_model_id("unknown-nonexistent-model")
                 self.assertEqual(cm.exception.status_code, 400)
                 self.assertIn("not supported by provider Gemini", cm.exception.detail)
-                self.assertIn("MODEL_SWITCHING.md", cm.exception.detail)
+                self.assertIn("MODEL_AND_REASONING_SELECTION.md", cm.exception.detail)
                 # Auto and valid models should still succeed even with fallback disabled
                 self.assertEqual(openai_routes._resolve_model_id("gemini-3.8-flash"), "gemini-3.8-flash")
                 self.assertEqual(openai_routes._resolve_model_id("gemini-browser"), "gemini-browser")

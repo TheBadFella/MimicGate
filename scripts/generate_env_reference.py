@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-OUTPUT = ROOT / "docs" / "ENVIRONMENT.md"
+OUTPUT = ROOT / "docs" / "ENVIRONMENT_VARIABLES.md"
 COMPOSE = ROOT / "docker-compose.yml"
 
 # name: (default outside Compose, purpose)

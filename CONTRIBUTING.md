@@ -20,7 +20,7 @@ Thanks for your interest in contributing! This project is open source and we wel
    patchright install chromium
    ```
    Create a root `.env` only if you need to override a default; see the
-   [generated environment reference](docs/ENVIRONMENT.md).
+   [generated environment reference](docs/ENVIRONMENT_VARIABLES.md).
 4. **Create a branch** for your changes:
    ```bash
    git checkout -b feature/your-feature-name

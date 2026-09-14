@@ -201,7 +201,7 @@ The following environment variables control Gemini provider behavior:
 | `GEMINI_LONG_PROMPT_FALLBACK` | `attachment` | Fallback method when prompts exceed UI limits (`attachment` or `error`). |
 | `GEMINI_LONG_PROMPT_THRESHOLD` | `0` | Character threshold for attachment fallback (`0` = auto-detected). |
 
-See [docs/ENVIRONMENT.md](ENVIRONMENT.md) for the complete list of gateway environment variables.
+See [docs/ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md) for the complete list of gateway environment variables.
 
 ---
 
@@ -273,9 +273,10 @@ CatGPT maintains conversation continuity and tab affinity for Cline requests aut
 
 ## Related Documentation
 
-- [General Setup Guide](SETUP.md): Docker, local installation, and operational guidance.
-- [Environment Variables](ENVIRONMENT.md): Full reference of all configuration options.
-- [Model Switching Guide](MODEL_SWITCHING.md): Model selector details across providers.
-- [API Reference](API.md): Endpoint specifications, tools, and multimodal input formats.
-- [Architecture Guide](ARCHITECTURE.md): Browser lifecycle and multi-tab routing design.
+- [Documentation Index](README.md): Overview of all CatGPT Gateway guides and manuals.
+- [Installation & Setup Guide](INSTALLATION_AND_SETUP.md): Docker, local installation, and operational guidance.
+- [Environment Variables](ENVIRONMENT_VARIABLES.md): Full reference of all configuration options.
+- [Model & Reasoning Selection Guide](MODEL_AND_REASONING_SELECTION.md): Model selector details across providers.
+- [API Reference](API_REFERENCE.md): Endpoint specifications, tools, and multimodal input formats.
+- [System Architecture Guide](SYSTEM_ARCHITECTURE.md): Browser lifecycle and multi-tab routing design.
 

@@ -10,8 +10,8 @@ This guide covers every way to run CatGPT Gateway: Docker, local development, an
 - [Docker Setup (recommended)](#docker-setup-recommended)
 - [Local Setup (no Docker)](#local-setup-no-docker)
 - [Nix Flake Setup](#nix-flake-setup)
-- [Environment Variables](ENVIRONMENT.md)
-- [Gemini Setup Guide](GEMINI_SETUP.md)
+- [Environment Variables](ENVIRONMENT_VARIABLES.md)
+- [Gemini Provider Guide](GEMINI_PROVIDER_GUIDE.md)
 - [First Login](#first-login)
 - [Switching Providers](#switching-providers)
 - [Authentication](#authentication)
@@ -39,7 +39,7 @@ git clone https://github.com/TheBadFella/CatGPT.git
 cd CatGPT
 
 # 2. Create .env and set your own API and browser-GUI passwords
-#    See docs/ENVIRONMENT.md for every supported value.
+#    See docs/ENVIRONMENT_VARIABLES.md for every supported value.
 
 # 3. Edit .env to pick your provider
 #    Set PROVIDER=chatgpt, PROVIDER=claude, or PROVIDER=gemini
@@ -109,7 +109,7 @@ pip install -r requirements.txt
 patchright install chromium
 
 # 5. Optionally create .env to override defaults
-# See docs/ENVIRONMENT.md; for example, set PROVIDER=claude
+# See docs/ENVIRONMENT_VARIABLES.md; for example, set PROVIDER=claude
 
 # 6. First login (one-time)
 python scripts/first_login.py
@@ -131,7 +131,7 @@ This repo ships a `flake.nix` that packages Patchright and matching Chromium rev
 
 ```bash
 # 1. Optionally create .env to override defaults
-# See docs/ENVIRONMENT.md
+# See docs/ENVIRONMENT_VARIABLES.md
 
 # 2. First login (one-time, interactive)
 nix run .#login
@@ -157,7 +157,7 @@ CatGPT Gateway uses your existing browser session. You sign in **once** and the 
 > Patchright/Chromium runs in a controlled automation context where Google's third-party OAuth ("Continue with Google") blocks logins to external services like ChatGPT or Claude.
 > For ChatGPT and Claude, use email + password, Microsoft, Apple, or magic link / OTP instead.
 >
-> When using the **Google Gemini provider** (`PROVIDER=gemini`), you sign directly into your Google Account on `gemini.google.com`, which works normally. See the [Gemini Setup Guide](GEMINI_SETUP.md) for details.
+> When using the **Google Gemini provider** (`PROVIDER=gemini`), you sign directly into your Google Account on `gemini.google.com`, which works normally. See the [Gemini Provider Guide](GEMINI_PROVIDER_GUIDE.md) for details.
 
 ### Docker
 
@@ -211,7 +211,7 @@ BROWSER_DATA_DIR=./browser_data
 
 Each provider has its own browser data directory so your login sessions do not conflict. After switching, restart the server.
 
-For Docker, also update the `PROVIDER` in `docker-compose.yml` under `environment:` and rebuild. See also the dedicated [Gemini Setup Guide](GEMINI_SETUP.md).
+For Docker, also update the `PROVIDER` in `docker-compose.yml` under `environment:` and rebuild. See also the dedicated [Gemini Provider Guide](GEMINI_PROVIDER_GUIDE.md).
 
 ---
 
