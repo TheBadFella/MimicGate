@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-import asyncio
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import HTTPException
 
 from src.api import openai_routes
+from src.chatgpt.errors import PromptAttachmentFallbackError, PromptTooLongError
 from src.chatgpt.models import ChatResponse, ImageInfo
 from src.config import Config
 from src.gemini.client import GeminiClient
@@ -25,6 +27,7 @@ class GeminiProviderTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("gemini-3.8-flash", model_ids)
             self.assertIn("gemini-3.1-pro", model_ids)
             self.assertEqual(Config.default_model_id(), Config.GEMINI_DEFAULT_MODEL)
+            self.assertTrue(Config.supports_image_generation())
 
     def test_resolve_model_id_for_gemini(self) -> None:
         with patch.object(Config, "PROVIDER", "gemini"), \
@@ -159,6 +162,7 @@ class GeminiProviderTests(unittest.IsolatedAsyncioTestCase):
         send_el = AsyncMock()
         send_el.is_visible = AsyncMock(return_value=True)
         send_el.get_attribute = AsyncMock(side_effect=lambda attr: "Send message" if attr == "aria-label" else None)
+        send_el.query_selector = AsyncMock(return_value=None)
         mock_page.query_selector = AsyncMock(return_value=send_el)
 
         client = GeminiClient(mock_page)
@@ -207,6 +211,21 @@ class GeminiProviderTests(unittest.IsolatedAsyncioTestCase):
         ])
         title = await client.get_thread_title("target_id")
         self.assertEqual(title, "Data Engineering Discussion")
+
+    async def test_gemini_client_list_threads_does_not_duplicate_entries(self) -> None:
+        mock_page = MagicMock()
+        thread_link = AsyncMock()
+        thread_link.is_visible = AsyncMock(return_value=True)
+        thread_link.get_attribute = AsyncMock(
+            side_effect=lambda attr: "/app/thread123" if attr == "href" else "A useful chat\nMore details"
+        )
+        thread_link.inner_text = AsyncMock(return_value="Fallback title")
+        mock_page.query_selector = AsyncMock(return_value=thread_link)
+        mock_page.query_selector_all = AsyncMock(return_value=[thread_link])
+
+        threads = await GeminiClient(mock_page).list_threads()
+
+        self.assertEqual(threads, [{"id": "thread123", "title": "A useful chat", "url": "/app/thread123"}])
 
     async def test_gemini_client_delete_thread_success(self) -> None:
         mock_page = MagicMock()
@@ -298,6 +317,47 @@ class GeminiProviderTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(switched)
             item_el.click.assert_awaited_once()
 
+    async def test_gemini_client_switch_model_does_not_cross_match_versions(self) -> None:
+        mock_page = MagicMock()
+        mock_page.click = AsyncMock()
+        mock_page.wait_for_selector = AsyncMock()
+        older = AsyncMock()
+        older.inner_text = AsyncMock(return_value="3.6 Flash\nAll-around help")
+        newer = AsyncMock()
+        newer.inner_text = AsyncMock(return_value="3.8 Flash\nFast responses")
+        mock_page.query_selector_all = AsyncMock(return_value=[older, newer])
+
+        client = GeminiClient(mock_page)
+        client.get_current_model = AsyncMock(side_effect=["3.6 Flash", "3.8 Flash"])
+        client._find_selector = AsyncMock(return_value="button[data-test-id='bard-mode-menu-button']")
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            self.assertTrue(await client.switch_model("gemini-3.8-flash"))
+
+        older.click.assert_not_awaited()
+        newer.click.assert_awaited_once()
+
+    async def test_gemini_client_switch_model_reports_selection_that_did_not_stick(self) -> None:
+        mock_page = MagicMock()
+        mock_page.click = AsyncMock()
+        mock_page.wait_for_selector = AsyncMock()
+        item = AsyncMock()
+        item.inner_text = AsyncMock(return_value="3.8 Flash")
+        mock_page.query_selector_all = AsyncMock(return_value=[item])
+        client = GeminiClient(mock_page)
+        client.get_current_model = AsyncMock(side_effect=["3.6 Flash", "3.6 Flash"])
+        client._find_selector = AsyncMock(return_value="model-switcher")
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            self.assertFalse(await client.switch_model("gemini-3.8-flash"))
+
+    async def test_openai_tool_payload_uses_gemini_detector(self) -> None:
+        mock_page = MagicMock()
+        payload = '{"tool_calls":[{"name":"lookup","arguments":{"line":"a\\nb"}}]}'
+        mock_page.evaluate = AsyncMock(return_value=payload)
+        client = GeminiClient(mock_page)
+
+        self.assertEqual(await openai_routes._latest_lossless_tool_payload(client), payload)
+
     async def test_gemini_client_discover_available_models(self) -> None:
         mock_page = MagicMock()
         mock_page.click = AsyncMock()
@@ -326,10 +386,12 @@ class GeminiProviderTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_gemini_client_trigger_tts(self) -> None:
         mock_page = MagicMock()
+        response_root = AsyncMock()
         btn = AsyncMock()
         btn.is_visible = AsyncMock(return_value=True)
         btn.click = AsyncMock()
-        mock_page.query_selector = AsyncMock(return_value=btn)
+        response_root.query_selector = AsyncMock(return_value=btn)
+        mock_page.query_selector_all = AsyncMock(return_value=[response_root])
 
         client = GeminiClient(mock_page)
         result = await client._trigger_tts()
@@ -380,19 +442,21 @@ class GeminiProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resp.images[0].url, "https://googleusercontent.com/img123")
         client.send_message.assert_awaited_once()
         sent_prompt = client.send_message.call_args[0][0]
-        self.assertIn("Generate an image: a majestic lion", sent_prompt)
+        self.assertIn("Generate 1 image: a majestic lion", sent_prompt)
         self.assertIn("Aspect ratio: 1024x1024", sent_prompt)
         self.assertIn("Style: vivid", sent_prompt)
 
     async def test_gemini_client_extract_response_images(self) -> None:
         mock_page = MagicMock()
+        response_root = AsyncMock()
         img_el = AsyncMock()
         img_el.is_visible = AsyncMock(return_value=True)
         img_el.get_attribute = AsyncMock(side_effect=lambda attr: {
             "src": "https://googleusercontent.com/chat_attachment_abc",
             "alt": "Generated picture",
         }.get(attr))
-        mock_page.query_selector_all = AsyncMock(return_value=[img_el])
+        mock_page.query_selector_all = AsyncMock(return_value=[response_root])
+        response_root.query_selector_all = AsyncMock(return_value=[img_el])
 
         client = GeminiClient(mock_page)
         client._download_image = AsyncMock(return_value="/tmp/local_gemini_img.png")
@@ -402,6 +466,62 @@ class GeminiProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(images[0].url, "https://googleusercontent.com/chat_attachment_abc")
         self.assertEqual(images[0].local_path, "/tmp/local_gemini_img.png")
         self.assertEqual(images[0].alt, "Generated picture")
+
+    async def test_gemini_long_prompt_error_mode_rejects_before_typing(self) -> None:
+        mock_page = MagicMock()
+        mock_page.is_closed = MagicMock(return_value=False)
+        mock_page.click = AsyncMock()
+        client = GeminiClient(mock_page)
+        client._detect_page_error = AsyncMock(return_value=None)
+        client._find_selector = AsyncMock(return_value="div.ql-editor")
+
+        with (
+            patch.object(Config, "GEMINI_LONG_PROMPT_THRESHOLD", 3),
+            patch.object(Config, "GEMINI_LONG_PROMPT_FALLBACK", "error"),
+            patch("src.gemini.client.random_delay", new=AsyncMock()),
+            patch("src.gemini.client.count_assistant_messages", new=AsyncMock(return_value=0)),
+            patch("src.gemini.client.get_latest_assistant_turn_signature", new=AsyncMock(return_value=None)),
+            patch("src.gemini.client.human_type", new=AsyncMock()) as human_type_mock,
+        ):
+            with self.assertRaises(PromptTooLongError):
+                await client.send_message("abcd")
+        human_type_mock.assert_not_awaited()
+
+    async def test_gemini_long_prompt_temp_file_is_cleaned_when_upload_fails(self) -> None:
+        mock_page = MagicMock()
+        mock_page.is_closed = MagicMock(return_value=False)
+        mock_page.click = AsyncMock()
+        client = GeminiClient(mock_page)
+        client._detect_page_error = AsyncMock(return_value=None)
+        client._find_selector = AsyncMock(return_value="div.ql-editor")
+        captured_path = ""
+
+        async def fail_upload(paths: list[str]) -> None:
+            nonlocal captured_path
+            captured_path = paths[-1]
+            self.assertTrue(Path(captured_path).exists())
+            raise PromptAttachmentFallbackError("upload failed")
+
+        client._upload_files = fail_upload  # type: ignore[method-assign]
+        with (
+            patch.object(Config, "GEMINI_LONG_PROMPT_THRESHOLD", 3),
+            patch.object(Config, "GEMINI_LONG_PROMPT_FALLBACK", "attachment"),
+            patch("src.gemini.client.random_delay", new=AsyncMock()),
+            patch("src.gemini.client.count_assistant_messages", new=AsyncMock(return_value=0)),
+            patch("src.gemini.client.get_latest_assistant_turn_signature", new=AsyncMock(return_value=None)),
+            patch("src.gemini.client.human_type", new=AsyncMock()),
+        ):
+            with self.assertRaises(PromptAttachmentFallbackError):
+                await client.send_message("abcd")
+        self.assertTrue(captured_path)
+        self.assertFalse(Path(captured_path).exists())
+
+    async def test_gemini_upload_rejects_missing_file(self) -> None:
+        client = GeminiClient(MagicMock())
+        missing = str(Path(tempfile.gettempdir()) / "catgpt-definitely-missing-attachment.txt")
+        Path(missing).unlink(missing_ok=True)
+        with self.assertRaises(PromptAttachmentFallbackError):
+            await client._upload_files([missing])
 
 
 if __name__ == "__main__":

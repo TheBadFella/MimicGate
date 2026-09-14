@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
+from src.config import Config
 from src.gemini.model_registry import (
     PUBLIC_GEMINI_BROWSER_MODEL_ID,
     canonical_reasoning_effort,
@@ -63,6 +65,20 @@ class GeminiModelRegistryTests(unittest.TestCase):
     def test_resolve_aliases(self) -> None:
         self.assertEqual(resolve_gemini_model("gemini-flash").ui_label, "Flash")
         self.assertEqual(resolve_gemini_model("gemini-pro").ui_label, "3.1 Pro")
+
+    def test_configured_aliases_override_defaults_and_add_models(self) -> None:
+        aliases = (
+            "gemini-3.8-flash=Fast Mode|Fast,gemini-extended-thinking=Deep Mode|Thinking,"
+            "gemini-custom=Experimental|Lab"
+        )
+        with patch.object(Config, "GEMINI_MODEL_ALIASES", aliases):
+            overridden = resolve_gemini_model("gemini-3.8-flash")
+            thinking = resolve_gemini_model("gemini-browser", reasoning_effort="high")
+            custom = resolve_gemini_model("Lab")
+            self.assertEqual(overridden.ui_label, "Fast Mode")
+            self.assertEqual(thinking.ui_label, "Deep Mode")
+            self.assertEqual(custom.public_id, "gemini-custom")
+            self.assertIn("gemini-custom", list_gemini_model_ids())
 
     def test_canonical_reasoning_effort(self) -> None:
         self.assertEqual(canonical_reasoning_effort("high"), "high")

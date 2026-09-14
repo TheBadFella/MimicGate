@@ -66,7 +66,7 @@ class Config:
     )
     GEMINI_LONG_PROMPT_FALLBACK: str = os.getenv(
         "GEMINI_LONG_PROMPT_FALLBACK", "attachment"
-    )
+    ).strip().lower()
     GEMINI_LONG_PROMPT_THRESHOLD: int = max(
         0, int(os.getenv("GEMINI_LONG_PROMPT_THRESHOLD", "0"))
     )
@@ -231,7 +231,7 @@ class Config:
     @classmethod
     def supports_image_generation(cls) -> bool:
         """Return whether the active provider supports the image route."""
-        return cls.PROVIDER == "chatgpt"
+        return cls.PROVIDER in {"chatgpt", "gemini"}
 
     # Timeouts (ms)
     RESPONSE_TIMEOUT: int = int(os.getenv("RESPONSE_TIMEOUT", "120000"))

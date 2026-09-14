@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from src.config import Config
+
 PUBLIC_GEMINI_BROWSER_MODEL_ID = "gemini-browser"
 
 _AUTO_MODEL_IDS = {
@@ -53,12 +55,12 @@ DEFAULT_GEMINI_MODELS: tuple[GeminiModelOption, ...] = (
     GeminiModelOption(
         public_id="gemini-3.8-flash",
         ui_label="3.8 Flash",
-        alternate_labels=("Flash", "3.6 Flash", "Fastest answers", "All-around help"),
+        alternate_labels=("Flash", "Fast", "Fastest answers", "All-around help"),
     ),
     GeminiModelOption(
         public_id="gemini-3.6-flash",
         ui_label="3.6 Flash",
-        alternate_labels=("Flash", "3.8 Flash", "All-around help"),
+        alternate_labels=("Flash", "Fast", "All-around help"),
     ),
     GeminiModelOption(
         public_id="gemini-3.5-flash-lite",
@@ -119,6 +121,31 @@ _REASONING_ALIASES = {
 _discovered_models: list[GeminiModelOption] = []
 
 
+def _configured_models() -> tuple[GeminiModelOption, ...]:
+    """Apply GEMINI_MODEL_ALIASES overrides and include custom model IDs."""
+    configured: dict[str, tuple[str, ...]] = {}
+    for entry in (Config.GEMINI_MODEL_ALIASES or "").split(","):
+        public_id, separator, raw_labels = entry.partition("=")
+        labels = tuple(label.strip() for label in raw_labels.split("|") if label.strip())
+        if separator and public_id.strip() and labels:
+            configured[public_id.strip().lower()] = labels
+
+    models: list[GeminiModelOption] = []
+    known_ids: set[str] = set()
+    for model in DEFAULT_GEMINI_MODELS:
+        labels = configured.get(model.public_id)
+        models.append(
+            GeminiModelOption(model.public_id, labels[0], labels[1:])
+            if labels
+            else model
+        )
+        known_ids.add(model.public_id)
+    for public_id, labels in configured.items():
+        if public_id not in known_ids:
+            models.append(GeminiModelOption(public_id, labels[0], labels[1:]))
+    return tuple(models) + tuple(_discovered_models)
+
+
 def canonical_reasoning_effort(value: str | None, *, substring: bool = False) -> str | None:
     """Normalize user-facing reasoning effort tokens to canonical names."""
     if not value:
@@ -140,9 +167,12 @@ def canonical_reasoning_effort(value: str | None, *, substring: bool = False) ->
 
 def register_discovered_gemini_models(labels: list[str]) -> list[str]:
     """Register dynamically discovered models from the active Gemini browser UI."""
-    global _discovered_models
     added_ids: list[str] = []
-    known_labels = {normalize_token(m.ui_label) for m in DEFAULT_GEMINI_MODELS + tuple(_discovered_models)}
+    known_labels = {
+        normalize_token(label)
+        for model in _configured_models()
+        for label in model.ui_labels
+    }
 
     for label in labels:
         first_line = label.splitlines()[0].strip() if label else ""
@@ -173,7 +203,7 @@ def normalize_token(value: str) -> str:
 
 def list_gemini_model_ids() -> tuple[str, ...]:
     """Return all public model IDs supported by the Gemini provider."""
-    all_models = DEFAULT_GEMINI_MODELS + tuple(_discovered_models)
+    all_models = _configured_models()
     seen: set[str] = set()
     unique_ids: list[str] = [PUBLIC_GEMINI_BROWSER_MODEL_ID]
     for m in all_models:
@@ -192,11 +222,12 @@ def resolve_gemini_model(
     Returns None if the requested model means 'use whatever is currently selected in browser'.
     """
     effort = canonical_reasoning_effort(reasoning_effort)
-    thinking_model = GeminiModelOption(
-        public_id="gemini-extended-thinking",
-        ui_label="Extended thinking",
-        alternate_labels=("Thinking", "Complex problem solving"),
-    )
+    all_models = _configured_models()
+
+    def by_public_id(public_id: str) -> GeminiModelOption:
+        return next(model for model in all_models if model.public_id == public_id)
+
+    thinking_model = by_public_id("gemini-extended-thinking")
 
     # 1. Explicit reasoning effort takes precedence
     if effort in {"high", "xhigh", "extended", "max", "ultra"}:
@@ -209,28 +240,14 @@ def resolve_gemini_model(
     if is_auto_model(requested_model):
         if effort in {"none", "minimal", "low"}:
             # Ensure non-thinking Flash is used if auto was requested with low reasoning
-            return GeminiModelOption(
-                public_id="gemini-3.8-flash",
-                ui_label="3.8 Flash",
-                alternate_labels=("Flash", "3.6 Flash", "Fastest answers"),
-            )
+            return by_public_id("gemini-3.8-flash")
         return None
 
     # If low/none reasoning effort requested with a thinking model, downgrade to Pro or Flash
     if effort in {"none", "minimal", "low"}:
         if "pro" in norm_req:
-            return GeminiModelOption(
-                public_id="gemini-3.1-pro",
-                ui_label="3.1 Pro",
-                alternate_labels=("Pro", "Advanced reasoning"),
-            )
-        return GeminiModelOption(
-            public_id="gemini-3.8-flash",
-            ui_label="3.8 Flash",
-            alternate_labels=("Flash", "3.6 Flash", "Fastest answers"),
-        )
-
-    all_models = DEFAULT_GEMINI_MODELS + tuple(_discovered_models)
+            return by_public_id("gemini-3.1-pro")
+        return by_public_id("gemini-3.8-flash")
 
     # 3. Exact match by public_id
     for model in all_models:

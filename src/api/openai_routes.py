@@ -1254,7 +1254,10 @@ async def _latest_lossless_tool_payload(client: ProviderClient) -> str:
     if page is None:
         return ""
     try:
-        from src.chatgpt.detector import extract_latest_assistant_code_block_text
+        if client.__class__.__module__.startswith("src.gemini"):
+            from src.gemini.detector import extract_latest_assistant_code_block_text
+        else:
+            from src.chatgpt.detector import extract_latest_assistant_code_block_text
 
         text = await extract_latest_assistant_code_block_text(page)
         return text if '"tool_calls"' in text else ""

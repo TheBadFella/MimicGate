@@ -10,19 +10,23 @@ Detection strategy:
 from __future__ import annotations
 
 import asyncio
-import re
 
 from patchright.async_api import Page
 
 from src.browser.human import idle_mouse_movement
-from src.gemini.selectors import GeminiSelectors
 from src.log import setup_logging
-from src.config import Config
 
 log = setup_logging("gemini_detector")
 
 # Shared DOM helpers: pick the turn action-bar Copy button, never a code-cell Copy.
 _GEMINI_TURN_COPY_HELPERS_JS = r"""
+    const assistantTurns = () => {
+        const canonical = Array.from(document.querySelectorAll('model-response'));
+        if (canonical.length) return canonical;
+        const containers = Array.from(document.querySelectorAll('div.response-container'));
+        if (containers.length) return containers;
+        return Array.from(document.querySelectorAll('div.static-chat-experience-response-container'));
+    };
     const textOf = (el) => ((el && (el.innerText || el.textContent)) || "").trim();
     const isVisible = (el) => {
         if (!el) return false;
@@ -65,7 +69,7 @@ _GEMINI_TURN_COPY_HELPERS_JS = r"""
 _CLICK_GEMINI_TURN_COPY_JS = r"""
 (previousSignature) => {
 """ + _GEMINI_TURN_COPY_HELPERS_JS + r"""
-    const turns = Array.from(document.querySelectorAll('model-response, div.response-container'));
+    const turns = assistantTurns();
     if (turns.length === 0) return { clicked: false, reason: "no-turns" };
     const last = turns[turns.length - 1];
     const signature = turnSignature(turns, last);
@@ -82,7 +86,7 @@ _CLICK_GEMINI_TURN_COPY_JS = r"""
 _LATEST_TURN_SNAPSHOT_JS = r"""
 () => {
 """ + _GEMINI_TURN_COPY_HELPERS_JS + r"""
-    const turns = Array.from(document.querySelectorAll('model-response, div.response-container'));
+    const turns = assistantTurns();
     const hasStopButton = Boolean(document.querySelector('button[aria-label*="Stop" i], .stop-button'));
     if (turns.length === 0) {
         return {
@@ -110,16 +114,31 @@ _LATEST_TURN_SNAPSHOT_JS = r"""
 
 _DOM_EXTRACT_JS = r"""
 () => {
-    const turns = Array.from(document.querySelectorAll('model-response, div.response-container'));
+    const canonical = Array.from(document.querySelectorAll('model-response'));
+    const containers = canonical.length ? canonical : Array.from(document.querySelectorAll('div.response-container'));
+    const turns = containers.length ? containers : Array.from(document.querySelectorAll('div.static-chat-experience-response-container'));
     if (turns.length === 0) return '';
     const last = turns[turns.length - 1];
     const content = last.querySelector('message-content, markdown, .markdown, .model-response-text');
     const source = content || last;
-    const clone = source.cloneNode(true);
-    clone.querySelectorAll('code-block, pre, .code-block, syntax-highlighter').forEach((el) => el.remove());
-    const stripped = (clone.innerText || '').trim();
-    if (stripped) return stripped;
     return (source.innerText || last.innerText || '').trim();
+}
+"""
+
+_LATEST_CODE_BLOCK_JS = r"""
+() => {
+    const canonical = Array.from(document.querySelectorAll('model-response'));
+    const containers = canonical.length ? canonical : Array.from(document.querySelectorAll('div.response-container'));
+    const turns = containers.length ? containers : Array.from(document.querySelectorAll('div.static-chat-experience-response-container'));
+    if (!turns.length) return '';
+    const blocks = Array.from(turns[turns.length - 1].querySelectorAll(
+        'code-block code, code-block pre, pre code, pre, syntax-highlighter code, syntax-highlighter'
+    ));
+    for (const block of blocks) {
+        const text = (block.innerText || block.textContent || '').trim();
+        if (text.includes('"tool_calls"')) return text;
+    }
+    return '';
 }
 """
 
@@ -159,8 +178,11 @@ async def count_assistant_messages(page: Page) -> int:
         return await page.evaluate(
             """
             () => {
-                const turns = document.querySelectorAll('model-response, div.response-container');
-                return turns.length;
+                const canonical = document.querySelectorAll('model-response');
+                if (canonical.length) return canonical.length;
+                const containers = document.querySelectorAll('div.response-container');
+                if (containers.length) return containers.length;
+                return document.querySelectorAll('div.static-chat-experience-response-container').length;
             }
             """
         )
@@ -175,7 +197,9 @@ async def get_latest_assistant_turn_signature(page: Page) -> str | None:
         return await page.evaluate(
             """
             () => {
-                const turns = Array.from(document.querySelectorAll('model-response, div.response-container'));
+                const canonical = Array.from(document.querySelectorAll('model-response'));
+                const containers = canonical.length ? canonical : Array.from(document.querySelectorAll('div.response-container'));
+                const turns = containers.length ? containers : Array.from(document.querySelectorAll('div.static-chat-experience-response-container'));
                 if (turns.length === 0) return null;
                 const last = turns[turns.length - 1];
                 const text = last.innerText ? last.innerText.trim().slice(0, 80) : '';
@@ -354,4 +378,13 @@ async def extract_last_response_via_dom(
         return (text or "").strip()
     except Exception as e:
         log.error(f"Failed to extract response via DOM: {e}")
+        return ""
+
+
+async def extract_latest_assistant_code_block_text(page: Page) -> str:
+    """Extract a Gemini code block verbatim for lossless structured tool calls."""
+    try:
+        return (await page.evaluate(_LATEST_CODE_BLOCK_JS) or "").strip()
+    except Exception as exc:
+        log.debug("Failed to extract latest Gemini code block: %s", exc)
         return ""

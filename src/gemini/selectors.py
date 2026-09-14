@@ -303,4 +303,3 @@ class GeminiSelectors:
         "div.file-preview-container [role='progressbar']",
         "div.file-preview-container .mdc-circular-progress",
     ]
-

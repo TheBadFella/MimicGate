@@ -154,4 +154,3 @@ GEMINI_MODEL_FALLBACK=false
 
 When `GEMINI_MODEL_FALLBACK=true`, CatGPT logs a warning and routes the request to `GEMINI_DEFAULT_MODEL`.
 When `GEMINI_MODEL_FALLBACK=false`, CatGPT rejects the request with HTTP 400 and logs an error listing available models.
-
