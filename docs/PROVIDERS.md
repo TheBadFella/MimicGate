@@ -6,14 +6,29 @@ CatGPT Gateway exposes browser-backed and API-backed AI services through OpenAI-
 
 ## Table of Contents
 
-- [Providers Overview](#providers-overview)
-- [ChatGPT (`chatgpt`)](#1-chatgpt-chatgpt)
-- [Claude (`claude`)](#2-claude-claude)
-- [Google Gemini (`gemini`)](#3-google-gemini-gemini)
-- [MiniMax (`minimax`)](#4-minimax-minimax)
-- [Switching Between Providers](#switching-between-providers)
-- [Provider Capabilities Comparison](#provider-capabilities-comparison)
-- [Related Documentation](#related-documentation)
+- [Supported Providers and Configuration](#supported-providers-and-configuration)
+  - [Table of Contents](#table-of-contents)
+  - [Providers Overview](#providers-overview)
+  - [1. ChatGPT (`chatgpt`)](#1-chatgpt-chatgpt)
+    - [Configuration](#configuration)
+    - [Authentication](#authentication)
+    - [Detailed ChatGPT Guides](#detailed-chatgpt-guides)
+  - [2. Claude (`claude`)](#2-claude-claude)
+    - [Configuration](#configuration-1)
+    - [Authentication](#authentication-1)
+    - [Detailed Claude Guides](#detailed-claude-guides)
+  - [3. Google Gemini (`gemini`)](#3-google-gemini-gemini)
+    - [Configuration](#configuration-2)
+    - [Supported Models](#supported-models)
+    - [Authentication](#authentication-2)
+    - [Detailed Gemini Guides](#detailed-gemini-guides)
+  - [4. MiniMax (`minimax`)](#4-minimax-minimax)
+    - [Configuration](#configuration-3)
+    - [Authentication](#authentication-3)
+    - [Detailed MiniMax Guides](#detailed-minimax-guides)
+  - [Switching Between Providers](#switching-between-providers)
+  - [Provider Capabilities Comparison](#provider-capabilities-comparison)
+  - [Related Documentation](#related-documentation)
 
 ---
 
@@ -231,3 +246,4 @@ To switch providers:
 - [API Reference](API_REFERENCE.md): Complete endpoint and parameter specifications.
 - [Environment Variables Reference](ENVIRONMENT_VARIABLES.md): Every supported setting and default.
 - [System Architecture](SYSTEM_ARCHITECTURE.md): Multi-tab routing, session pools, and browser management.
+
