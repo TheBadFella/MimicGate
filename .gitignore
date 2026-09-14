@@ -1,6 +1,7 @@
 # ── Browser Profiles (contain cookies, login sessions) ──
 browser_data/
 browser_data_claude/
+browser_data_gemini/
 chrome-profile/
 
 # ── Logs ──

@@ -5,7 +5,7 @@
 <h1 align="center">CatGPT</h1>
 
 <p align="center">
-  <strong>A browser-backed, multi-protocol AI gateway for ChatGPT, Claude, and MiniMax.</strong><br />
+  <strong>A browser-backed, multi-protocol AI gateway for ChatGPT, Claude, Gemini, and MiniMax.</strong><br />
   Connect OpenAI, Anthropic, Ollama, LangChain, Cline, and self-hosted clients to one persistent gateway.
 </p>
 
@@ -22,12 +22,13 @@
   <a href="docs/API.md">API</a> ·
   <a href="docs/ENVIRONMENT.md">Environment</a> ·
   <a href="docs/SETUP.md">Setup</a> ·
+  <a href="docs/GEMINI_SETUP.md">Gemini</a> ·
   <a href="docs/ARCHITECTURE.md">Architecture</a>
 </p>
 
 ---
 
-CatGPT turns a logged-in browser session into familiar API endpoints. ChatGPT and Claude use a persistent, automated browser; MiniMax uses its official API while keeping the same gateway interface. It is designed for private, self-hosted integrations—not as an official provider API.
+CatGPT turns a logged-in browser session into familiar API endpoints. ChatGPT, Claude, and Gemini use a persistent, automated browser; MiniMax uses its official API while keeping the same gateway interface. It is designed for private, self-hosted integrations, not as an official provider API.
 
 ## Why This Fork
 
@@ -65,6 +66,7 @@ This table focuses only on meaningful differences:
 
 | Capability | This fork | Upstream |
 |---|:---:|:---:|
+| Google Gemini browser provider | ✅ | — |
 | OpenAI Responses API | ✅ | — |
 | Anthropic Messages adapter | ✅ | — |
 | Ollama-compatible API | ✅ | — |
@@ -88,6 +90,7 @@ This table focuses only on meaningful differences:
 |---|---|---|---|
 | ChatGPT | Persistent browser | `catgpt-browser` or configured GPT model | Images, vision, files, audio, model/effort switching |
 | Claude | Persistent browser | `claude-browser` | Chat, vision, files, tools |
+| Gemini | Persistent browser | `gemini-browser` or configured Gemini model | Chat, vision, files, image generation, audio/TTS, reasoning effort, model switching |
 | MiniMax | Official API | `MiniMax-M2.7` | OpenAI-compatible text requests without a browser |
 
 ## Quick Start
@@ -147,7 +150,7 @@ curl http://localhost:8650/v1/chat/completions \
 
 Use `/{app_name}/v1/...` or `/{app_name}/api/...` routes to isolate applications such as Cline, Open WebUI, Mealie, Linkwarden, or internal agents. Use `conversation_id` (or `X-CatGPT-Conversation-Id`) for durable, history-verified continuity; `thread_id` and `x-session-id` remain available for direct browser-thread and tab affinity. Send `X-CatGPT-Thread-Mode: fresh` when a request must start an isolated ephemeral thread.
 
-In Cline, choose **OpenAI Compatible**, set Base URL to `http://localhost:8650/cline/v1`, API Key to `CATGPT_API_KEY`, and Model ID to `catgpt-browser` (or `claude-browser`).
+In Cline, choose **OpenAI Compatible**, set Base URL to `http://localhost:8650/cline/v1`, API Key to `CATGPT_API_KEY`, and Model ID to `catgpt-browser` (or `claude-browser` / `gemini-browser`).
 
 > [!NOTE]
 > `stream=true` is protocol-compatible, but browser generation finishes before CatGPT emits the SSE or NDJSON response chunks. It is not live token forwarding from the provider.
@@ -156,11 +159,12 @@ In Cline, choose **OpenAI Compatible**, set Base URL to `http://localhost:8650/c
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `PROVIDER` | `chatgpt` | Select `chatgpt`, `claude`, or `minimax` |
+| `PROVIDER` | `chatgpt` | Select `chatgpt`, `claude`, `gemini`, or `minimax` |
 | `CATGPT_API_KEY` | `dummy123` | Bearer token used by Docker Compose |
 | `CATGPT_VNC_PASSWORD` | `catgpt` | Browser GUI password |
 | `MAX_CONCURRENT_REQUESTS` | `3` | Concurrent browser-backed requests |
 | `CHATGPT_DEFAULT_MODEL` | Current UI selection | Default ChatGPT model mapping |
+| `GEMINI_DEFAULT_MODEL` | `gemini-browser` | Default Gemini model mapping |
 | `CHATGPT_PROJECT_URL` | Empty | Confine ChatGPT threads to one project |
 | `CHATGPT_LONG_PROMPT_FALLBACK` | `attachment` | Upload oversized prompts or use `error` for HTTP 413 |
 
@@ -173,7 +177,8 @@ See the [generated environment reference](docs/ENVIRONMENT.md), [docker-compose.
 | [API Reference](docs/API.md) | Request formats, tools, vision, files, images, audio, and native routes |
 | [Environment Reference](docs/ENVIRONMENT.md) | Every runtime and Docker Compose variable, default, and purpose |
 | [Setup Guide](docs/SETUP.md) | Docker, local installation, login, persistence, and troubleshooting |
-| [Model Switching](docs/MODEL_SWITCHING.md) | ChatGPT model aliases, versions, and effort settings |
+| [Gemini Setup Guide](docs/GEMINI_SETUP.md) | Dedicated Gemini configuration, login, model list, and TTS/image options |
+| [Model Switching](docs/MODEL_SWITCHING.md) | ChatGPT and Gemini model aliases, versions, and effort settings |
 | [Architecture](docs/ARCHITECTURE.md) | Browser lifecycle, routing, extraction, and response detection |
 | [Chrome Runbook](docs/CHROME_PLAYWRIGHT_RUNBOOK.md) | Browser automation diagnostics and recovery |
 | [Testing Guide](docs/TESTING.md) | Reproducible unit, environment, container, and browser smoke checks |

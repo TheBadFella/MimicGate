@@ -11,6 +11,7 @@ This guide covers every way to run CatGPT Gateway: Docker, local development, an
 - [Local Setup (no Docker)](#local-setup-no-docker)
 - [Nix Flake Setup](#nix-flake-setup)
 - [Environment Variables](ENVIRONMENT.md)
+- [Gemini Setup Guide](GEMINI_SETUP.md)
 - [First Login](#first-login)
 - [Switching Providers](#switching-providers)
 - [Authentication](#authentication)
@@ -24,7 +25,7 @@ This guide covers every way to run CatGPT Gateway: Docker, local development, an
 
 - **Python 3.9+** (local setup only)
 - **Docker + Docker Compose** (Docker setup only)
-- A **ChatGPT** or **Claude** account (free or paid)
+- A **ChatGPT**, **Claude**, or **Gemini** account (free or paid)
 
 ---
 
@@ -41,15 +42,15 @@ cd CatGPT
 #    See docs/ENVIRONMENT.md for every supported value.
 
 # 3. Edit .env to pick your provider
-#    Set PROVIDER=claude or PROVIDER=chatgpt
+#    Set PROVIDER=chatgpt, PROVIDER=claude, or PROVIDER=gemini
 
 # 4. Build and start
 docker compose up --build -d
 
 # 5. First login (one-time) - open the browser UI
 open http://localhost:5800
-# Sign into Claude or ChatGPT in the browser window you see
-# Close the web GUI tab when done - session is saved automatically
+# Sign into ChatGPT, Claude, or Gemini in the browser window you see
+# Close the web GUI tab when done; session is saved automatically
 
 # 6. Verify it works
 curl -H "Authorization: Bearer dummy123" http://localhost:8650/v1/models
@@ -152,34 +153,37 @@ Notes:
 
 CatGPT Gateway uses your existing browser session. You sign in **once** and the browser profile is persisted.
 
-> **⚠ Google login will not work.**
-> Patchright/Chromium runs in a controlled automation context. Google's OAuth detects this and blocks the sign-in.
-> **Use email + password, Microsoft, Apple, or magic link / OTP instead.**
+> **OAuth login note for ChatGPT and Claude:**
+> Patchright/Chromium runs in a controlled automation context where Google's third-party OAuth ("Continue with Google") blocks logins to external services like ChatGPT or Claude.
+> For ChatGPT and Claude, use email + password, Microsoft, Apple, or magic link / OTP instead.
+>
+> When using the **Google Gemini provider** (`PROVIDER=gemini`), you sign directly into your Google Account on `gemini.google.com`, which works normally. See the [Gemini Setup Guide](GEMINI_SETUP.md) for details.
 
 ### Docker
 
 1. Start the container: `docker compose up --build -d`
 2. Wait ~30 seconds for startup
 3. Open **http://localhost:5800** in your browser
-4. You'll see a Chromium browser inside the VNC viewer
+4. You will see a Chromium browser inside the VNC viewer
 5. Sign into your provider using one of these methods:
    | Method | Works? |
    |---|---|
-   | Email + password | ✅ Recommended |
-   | Microsoft account | ✅ Works |
-   | Apple ID | ✅ Works |
-   | Magic link / OTP email | ✅ Works |
-   | **Google / "Continue with Google"** | ❌ Blocked by Google |
+   | Email + password | Recommended |
+   | Microsoft account | Works |
+   | Apple ID | Works |
+   | Magic link / OTP email | Works |
+   | Direct Google Account (Gemini provider) | Works |
+   | "Continue with Google" (ChatGPT / Claude) | Blocked by Google OAuth |
 6. Verify you see the chat interface
-7. Close the web GUI tab — your session is saved in the mounted browser directory and survives container restarts.
+7. Close the web GUI tab; your session is saved in the mounted browser directory and survives container restarts.
 
 ### Local
 
 1. Run `python scripts/first_login.py`
 2. A Chromium window opens and navigates to your provider
-3. Sign in using **email + password** or a non-Google method (see table above)
+3. Sign in using your account credentials
 4. Press Enter in the terminal when you see the chat page
-5. The browser closes. Session is saved in `browser_data/` (or `browser_data_claude/`).
+5. The browser closes. Session is saved in `browser_data/` (or `browser_data_claude/`, `browser_data_gemini/`).
 
 ### Re-login
 
@@ -192,6 +196,10 @@ If your session expires (typically after days/weeks), repeat the login flow. The
 Edit your `.env` file:
 
 ```bash
+# For Gemini
+PROVIDER=gemini
+BROWSER_DATA_DIR=./browser_data_gemini
+
 # For Claude
 PROVIDER=claude
 BROWSER_DATA_DIR=./browser_data_claude
@@ -201,9 +209,9 @@ PROVIDER=chatgpt
 BROWSER_DATA_DIR=./browser_data
 ```
 
-Each provider has its own browser data directory so your login sessions don't conflict. After switching, restart the server.
+Each provider has its own browser data directory so your login sessions do not conflict. After switching, restart the server.
 
-For Docker, also update the `PROVIDER` in `docker-compose.yml` under `environment:` and rebuild.
+For Docker, also update the `PROVIDER` in `docker-compose.yml` under `environment:` and rebuild. See also the dedicated [Gemini Setup Guide](GEMINI_SETUP.md).
 
 ---
 

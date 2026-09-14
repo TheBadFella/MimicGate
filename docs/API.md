@@ -88,15 +88,15 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `model` | string | yes | `claude-browser` or `catgpt-browser` |
+| `model` | string | yes | Default browser models (`catgpt-browser`, `claude-browser`, `gemini-browser`) or explicit model IDs (e.g. `gpt-5.6-sol`, `gemini-3.8-flash`, `gemini-3.1-pro`) |
 | `messages` | array | yes | Array of message objects |
 | `tools` | array | no | Tool/function definitions |
 | `tool_choice` | string/object | no | `auto`, `none`, `required`, or specific function |
 | `temperature` | float | no | Ignored (browser controls this) |
 | `max_tokens` | int | no | Ignored |
 | `stream` | bool | no | SSE is accepted for IDE clients such as Cline. The browser finishes first, then CatGPT emits the completed message as event-stream chunks. |
-| `read_aloud` | bool | no | ChatGPT only. Opens `More actions` -> `Read aloud`, downloads the browser-generated audio, and returns it at `choices[0].message.audio`. |
-| `reasoning_effort` | string | no | ChatGPT reasoning level. Available values are discovered from the model picker and unsupported values are clamped to the nearest available level. |
+| `read_aloud` | bool | no | Supported on ChatGPT and Gemini. Downloads the browser-generated audio and returns it at `choices[0].message.audio`. |
+| `reasoning_effort` | string | no | Reasoning level for ChatGPT and Gemini. Unsupported values are clamped to the nearest available level or map to thinking models. |
 | `conversation_id` | string | no | Durable logical conversation ID. CatGPT verifies history before reusing the mapped browser thread. |
 
 `conversation_id` may instead be supplied as `X-CatGPT-Conversation-Id`. Send either full history or only the next turn. If full history is a verified prefix of the stored transcript, CatGPT sends only the delta; divergent history starts a clean browser thread. Use `X-CatGPT-Thread-Mode: fresh` to force a new ephemeral thread. Fresh mode cannot be combined with `thread_id` or `conversation_id`.
@@ -587,14 +587,14 @@ Shortcuts: `Ctrl+N` (new), `Ctrl+T` (threads), `Ctrl+L` (clear), `Ctrl+Q` (quit)
 
 ## Provider Differences
 
-| Behavior | Claude | ChatGPT |
-|---|---|---|
-| Model ID | `claude-browser` | `catgpt-browser` |
-| Image generation | Not supported (501) | Supported (DALL-E) |
-| Table rendering | Tab-separated text | Markdown with pipes |
-| Avg response time | 15-20s | 7-10s |
-| Tool calling prompt | Collaborative framing | Direct instruction |
-| `tool_choice` support | Yes | Yes |
-| Vision input | Yes | Yes |
-| File attachments | Yes | Yes |
-| Read-aloud audio | Not implemented | Supported via `read_aloud: true` |
+| Behavior | Claude | ChatGPT | Gemini |
+|---|---|---|---|
+| Model ID | `claude-browser` | `catgpt-browser` | `gemini-browser` (or `gemini-3.8-flash`, etc.) |
+| Image generation | Not supported (501) | Supported (DALL-E) | Supported (Imagen 3) |
+| Table rendering | Tab-separated text | Markdown with pipes | Markdown with pipes |
+| Avg response time | 15-20s | 7-10s | 5-10s |
+| Tool calling prompt | Collaborative framing | Direct instruction | Direct instruction |
+| `tool_choice` support | Yes | Yes | Yes |
+| Vision input | Yes | Yes | Yes |
+| File attachments | Yes | Yes | Yes |
+| Read-aloud audio | Not implemented | Supported via `read_aloud: true` | Supported via `read_aloud: true` |
