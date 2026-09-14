@@ -20,6 +20,7 @@
   <a href="#why-this-fork">Features</a> ·
   <a href="#fork-vs-upstream">Fork vs Upstream</a> ·
   <a href="docs/README.md">Documentation</a> ·
+  <a href="docs/PROVIDERS.md">Providers</a> ·
   <a href="docs/API_REFERENCE.md">API</a> ·
   <a href="docs/ENVIRONMENT_VARIABLES.md">Environment</a> ·
   <a href="docs/INSTALLATION_AND_SETUP.md">Setup</a> ·
@@ -177,6 +178,7 @@ Explore the full [CatGPT Documentation Index](docs/README.md) or browse directly
 
 | Guide | What it covers |
 |---|---|
+| [Supported Providers](docs/PROVIDERS.md) | Comprehensive overview of supported providers (ChatGPT, Claude, Gemini, MiniMax) and setup |
 | [Installation & Setup](docs/INSTALLATION_AND_SETUP.md) | Docker, local installation, login, persistence, and troubleshooting |
 | [Gemini Provider Guide](docs/GEMINI_PROVIDER_GUIDE.md) | Dedicated Gemini configuration, login, model list, and TTS/image options |
 | [API Reference](docs/API_REFERENCE.md) | Request formats, tools, vision, files, images, audio, and native routes |

@@ -9,6 +9,7 @@ Welcome to the CatGPT Gateway documentation. This directory contains detailed ar
 | Document | Category | What it covers |
 |---|---|---|
 | [INSTALLATION_AND_SETUP.md](INSTALLATION_AND_SETUP.md) | Setup & Deployment | Docker Compose setup, local Python installation, Nix flake, first-time interactive login, and troubleshooting. |
+| [PROVIDERS.md](PROVIDERS.md) | Providers & Setup | Full list of supported providers (ChatGPT, Claude, Gemini, MiniMax), configuration, and capabilities comparison. |
 | [GEMINI_PROVIDER_GUIDE.md](GEMINI_PROVIDER_GUIDE.md) | Provider Guide | Dedicated Google Gemini setup, direct Google Account login, model catalog, Imagen 3 image generation, and Listen TTS capture. |
 | [API_REFERENCE.md](API_REFERENCE.md) | API & Protocols | OpenAI-compatible endpoints, Responses API, Anthropic Messages adapter, Ollama endpoints, native REST routes, and provider differences. |
 | [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md) | Configuration | Complete reference of every runtime environment variable, Docker Compose setting, default value, and operational purpose. |
@@ -31,6 +32,13 @@ Welcome to the CatGPT Gateway documentation. This directory contains detailed ar
   - First-time login instructions and persistent browser profile handling.
   - Provider switching instructions and browser directory isolation (`browser_data`, `browser_data_claude`, `browser_data_gemini`).
   - Container internals, volume mounts, systemd service configuration, and troubleshooting.
+
+- **[PROVIDERS.md](PROVIDERS.md)**
+  - Summary of all four supported providers: ChatGPT, Claude, Google Gemini, and MiniMax.
+  - Configuration parameters, credentials, and environment settings for each provider.
+  - Authentication options and browser directory requirements.
+  - Side-by-side feature comparison table across protocols, vision, tools, media, and latency.
+  - Direct links to dedicated setup guides, API reference, and environment settings.
 
 - **[GEMINI_PROVIDER_GUIDE.md](GEMINI_PROVIDER_GUIDE.md)**
   - Dedicated configuration guide for `PROVIDER=gemini`.
