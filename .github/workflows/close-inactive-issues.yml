@@ -23,9 +23,14 @@ jobs:
             const ignoredLabels = new Set(["pinned", "keep-open"]);
             const inactivityDays = 3;
             const inactivityMs = inactivityDays * 24 * 60 * 60 * 1000;
+            const closeNoticeMs = 24 * 60 * 60 * 1000;
+            const closeNoticeThresholdMs = inactivityMs - closeNoticeMs;
             const staleMarker = "<!-- close-inactive-issues:stale-warning -->";
+            const closeNoticeMarker = "<!-- close-inactive-issues:close-warning -->";
             const staleCommentBody = `${staleMarker}
             [bot] This issue has been marked as stale because it has had no activity for 3 days. It will be closed after another 3 days without activity.`;
+            const closeNoticeBody = `${closeNoticeMarker}
+            [bot] This issue has been inactive since the stale warning and will be closed in 24 hours unless there is new activity.`;
             const closeCommentBody =
               "[bot] Closing this issue because it remained inactive for 3 days after the stale warning.";
 
@@ -95,8 +100,21 @@ jobs:
                 }
                 return comment.body.includes(staleMarker);
               });
+              const closeNoticeComments = comments.filter((comment) => {
+                if (typeof comment?.body !== "string") {
+                  return false;
+                }
+                return comment.body.includes(closeNoticeMarker);
+              });
 
               const staleComment = staleComments
+                .slice()
+                .sort((a, b) => {
+                  const aMs = parseDateMs(a?.created_at) ?? 0;
+                  const bMs = parseDateMs(b?.created_at) ?? 0;
+                  return bMs - aMs;
+                })[0];
+              const closeNoticeComment = closeNoticeComments
                 .slice()
                 .sort((a, b) => {
                   const aMs = parseDateMs(a?.created_at) ?? 0;
@@ -165,8 +183,45 @@ jobs:
                 continue;
               }
 
-              if (now - staleAtMs < inactivityMs) {
+              const staleAgeMs = now - staleAtMs;
+              if (staleAgeMs >= closeNoticeThresholdMs && staleAgeMs < inactivityMs) {
+                if (!closeNoticeComment) {
+                  await github.rest.issues.createComment({
+                    owner,
+                    repo,
+                    issue_number: issueNumber,
+                    body: closeNoticeBody,
+                  });
+                  console.log(`Posted 24-hour close notice on #${issueNumber}.`);
+                } else {
+                  console.log(`Issue #${issueNumber} already has a 24-hour close notice.`);
+                }
+                continue;
+              }
+
+              if (staleAgeMs < inactivityMs) {
                 console.log(`Issue #${issueNumber} is stale but still within grace period.`);
+                continue;
+              }
+
+              const closeNoticeAtMs = parseDateMs(closeNoticeComment?.created_at);
+              if (closeNoticeAtMs === null) {
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: issueNumber,
+                  body: closeNoticeBody,
+                });
+                console.log(
+                  `Posted missing 24-hour close notice on #${issueNumber}; deferring closure.`
+                );
+                continue;
+              }
+
+              if (now - closeNoticeAtMs < closeNoticeMs) {
+                console.log(
+                  `Issue #${issueNumber} has a close notice but 24 hours have not elapsed yet.`
+                );
                 continue;
               }
 
