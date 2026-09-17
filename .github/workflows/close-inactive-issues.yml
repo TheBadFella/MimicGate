@@ -1,0 +1,189 @@
+name: Close inactive assigned issues
+
+on:
+  schedule:
+    - cron: "30 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  close-inactive-assigned-issues:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mark and close inactive assigned issues
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const assignee = "TheBadFella";
+            const staleLabel = "stale";
+            const ignoredLabels = new Set(["pinned", "keep-open"]);
+            const inactivityDays = 3;
+            const inactivityMs = inactivityDays * 24 * 60 * 60 * 1000;
+            const staleMarker = "<!-- close-inactive-issues:stale-warning -->";
+            const staleCommentBody = `${staleMarker}
+            [bot] This issue has been marked as stale because it has had no activity for 3 days. It will be closed after another 3 days without activity.`;
+            const closeCommentBody =
+              "[bot] Closing this issue because it remained inactive for 3 days after the stale warning.";
+
+            const toLabelNames = (labels) =>
+              (Array.isArray(labels) ? labels : [])
+                .map((label) => {
+                  if (typeof label === "string") {
+                    return label;
+                  }
+                  return label?.name;
+                })
+                .filter((name) => typeof name === "string")
+                .map((name) => name.trim().toLowerCase());
+
+            const parseDateMs = (value) => {
+              const ms = Date.parse(value ?? "");
+              return Number.isFinite(ms) ? ms : null;
+            };
+
+            const now = Date.now();
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: "open",
+              assignee,
+              per_page: 100,
+            });
+
+            console.log(
+              `Fetched ${issues.length} open items assigned to ${assignee} in ${owner}/${repo}.`
+            );
+
+            for (const issue of issues) {
+              const issueNumber = issue?.number;
+              if (!issueNumber) {
+                console.log("Skipping item with missing issue number.");
+                continue;
+              }
+
+              if (issue.pull_request) {
+                console.log(`Skipping #${issueNumber} because it is a pull request.`);
+                continue;
+              }
+
+              const labelNames = toLabelNames(issue.labels);
+              if (labelNames.some((label) => ignoredLabels.has(label))) {
+                console.log(`Skipping #${issueNumber} due to ignored label.`);
+                continue;
+              }
+
+              const updatedAtMs = parseDateMs(issue.updated_at);
+              if (updatedAtMs === null) {
+                console.log(`Skipping #${issueNumber}: invalid updated_at timestamp.`);
+                continue;
+              }
+
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner,
+                repo,
+                issue_number: issueNumber,
+                per_page: 100,
+              });
+
+              const staleComments = comments.filter((comment) => {
+                if (typeof comment?.body !== "string") {
+                  return false;
+                }
+                return comment.body.includes(staleMarker);
+              });
+
+              const staleComment = staleComments
+                .slice()
+                .sort((a, b) => {
+                  const aMs = parseDateMs(a?.created_at) ?? 0;
+                  const bMs = parseDateMs(b?.created_at) ?? 0;
+                  return bMs - aMs;
+                })[0];
+
+              const hasStaleLabel = labelNames.includes(staleLabel);
+
+              if (!staleComment) {
+                if (now - updatedAtMs < inactivityMs) {
+                  console.log(`Issue #${issueNumber} is still active; no stale action.`);
+                  continue;
+                }
+
+                if (!hasStaleLabel) {
+                  await github.rest.issues.addLabels({
+                    owner,
+                    repo,
+                    issue_number: issueNumber,
+                    labels: [staleLabel],
+                  });
+                  console.log(`Added stale label to #${issueNumber}.`);
+                } else {
+                  console.log(`Issue #${issueNumber} already has stale label.`);
+                }
+
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: issueNumber,
+                  body: staleCommentBody,
+                });
+                console.log(`Posted stale warning on #${issueNumber}.`);
+                continue;
+              }
+
+              const staleAtMs = parseDateMs(staleComment.created_at);
+              if (staleAtMs === null) {
+                console.log(`Skipping #${issueNumber}: stale comment has invalid created_at.`);
+                continue;
+              }
+
+              if (updatedAtMs > staleAtMs + 1000) {
+                if (hasStaleLabel) {
+                  try {
+                    await github.rest.issues.removeLabel({
+                      owner,
+                      repo,
+                      issue_number: issueNumber,
+                      name: staleLabel,
+                    });
+                    console.log(`Removed stale label from #${issueNumber} after activity.`);
+                  } catch (error) {
+                    if (error?.status === 404) {
+                      console.log(
+                        `Stale label already absent for #${issueNumber}; continuing.`
+                      );
+                    } else {
+                      throw error;
+                    }
+                  }
+                }
+
+                console.log(`Issue #${issueNumber} had activity after stale warning; keeping open.`);
+                continue;
+              }
+
+              if (now - staleAtMs < inactivityMs) {
+                console.log(`Issue #${issueNumber} is stale but still within grace period.`);
+                continue;
+              }
+
+              await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                state: "closed",
+                state_reason: "not_planned",
+              });
+
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                body: closeCommentBody,
+              });
+
+              console.log(`Closed #${issueNumber} due to inactivity after stale warning.`);
+            }
