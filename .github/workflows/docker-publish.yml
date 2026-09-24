@@ -64,17 +64,23 @@ jobs:
         id: tags
         shell: bash
         env:
-          IMAGE: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
+          REGISTRY: ${{ env.REGISTRY }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          PRIMARY_IMAGE: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
           VERSION: ${{ inputs.version }}
           PUBLISH_LATEST: ${{ inputs.publish_latest }}
         run: |
           set -euo pipefail
+          OWNER_LOWER="$(echo "${REPO_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          LEGACY_IMAGE="${REGISTRY}/${OWNER_LOWER}/catgpt"
           {
             echo "value<<EOF"
             if [[ "$PUBLISH_LATEST" == "true" ]]; then
-              echo "$IMAGE:latest"
+              echo "$PRIMARY_IMAGE:latest"
+              echo "$LEGACY_IMAGE:latest"
             fi
-            echo "$IMAGE:$VERSION"
+            echo "$PRIMARY_IMAGE:$VERSION"
+            echo "$LEGACY_IMAGE:$VERSION"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
