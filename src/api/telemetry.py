@@ -25,6 +25,7 @@ class RequestLogEntry:
     duration_ms: float
     client_ip: str
     prompt_preview: str = ""
+    payload: str = ""
     response_preview: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -58,6 +59,7 @@ class TelemetryTracker:
         duration_ms: float,
         client_ip: str = "127.0.0.1",
         prompt_preview: str = "",
+        payload: str = "",
         response_preview: str = "",
     ) -> RequestLogEntry:
         self._total_requests += 1
@@ -82,6 +84,7 @@ class TelemetryTracker:
             duration_ms=round(duration_ms, 1),
             client_ip=client_ip,
             prompt_preview=prompt_preview[:120] if prompt_preview else "",
+            payload=payload[:2000] if payload else "",
             response_preview=response_preview[:120] if response_preview else "",
         )
         self._history.appendleft(entry)

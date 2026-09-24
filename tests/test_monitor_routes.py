@@ -104,6 +104,24 @@ class MonitorRoutesTests(unittest.TestCase):
         self.assertIn("requests", data)
         self.assertIn("total_requests", data["summary"])
 
+    def test_telemetry_captures_request_payload(self) -> None:
+        from src.api.telemetry import telemetry
+        telemetry.record_request(
+            method="POST",
+            path="/v1/chat/completions",
+            model="gpt-5.6-sol",
+            status_code=200,
+            duration_ms=150.0,
+            payload='{"model": "gpt-5.6-sol", "messages": [{"role": "user", "content": "hi"}]}',
+        )
+        resp = self.client.get("/v1/gateway/activity")
+        self.assertEqual(resp.status_code, 200)
+        recent = resp.json()["requests"]
+        self.assertTrue(len(recent) > 0)
+        entry = recent[0]
+        self.assertIn("messages", entry["payload"])
+        self.assertEqual(entry["model"], "gpt-5.6-sol")
+
 
 if __name__ == "__main__":
     unittest.main()

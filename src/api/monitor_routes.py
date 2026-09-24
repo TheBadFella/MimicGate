@@ -903,6 +903,7 @@ async def preview_dashboard() -> HTMLResponse:
         <table>
           <thead>
             <tr>
+              <th style="width: 28px;"></th>
               <th>Time</th>
               <th>Method</th>
               <th>Endpoint</th>
@@ -913,7 +914,7 @@ async def preview_dashboard() -> HTMLResponse:
             </tr>
           </thead>
           <tbody id="activity-table-body">
-            <tr><td colspan="7" style="text-align: center; color: var(--dash-muted); padding: 18px; font-family: var(--font-mono);">No request activity recorded yet.</td></tr>
+            <tr><td colspan="8" style="text-align: center; color: var(--dash-muted); padding: 18px; font-family: var(--font-mono);">No request activity recorded yet. Call /v1/chat/completions or use the Playground.</td></tr>
           </tbody>
         </table>
       </div>
@@ -1306,11 +1307,37 @@ async def preview_dashboard() -> HTMLResponse:
       }).join("");
     }
 
+    const expandedRequestIds = new Set();
+
+    function escapeHtml(str) {
+      if (!str) return "";
+      return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function toggleRequestDetail(id) {
+      const row = document.getElementById(`detail-${id}`);
+      const arrow = document.getElementById(`arrow-${id}`);
+      if (!row) return;
+      if (expandedRequestIds.has(id)) {
+        expandedRequestIds.delete(id);
+        row.style.display = "none";
+        if (arrow) arrow.textContent = "▶";
+      } else {
+        expandedRequestIds.add(id);
+        row.style.display = "table-row";
+        if (arrow) arrow.textContent = "▼";
+      }
+    }
+
     function renderActivity(data) {
       const tbody = document.getElementById("activity-table-body");
       const requests = data.requests || [];
       if (!requests.length) {
-        tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--dash-muted); padding: 18px; font-family: var(--font-mono);">No request activity recorded yet. Call /v1/chat/completions to stream requests.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: var(--dash-muted); padding: 18px; font-family: var(--font-mono);">No request activity recorded yet. Call /v1/chat/completions or use the Playground.</td></tr>`;
         return;
       }
 
@@ -1320,8 +1347,16 @@ async def preview_dashboard() -> HTMLResponse:
           ? `<span style="color: var(--dash-good); font-family: var(--font-mono); font-weight: 700;">${req.status_code} OK</span>`
           : `<span style="color: var(--dash-bad); font-family: var(--font-mono); font-weight: 700;">${req.status_code} ERR</span>`;
 
+        const isExpanded = expandedRequestIds.has(req.id);
+        const arrowChar = isExpanded ? "▼" : "▶";
+        const detailDisplay = isExpanded ? "table-row" : "none";
+        const payloadFormatted = req.payload
+          ? escapeHtml(req.payload)
+          : "(No payload body - GET request or query only)";
+
         return `
-          <tr>
+          <tr class="activity-row" onclick="toggleRequestDetail('${req.id}')" style="cursor: pointer;" title="Click to toggle request details">
+            <td style="width: 28px; text-align: center; color: var(--dash-muted); font-size: 0.65rem;"><span id="arrow-${req.id}">${arrowChar}</span></td>
             <td class="mono">${req.time_str}</td>
             <td class="mono" style="font-weight: 700;">${req.method}</td>
             <td class="mono" style="max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${req.path}</td>
@@ -1329,6 +1364,17 @@ async def preview_dashboard() -> HTMLResponse:
             <td>${statusBadge}</td>
             <td class="mono">${req.duration_ms}ms</td>
             <td class="mono">${req.client_ip}</td>
+          </tr>
+          <tr id="detail-${req.id}" class="activity-detail-row" style="display: ${detailDisplay}; background: #0c0c0c;">
+            <td colspan="8" style="padding: 12px 18px; border-bottom: 1px solid var(--dash-border);">
+              <div style="display: flex; flex-direction: column; gap: 8px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                  <span style="font-family: var(--font-mono); font-size: 0.72rem; color: var(--dash-muted); text-transform: uppercase;">Request Payload &amp; Details (${req.id})</span>
+                  <span style="font-family: var(--font-mono); font-size: 0.72rem; color: var(--dash-accent);">${req.method} ${req.path} &bull; ${req.duration_ms}ms</span>
+                </div>
+                <pre style="background: #141414; border: 1px solid var(--dash-border); padding: 10px 12px; font-family: var(--font-mono); font-size: 0.75rem; color: #7dd3fc; max-height: 220px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; margin: 0;">${payloadFormatted}</pre>
+              </div>
+            </td>
           </tr>
         `;
       }).join("");

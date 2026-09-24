@@ -364,6 +364,15 @@ class TelemetryMiddleware:
         telemetry.request_started()
         start_time = time.monotonic()
         status_code = 200
+        request_body_chunks: list[bytes] = []
+
+        async def receive_wrapper() -> dict:
+            message = await receive()
+            if message["type"] == "http.request":
+                body = message.get("body", b"")
+                if body and len(b"".join(request_body_chunks)) < 16384:
+                    request_body_chunks.append(body)
+            return message
 
         async def send_wrapper(message: dict) -> None:
             nonlocal status_code
@@ -374,22 +383,42 @@ class TelemetryMiddleware:
         client = scope.get("client")
         client_host = client[0] if isinstance(client, tuple) and client else "127.0.0.1"
         method = scope.get("method", "GET")
+        detected_model = Config.provider_name()
+        payload_text = ""
 
         try:
-            await self.app(scope, receive, send_wrapper)
+            await self.app(scope, receive_wrapper, send_wrapper)
         except Exception:
             status_code = 500
             raise
         finally:
             duration_ms = (time.monotonic() - start_time) * 1000.0
             telemetry.request_finished()
+            if request_body_chunks:
+                try:
+                    import json
+                    raw_body = b"".join(request_body_chunks).decode("utf-8", errors="replace")
+                    try:
+                        parsed = json.loads(raw_body)
+                        if isinstance(parsed, dict):
+                            if parsed.get("model"):
+                                detected_model = str(parsed["model"])
+                            payload_text = json.dumps(parsed, indent=2)
+                        else:
+                            payload_text = raw_body[:1000]
+                    except Exception:
+                        payload_text = raw_body[:1000]
+                except Exception:
+                    pass
+
             telemetry.record_request(
                 method=method,
                 path=path,
-                model=Config.provider_name(),
+                model=detected_model,
                 status_code=status_code,
                 duration_ms=duration_ms,
                 client_ip=client_host,
+                payload=payload_text,
             )
 
 
