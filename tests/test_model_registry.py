@@ -13,12 +13,24 @@ class ModelRegistryTests(unittest.TestCase):
     def tearDown(self) -> None:
         model_registry.clear_discovered_models()
 
-    def test_public_models_include_browser_alias_and_configured_models(self) -> None:
+    def test_public_models_include_browser_aliases_and_configured_models(self) -> None:
         with patch.object(model_registry.Config, "CHATGPT_MODEL_ALIASES", "gpt-5.3=GPT-5.3,o3=o3"):
-            self.assertEqual(
-                model_registry.list_public_chat_models(),
-                ["catgpt-browser", "gpt-5.3", "o3"],
-            )
+            models = model_registry.list_public_chat_models()
+        self.assertEqual(
+            models,
+            ["mimicgate-browser", "catgpt-browser", "gpt-5.3", "o3"],
+        )
+        self.assertIn("mimicgate-browser", models)
+        self.assertIn("catgpt-browser", models)
+
+    def test_browser_model_aliases_are_both_supported(self) -> None:
+        with patch.object(model_registry.Config, "CHATGPT_MODEL_ALIASES", ""), patch.object(
+            model_registry.Config, "CHATGPT_DEFAULT_MODEL", ""
+        ):
+            self.assertTrue(model_registry.is_supported_chat_model("mimicgate-browser"))
+            self.assertTrue(model_registry.is_supported_chat_model("catgpt-browser"))
+            self.assertIsNone(model_registry.resolve_requested_model("mimicgate-browser"))
+            self.assertIsNone(model_registry.resolve_requested_model("catgpt-browser"))
 
     def test_default_models_match_current_advanced_picker(self) -> None:
         self.assertIn("gpt-5.6-sol", model_registry.list_public_chat_models())

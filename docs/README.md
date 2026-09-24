@@ -1,6 +1,9 @@
-# CatGPT Gateway Documentation
+# MimicGate Gateway Documentation
 
-Welcome to the CatGPT Gateway documentation. This directory contains detailed architectural guides, API references, provider configuration instructions, operational runbooks, and testing procedures.
+Welcome to the MimicGate Gateway documentation. This directory contains detailed architectural guides, API references, provider configuration instructions, operational runbooks, and testing procedures.
+
+> [!NOTE]
+> MimicGate was previously named CatGPT. The legacy `catgpt-browser` model ID, the `x-catgpt-*` request headers, the `catgpt` console script, the `CatGPTApp` import, and the `CATGPT_*` environment variables are all still supported.
 
 ---
 
@@ -53,12 +56,12 @@ Welcome to the CatGPT Gateway documentation. This directory contains detailed ar
 ### Configuration and Models
 
 - **[ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md)**
-  - Auto-generated, verified reference of all environment variables supported by CatGPT Gateway.
+  - Auto-generated, verified reference of all environment variables supported by MimicGate Gateway.
   - Grouped by functional category: Provider & Browser, Server & Security, Concurrency & Sessions, ChatGPT Settings, Gemini Settings, MiniMax Settings, and Long-Prompt Fallback.
   - Maintained automatically via `python scripts/generate_env_reference.py`.
 
 - **[MODEL_AND_REASONING_SELECTION.md](MODEL_AND_REASONING_SELECTION.md)**
-  - Explains how CatGPT interacts with provider model switchers before prompt dispatch.
+  - Explains how MimicGate interacts with provider model switchers before prompt dispatch.
   - ChatGPT model selector: configuring `CHATGPT_MODEL_ALIASES`, `CHATGPT_MODEL_SETTINGS`, effort menus (Instant, Medium, High, Extra High, Pro), and strict switching mode.
   - Gemini model selector: `<bard-mode-switcher>` automation, `GEMINI_DEFAULT_MODEL`, `GEMINI_MODEL_FALLBACK`, and model resolution logic.
 
@@ -70,7 +73,7 @@ Welcome to the CatGPT Gateway documentation. This directory contains detailed ar
   - Tool and function calling formats, tool choice handling, and retry mechanics.
   - Vision inputs (base64 data and image URLs) and file attachment handling.
   - Streaming compatibility (pseudo-SSE event stream forwarding).
-  - Native CatGPT REST endpoints (`/chat`, `/thread/new`, `/thread/{id}/chat`, `/threads`, `/status`).
+  - Native MimicGate REST endpoints (`/chat`, `/thread/new`, `/thread/{id}/chat`, `/threads`, `/status`).
   - Terminal chat client (TUI) commands.
   - Comprehensive provider capability comparison table across Claude, ChatGPT, and Gemini.
 

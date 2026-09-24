@@ -11,13 +11,16 @@ from dataclasses import dataclass
 
 from src.config import Config
 
-PUBLIC_BROWSER_MODEL_ID = "catgpt-browser"
+PUBLIC_BROWSER_MODEL_ID = "mimicgate-browser"
+# Legacy alias kept for backwards compatibility with existing clients.
+LEGACY_BROWSER_MODEL_ID = "catgpt-browser"
 _AUTO_MODEL_IDS = {
     "",
     "auto",
     "default",
     "browser",
     PUBLIC_BROWSER_MODEL_ID,
+    LEGACY_BROWSER_MODEL_ID,
 }
 _DYNAMIC_MODEL_ID = re.compile(r"^(?:gpt-[a-z0-9][a-z0-9._-]*|o\d[a-z0-9._-]*)$")
 _DISCOVERED_MODEL_ID = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
@@ -283,7 +286,7 @@ def list_public_chat_models() -> list[str]:
     """Return base ids plus live-discovered reasoning variants."""
     options = list_switchable_models()
     aliases = _family_aliases(options)
-    model_ids = [PUBLIC_BROWSER_MODEL_ID]
+    model_ids = [PUBLIC_BROWSER_MODEL_ID, LEGACY_BROWSER_MODEL_ID]
     for option in options:
         model_ids.append(option.public_id)
         model_ids.extend(
@@ -385,8 +388,9 @@ def resolve_requested_model(model: str) -> BrowserModelOption | None:
     """
     Resolve the requested public model id to a ChatGPT UI label.
 
-    `catgpt-browser` and other auto aliases only trigger a model switch when
-    `CHATGPT_DEFAULT_MODEL` is configured to one of the explicit models.
+    `mimicgate-browser` (and the legacy `catgpt-browser` alias) and other auto
+    aliases only trigger a model switch when `CHATGPT_DEFAULT_MODEL` is
+    configured to one of the explicit models.
     """
     return resolve_model_request(model).model
 

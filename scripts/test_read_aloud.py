@@ -7,8 +7,8 @@ Tests:
   2. POST /v1/chat/completions with read_aloud=true
 
 Prerequisites:
-  - CatGPT API server running: python -m src.api.server
-  - OR Docker: docker compose up --build -d catgpt
+  - MimicGate API server running: python -m src.api.server
+  - OR Docker: docker compose up --build -d mimicgate
   - Logged in to ChatGPT in the browser session
   - pip install requests
 
@@ -33,9 +33,9 @@ except ImportError:
     sys.exit(1)
 
 
-BASE_URL = os.environ.get("CATGPT_BASE_URL", "http://localhost:8000")
-API_KEY = os.environ.get("CATGPT_API_KEY", "dummy123")
-MODEL = os.environ.get("CATGPT_MODEL", "catgpt-browser")
+BASE_URL = os.environ.get("MIMICGATE_BASE_URL", "http://localhost:8000")
+API_KEY = os.environ.get("MIMICGATE_API_KEY", "dummy123")
+MODEL = os.environ.get("MIMICGATE_MODEL", "mimicgate-browser")
 
 HEADERS = {
     "Content-Type": "application/json",
@@ -137,7 +137,7 @@ def test_chat_endpoint(message: str) -> bool:
 
     if "has_audio" not in data:
         print("  FAILED: response does not include the has_audio field")
-        print("  Tip: restart/rebuild the CatGPT server so it runs the new read_aloud code.")
+        print("  Tip: restart/rebuild the MimicGate server so it runs the new read_aloud code.")
         return False
 
     if not data.get("has_audio"):
@@ -195,7 +195,7 @@ def test_openai_endpoint(message: str) -> bool:
 
     if "audio" not in message_data:
         print("  FAILED: response does not include message.audio")
-        print("  Tip: restart/rebuild the CatGPT server so it runs the new read_aloud code.")
+        print("  Tip: restart/rebuild the MimicGate server so it runs the new read_aloud code.")
         return False
 
     ok = validate_audio_payload(message_data.get("audio"))
@@ -205,7 +205,7 @@ def test_openai_endpoint(message: str) -> bool:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Test CatGPT read-aloud audio capture")
+    parser = argparse.ArgumentParser(description="Test MimicGate read-aloud audio capture")
     parser.add_argument("--message", default=DEFAULT_MESSAGE, help="Message to send")
     parser.add_argument("--skip-chat", action="store_true", help="Skip native /chat endpoint")
     parser.add_argument("--skip-openai", action="store_true", help="Skip /v1/chat/completions endpoint")

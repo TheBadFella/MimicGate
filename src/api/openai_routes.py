@@ -134,6 +134,8 @@ _APP_THREAD_TTL_SECONDS = max(300, Config.API_APP_THREAD_TTL_SECONDS)
 _APP_KEY_HEADERS = (
     "x-session-id",
     "session-id",
+    "x-mimicgate-app-key",
+    # Legacy header retained for backwards compatibility with existing clients.
     "x-catgpt-app-key",
     "x-app-name",
     "x-client-name",
@@ -141,8 +143,20 @@ _APP_KEY_HEADERS = (
     "x-application-name",
     "x-requested-with",
 )
-_CONVERSATION_ID_HEADER = "x-catgpt-conversation-id"
-_THREAD_MODE_HEADER = "x-catgpt-thread-mode"
+# New MimicGate headers take precedence; the legacy x-catgpt-* names remain supported.
+_CONVERSATION_ID_HEADERS = ("x-mimicgate-conversation-id", "x-catgpt-conversation-id")
+_THREAD_MODE_HEADERS = ("x-mimicgate-thread-mode", "x-catgpt-thread-mode")
+
+
+def _first_header_value(headers: Any, names: tuple[str, ...]) -> str:
+    """Return the first non-empty header value among `names`."""
+    for name in names:
+        value = (headers.get(name) or "").strip()
+        if value:
+            return value
+    return ""
+
+
 _THREAD_TITLE_TTL_SECONDS = 600
 _thread_title_lock = asyncio.Lock()
 _thread_titles: dict[str, tuple[float, str]] = {}
@@ -311,7 +325,7 @@ def _conversation_id_from_request(
 ) -> str:
     value = (request.conversation_id or "").strip()
     if not value and http_request is not None:
-        value = (http_request.headers.get(_CONVERSATION_ID_HEADER) or "").strip()
+        value = _first_header_value(http_request.headers, _CONVERSATION_ID_HEADERS)
     if len(value) > 256:
         raise HTTPException(status_code=400, detail="conversation id is too long")
     return value
@@ -875,7 +889,7 @@ def _contains_attachment(content) -> bool:
     return any(_contains_attachment(value) for value in content.values())
 
 
-async def _download_file(url_or_data: str | dict, download_dir: str = "/tmp/catgpt_files") -> str | None:
+async def _download_file(url_or_data: str | dict, download_dir: str = "/tmp/mimicgate_files") -> str | None:
     """
     Download / decode a file (image, PDF, etc.) from URL, base64 data URL,
     or a file attachment dict. Returns the local file path.
@@ -1822,7 +1836,7 @@ def _validate_chat_request(
     if fresh_thread and (request.thread_id or request.conversation_id):
         raise HTTPException(
             status_code=400,
-            detail="X-CatGPT-Thread-Mode: fresh cannot be combined with thread_id or conversation_id",
+            detail="X-MimicGate-Thread-Mode: fresh cannot be combined with thread_id or conversation_id",
         )
 
     page_extraction_mode = _page_extraction_mode(request)
@@ -1871,7 +1885,7 @@ def _resolve_model_id(requested: str | None) -> str:
             return resolved.public_id
 
         supported = ", ".join(list_gemini_model_ids())
-        docs_url = "https://github.com/TheBadFella/CatGPT/blob/main/docs/MODEL_AND_REASONING_SELECTION.md"
+        docs_url = "https://github.com/TheBadFella/MimicGate/blob/main/docs/MODEL_AND_REASONING_SELECTION.md"
 
         if not Config.GEMINI_MODEL_FALLBACK:
             log.error(
@@ -2129,7 +2143,7 @@ async def list_models() -> ModelListResponse:
         except Exception as exc:
             log.warning("Could not refresh models from the live ChatGPT picker: %s", exc)
     return ModelListResponse(
-        data=[ModelObject(id=model_id, owned_by="catgpt") for model_id in list_public_chat_models()]
+        data=[ModelObject(id=model_id, owned_by=Config.provider_owner()) for model_id in list_public_chat_models()]
     )
 
 
@@ -2704,7 +2718,7 @@ def _validate_responses_request(
     if fresh_thread and (request.conversation or request.previous_response_id):
         raise HTTPException(
             status_code=400,
-            detail="X-CatGPT-Thread-Mode: fresh cannot be combined with conversation or previous_response_id",
+            detail="X-MimicGate-Thread-Mode: fresh cannot be combined with conversation or previous_response_id",
         )
 
     if request.conversation is not None and not _responses_conversation_id(request.conversation):
@@ -2716,13 +2730,13 @@ def _validate_responses_request(
 def _fresh_thread_from_header(http_request: Request | None) -> bool:
     if http_request is None:
         return False
-    value = (http_request.headers.get(_THREAD_MODE_HEADER) or "").strip().lower()
+    value = _first_header_value(http_request.headers, _THREAD_MODE_HEADERS).lower()
     if not value:
         return False
     if value != "fresh":
         raise HTTPException(
             status_code=400,
-            detail="Unsupported X-CatGPT-Thread-Mode. Supported value: fresh",
+            detail="Unsupported X-MimicGate-Thread-Mode. Supported value: fresh",
         )
     return True
 
@@ -2902,7 +2916,7 @@ async def _execute_chat_completion(
     if fresh_thread and header_conversation_id:
         raise HTTPException(
             status_code=400,
-            detail="X-CatGPT-Thread-Mode: fresh cannot be combined with conversation_id",
+            detail="X-MimicGate-Thread-Mode: fresh cannot be combined with conversation_id",
         )
     if header_conversation_id and header_conversation_id != (request.conversation_id or ""):
         request = _model_copy_compat(

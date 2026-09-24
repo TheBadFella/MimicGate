@@ -69,7 +69,7 @@ class ChatMessage(BaseModel):
 
 
 class PageExtractionOptions(BaseModel):
-    """CatGPT extension for structured page-by-page document extraction."""
+    """MimicGate extension for structured page-by-page document extraction."""
     mode: str = "structured"
 
 
@@ -84,7 +84,7 @@ class ReasoningOptions(BaseModel):
 
 class ChatCompletionRequest(BaseModel):
     """OpenAI-compatible chat completion request body."""
-    model: str = "catgpt-browser"
+    model: str = "mimicgate-browser"
     messages: list[ChatMessage]
     tools: Optional[list[ToolDefinition]] = None
     tool_choice: Optional[Union[str, dict]] = None  # "auto" | "none" | {"type":"function","function":{"name":"..."}}
@@ -101,10 +101,10 @@ class ChatCompletionRequest(BaseModel):
     reasoning: Optional[ReasoningOptions] = None
     # Durable logical conversation identity (also accepted via header).
     conversation_id: Optional[str] = None
-    # CatGPT extension: explicit thread targeting for app-level isolation.
+    # MimicGate extension: explicit thread targeting for app-level isolation.
     thread_id: Optional[str] = None
     response_format: Optional[Any] = None
-    # CatGPT extension: force structured page-by-page extraction for attachments.
+    # MimicGate extension: force structured page-by-page extraction for attachments.
     page_extraction: Optional[PageExtractionOptions] = None
     read_aloud: Optional[bool] = False
 
@@ -147,7 +147,7 @@ class ChatCompletionResponse(BaseModel):
     id: str = Field(default_factory=lambda: f"chatcmpl-{uuid.uuid4().hex[:24]}")
     object: str = "chat.completion"
     created: int = Field(default_factory=lambda: int(time.time()))
-    model: str = "catgpt-browser"
+    model: str = "mimicgate-browser"
     choices: list[Choice]
     usage: UsageInfo = Field(default_factory=UsageInfo)
 
@@ -162,7 +162,7 @@ class ChatCompletionJobResponse(BaseModel):
     object: str = "chat.completion.job"
     created: int = Field(default_factory=lambda: int(time.time()))
     status: str  # queued | running | completed | failed
-    model: str = "catgpt-browser"
+    model: str = "mimicgate-browser"
     response: Optional[ChatCompletionResponse] = None
     error: Optional[str] = None
     error_status_code: Optional[int] = None
@@ -176,7 +176,7 @@ class ModelObject(BaseModel):
     id: str
     object: str = "model"
     created: int = 1700000000
-    owned_by: str = "catgpt"
+    owned_by: str = "mimicgate"
 
 
 class ModelListResponse(BaseModel):
@@ -231,7 +231,7 @@ class ResponsesRequest(BaseModel):
 
     Minimal subset needed by Codex CLI/Desktop compatibility.
     """
-    model: str = "catgpt-browser"
+    model: str = "mimicgate-browser"
     input: Union[str, List[ResponseInputItem]]
     instructions: Optional[str] = None
     max_output_tokens: Optional[int] = None
@@ -246,7 +246,7 @@ class ResponsesRequest(BaseModel):
     conversation: Optional[Union[str, dict[str, Any]]] = None
     previous_response_id: Optional[str] = None
     store: Optional[bool] = True
-    # CatGPT extension
+    # MimicGate extension
     read_aloud: Optional[bool] = False
 
 
@@ -285,6 +285,6 @@ class ResponsesResponse(BaseModel):
     id: str = Field(default_factory=lambda: f"resp_{uuid.uuid4().hex[:24]}")
     object: str = "response"
     created: int = Field(default_factory=lambda: int(time.time()))
-    model: str = "catgpt-browser"
+    model: str = "mimicgate-browser"
     output: list[Union[ResponseOutputMessage, ResponseOutputToolCall]] = Field(default_factory=list)
     usage: ResponsesUsageInfo = Field(default_factory=ResponsesUsageInfo)

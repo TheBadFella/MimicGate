@@ -128,10 +128,20 @@ async def _collect_stream(stream_response) -> list[bytes]:
 
 class OpenAIRoutesHelpersTests(unittest.TestCase):
     def test_fresh_thread_header_validation(self) -> None:
-        self.assertTrue(_fresh_thread_from_header(_make_request({"x-catgpt-thread-mode": "fresh"})))
+        for header in ("x-mimicgate-thread-mode", "x-catgpt-thread-mode"):
+            with self.subTest(header=header):
+                self.assertTrue(_fresh_thread_from_header(_make_request({header: "fresh"})))
+                with self.assertRaises(HTTPException):
+                    _fresh_thread_from_header(_make_request({header: "reuse"}))
         self.assertFalse(_fresh_thread_from_header(_make_request()))
+
+    def test_mimicgate_header_takes_precedence_over_legacy(self) -> None:
+        request = _make_request({
+            "x-mimicgate-thread-mode": "reuse",
+            "x-catgpt-thread-mode": "fresh",
+        })
         with self.assertRaises(HTTPException):
-            _fresh_thread_from_header(_make_request({"x-catgpt-thread-mode": "reuse"}))
+            _fresh_thread_from_header(request)
 
     def test_fresh_thread_rejects_explicit_routing(self) -> None:
         for field in ("conversation_id", "thread_id"):

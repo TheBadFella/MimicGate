@@ -98,7 +98,7 @@ def build_show_payload(profile: OllamaModelProfile) -> dict:
         "system": "",
         "details": _details_dict(profile),
         "model_info": {
-            "general.architecture": "catgpt-browser",
+            "general.architecture": "mimicgate-browser",
             "general.parameter_count": profile.parameter_size,
             "general.quantization_version": profile.quantization_level,
             "general.capability": profile.capability,
@@ -211,7 +211,7 @@ def _build_profile(name: str, capability: str) -> OllamaModelProfile:
     size = _stable_size_bytes(name, capability)
     parameter_size = "browser-managed" if capability == "chat" else f"{Config.OLLAMA_EMBEDDING_DIMENSIONS}d"
     quantization = "compat" if capability == "chat" else "compat-embed"
-    family = "catgpt-browser" if capability == "chat" else "catgpt-embed"
+    family = "mimicgate-browser" if capability == "chat" else "mimicgate-embed"
     return OllamaModelProfile(
         name=name,
         capability=capability,

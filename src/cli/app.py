@@ -1,13 +1,16 @@
 """
-CATGPT — OpenAI-Compatible Terminal Chat
+MIMICGATE — OpenAI-Compatible Terminal Chat
 
-A beautiful full-screen TUI that talks to CatGPT Gateway (or any OpenAI-compatible API).
+A beautiful full-screen TUI that talks to MimicGate Gateway (or any OpenAI-compatible API).
 Uses the standard openai Python SDK — no browser management, no Playwright.
 
 Configuration (env vars or CLI flags):
-  CATGPT_API_URL    API base URL  (default: http://localhost:8000/v1)
-  CATGPT_API_KEY    Bearer token  (default: dummy123)
-  CATGPT_MODEL      Model name    (default: catgpt-browser)
+  MIMICGATE_API_URL    API base URL  (default: http://localhost:8000/v1)
+  MIMICGATE_API_KEY    Bearer token  (default: dummy123)
+  MIMICGATE_MODEL      Model name    (default: mimicgate-browser)
+
+The legacy CATGPT_API_URL / CATGPT_API_KEY / CATGPT_MODEL names are still
+accepted as fallbacks for backwards compatibility.
 
 Commands:
   /help              Show this help
@@ -54,7 +57,7 @@ cli = typer.Typer(no_args_is_help=False, add_completion=False)
 
 # ── Constants ────────────────────────────────────────────────────
 VERSION = "8.0.0"
-APP_NAME = "CATGPT"
+APP_NAME = "MIMICGATE"
 APP_TAGLINE = "OpenAI-Compatible Terminal Chat"
 
 THINKING_FRAMES = ["◐", "◓", "◑", "◒"]
@@ -67,15 +70,14 @@ CAT_ART = """\
     (_|   |_)"""
 
 LOGO_TEXT = """\
- ██████╗  █████╗ ████████╗ ██████╗ ██████╗ ████████╗
-██╔════╝ ██╔══██╗╚══██╔══╝██╔════╝ ██╔══██╗╚══██╔══╝
-██║      ███████║   ██║   ██║  ███╗██████╔╝   ██║
-██║      ██╔══██║   ██║   ██║   ██║██╔═══╝    ██║
-╚██████╗ ██║  ██║   ██║   ╚██████╔╝██║        ██║
- ╚═════╝ ╚═╝  ╚═╝   ╚═╝    ╚═════╝ ╚═╝        ╚═╝"""
+█   █ █ █   █ █  ███   ███   ███  █████ █████
+██ ██ █ ██ ██ █ █     █     █   █   █   █    
+█ █ █ █ █ █ █ █ █     █ ██  █████   █   ████ 
+█   █ █ █   █ █ █     █  █  █   █   █   █    
+█   █ █ █   █ █  ███   ███  █   █   █   █████"""
 
 WELCOME_TEMPLATE = """\
-[bold #58a6ff]─── Welcome to CATGPT v{version} ───[/]
+[bold #58a6ff]─── Welcome to MIMICGATE v{version} ───[/]
 
 [#8b949e]Talking to:[/]  [#e6edf3]{url}[/]
 [#8b949e]Model:[/]       [#58a6ff]{model}[/]
@@ -256,16 +258,22 @@ class ChatScreen(Screen):
     def __init__(self) -> None:
         super().__init__()
         self.api_url = (
-            os.getenv("CATGPT_API_URL")
+            os.getenv("MIMICGATE_API_URL")
+            or os.getenv("CATGPT_API_URL")
             or os.getenv("OPENAI_API_BASE")
             or "http://localhost:8000/v1"
         )
         self.api_key = (
-            os.getenv("CATGPT_API_KEY")
+            os.getenv("MIMICGATE_API_KEY")
+            or os.getenv("CATGPT_API_KEY")
             or os.getenv("OPENAI_API_KEY")
             or "dummy123"
         )
-        self.model = os.getenv("CATGPT_MODEL") or "catgpt-browser"
+        self.model = (
+            os.getenv("MIMICGATE_MODEL")
+            or os.getenv("CATGPT_MODEL")
+            or "mimicgate-browser"
+        )
 
         self.messages: list[dict] = []       # full OpenAI-format conversation history
         self.system_prompt: str | None = None
@@ -298,7 +306,7 @@ class ChatScreen(Screen):
             with ScrollableContainer(id="chat-log"):
                 pass
         yield Input(
-            placeholder="Message CATGPT …  (/help for commands)",
+            placeholder="Message MIMICGATE …  (/help for commands)",
             id="chat-input",
         )
         yield Footer()
@@ -432,7 +440,7 @@ class ChatScreen(Screen):
 
     def _show_help(self) -> None:
         lines = [
-            "[bold #58a6ff]─── CATGPT Commands ───[/]\n",
+            "[bold #58a6ff]─── MIMICGATE Commands ───[/]\n",
             "  [#58a6ff]/new[/]               Start fresh (clears history & system prompt)",
             "  [#58a6ff]/clear[/]             Clear the display  (history preserved)",
             "  [#58a6ff]/system <text>[/]     Set a system prompt for this session",
@@ -449,7 +457,7 @@ class ChatScreen(Screen):
             "",
             "[dim italic]  Tip: /system 'You are a senior Python engineer' sets a persistent persona",
             "  Tip: /clear keeps history — the model still remembers previous turns",
-            "  Tip: Set CATGPT_API_URL / CATGPT_API_KEY / CATGPT_MODEL as env vars[/]",
+            "  Tip: Set MIMICGATE_API_URL / MIMICGATE_API_KEY / MIMICGATE_MODEL as env vars[/]",
         ]
         self._mount_system("\n".join(lines), "system-info-block")
 
@@ -469,7 +477,7 @@ class ChatScreen(Screen):
             else "[#6e7681]not set[/]"
         )
         lines = [
-            "[bold #58a6ff]─── CATGPT Status ───[/]\n",
+            "[bold #58a6ff]─── MIMICGATE Status ───[/]\n",
             f"  API URL         [#58a6ff]{self.api_url}[/]",
             f"  Model           [#58a6ff]{self.model}[/]",
             f"  Auth token      [#6e7681]{masked_key}[/]",
@@ -559,13 +567,13 @@ class ChatScreen(Screen):
     @work(exclusive=False, name="export")
     async def _do_export(self, filename: str) -> None:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        name = filename or f"catgpt-export-{ts}.md"
+        name = filename or f"mimicgate-export-{ts}.md"
         if not name.endswith(".md"):
             name += ".md"
         path = Path(name) if ("/" in name or "\\" in name) else Path.cwd() / name
 
         lines = [
-            f"# CATGPT Export — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n",
+            f"# MIMICGATE Export — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n",
             f"**Model:** `{self.model}`  ",
             f"**API:** `{self.api_url}`  ",
             f"**Turns:** {self.turn_count}  ",
@@ -651,17 +659,21 @@ class ChatScreen(Screen):
 # ================================================================
 
 
-class CatGPTApp(App):
-    """CATGPT — OpenAI-Compatible Terminal Chat."""
+class MimicGateApp(App):
+    """MIMICGATE — OpenAI-Compatible Terminal Chat."""
 
     TITLE = APP_NAME
     SUB_TITLE = APP_TAGLINE
-    CSS_PATH = "catgpt.tcss"
+    CSS_PATH = "mimicgate.tcss"
 
     SCREENS = {"chat": ChatScreen}
 
     def on_mount(self) -> None:
         self.push_screen(SplashScreen())
+
+
+# Backwards-compatible alias for existing integrations importing CatGPTApp.
+CatGPTApp = MimicGateApp
 
 
 # ================================================================
@@ -675,14 +687,14 @@ def chat(
     api_key: str = typer.Option(None, "--api-key", "-k", help="Bearer token"),
     model: str = typer.Option(None, "--model", "-m", help="Model name"),
 ) -> None:
-    """Start an interactive CATGPT terminal session."""
+    """Start an interactive MimicGate terminal session."""
     if api_url:
-        os.environ["CATGPT_API_URL"] = api_url
+        os.environ["MIMICGATE_API_URL"] = api_url
     if api_key:
-        os.environ["CATGPT_API_KEY"] = api_key
+        os.environ["MIMICGATE_API_KEY"] = api_key
     if model:
-        os.environ["CATGPT_MODEL"] = model
-    CatGPTApp().run()
+        os.environ["MIMICGATE_MODEL"] = model
+    MimicGateApp().run()
 
 
 def main() -> None:

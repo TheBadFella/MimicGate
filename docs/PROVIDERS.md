@@ -1,6 +1,6 @@
 # Supported Providers and Configuration
 
-CatGPT Gateway exposes browser-backed and API-backed AI services through OpenAI-compatible, Anthropic Messages, and Ollama APIs. This document lists all supported providers, outlines how to configure each one, summarizes key capabilities, and links to detailed guides across the documentation.
+MimicGate Gateway exposes browser-backed and API-backed AI services through OpenAI-compatible, Anthropic Messages, and Ollama APIs. This document lists all supported providers, outlines how to configure each one, summarizes key capabilities, and links to detailed guides across the documentation.
 
 ---
 
@@ -36,7 +36,7 @@ CatGPT Gateway exposes browser-backed and API-backed AI services through OpenAI-
 
 | Provider | Type | Default Model | Login / Auth Method | Notable Capabilities |
 |---|---|---|---|---|
-| **ChatGPT** | Persistent browser | `catgpt-browser` | Browser login (email/pass, Apple, MS, OTP) | Vision, files, DALL-E image generation, read-aloud TTS, model/effort picker |
+| **ChatGPT** | Persistent browser | `mimicgate-browser` | Browser login (email/pass, Apple, MS, OTP) | Vision, files, DALL-E image generation, read-aloud TTS, model/effort picker |
 | **Claude** | Persistent browser | `claude-browser` | Browser login (email OTP, password, Apple) | Vision, files, tool calling, Anthropic Messages adapter |
 | **Google Gemini** | Persistent browser | `gemini-browser` | Browser login (Google Account direct) | Vision, files, Imagen 3 image generation, Listen TTS audio, reasoning effort, model switcher |
 | **MiniMax** | Official API | `MiniMax-M2.7` | API Key (`MINIMAX_API_KEY`) | Fast text completions, zero browser overhead, no graphical display required |
@@ -63,7 +63,7 @@ CHATGPT_LONG_PROMPT_FALLBACK=attachment
 Key configuration options:
 - `PROVIDER`: Set to `chatgpt` (the default).
 - `BROWSER_DATA_DIR`: Directory where session cookies and tokens are persisted (default: `browser_data`).
-- `CHATGPT_DEFAULT_MODEL`: Default model mapping when requests specify `catgpt-browser` or omit a model.
+- `CHATGPT_DEFAULT_MODEL`: Default model mapping when requests specify `mimicgate-browser` or omit a model.
 - `CHATGPT_PROJECT_URL`: Optional project URL (e.g. `https://chatgpt.com/g/g-p-.../project`) to restrict conversations to a workspace project.
 - `CHATGPT_MODEL_ALIASES` & `CHATGPT_MODEL_SETTINGS`: Custom model labels and effort levels.
 - `CHATGPT_LONG_PROMPT_FALLBACK`: Uploads oversized requests as text attachments when the composer limit is exceeded.
@@ -210,7 +210,7 @@ To switch providers:
    PROVIDER=gemini
    BROWSER_DATA_DIR=./browser_data_gemini
    ```
-2. For Docker, ensure `PROVIDER` is updated in `docker-compose.yml` under `services.catgpt.environment`, then restart:
+2. For Docker, ensure `PROVIDER` is updated in `docker-compose.yml` under `services.mimicgate.environment`, then restart:
    ```bash
    docker compose up --build -d
    ```

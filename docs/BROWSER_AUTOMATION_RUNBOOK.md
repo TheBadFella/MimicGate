@@ -1,7 +1,7 @@
 # Chrome and Playwright Runbook
 
-This file records the manual browser workflow used while testing CatGPT issues.
-CatGPT stores login state in `browser_data/`; only one Chrome/Chromium process can
+This file records the manual browser workflow used while testing MimicGate issues.
+MimicGate stores login state in `browser_data/`; only one Chrome/Chromium process can
 use that profile at a time.
 
 ## Open Chrome for Login
@@ -76,5 +76,5 @@ curl http://localhost:8000/status
 
 For issue #42, use a prompt that forces an early code block plus a final
 sentinel. The extracted response should include both the code marker and the
-final sentinel. If only the code marker is present, CatGPT clicked an inline
+final sentinel. If only the code marker is present, MimicGate clicked an inline
 code-block copy button instead of the response-level copy button.

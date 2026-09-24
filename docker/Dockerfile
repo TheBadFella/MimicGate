@@ -1,11 +1,11 @@
-# ── Stage 1: Build CatGPT with jlesage/baseimage-gui ────────────
+# ── Stage 1: Build MimicGate with jlesage/baseimage-gui ─────────
 FROM jlesage/baseimage-gui:debian-12-v4
 
 # Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Application settings for jlesage GUI
-RUN set-cont-env APP_NAME "CatGPT"
+RUN set-cont-env APP_NAME "MimicGate"
 ENV KEEP_APP_RUNNING=1
 
 # ── System dependencies ─────────────────────────────────────────
@@ -73,10 +73,10 @@ COPY scripts/ scripts/
 RUN mkdir -p /app/browser_data /app/logs /app/state /app/downloads/images /app/downloads/audio
 
 # ── GUI initialization & startup scripts ────────────────────────
-COPY docker/50-catgpt-init.sh /etc/cont-init.d/50-catgpt-init.sh
+COPY docker/50-mimicgate-init.sh /etc/cont-init.d/50-mimicgate-init.sh
 COPY docker/startapp.sh /startapp.sh
-RUN sed -i 's/\r$//' /etc/cont-init.d/50-catgpt-init.sh /startapp.sh && \
-    chmod +x /etc/cont-init.d/50-catgpt-init.sh /startapp.sh
+RUN sed -i 's/\r$//' /etc/cont-init.d/50-mimicgate-init.sh /startapp.sh && \
+    chmod +x /etc/cont-init.d/50-mimicgate-init.sh /startapp.sh
 
 # ── App Environment Variables ───────────────────────────────────
 ENV HEADLESS=false

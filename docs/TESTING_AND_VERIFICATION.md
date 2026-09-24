@@ -1,6 +1,6 @@
-# Testing CatGPT
+# Testing MimicGate
 
-CatGPT uses a locked `uv` environment for repeatable local and CI tests.
+MimicGate uses a locked `uv` environment for repeatable local and CI tests.
 
 ```bash
 uv sync --frozen --group dev
@@ -16,10 +16,10 @@ Validate the Compose model without starting services:
 
 ```bash
 docker compose config --quiet
-docker build -f docker/Dockerfile -t catgpt:test .
+docker build -f docker/Dockerfile -t mimicgate:test .
 ```
 
-The container persists the browser profile, logs, and durable conversation database beneath `${DOCKERDIR}/appdata/catgpt`. The SQLite database stores conversation text in plaintext.
+The container persists the browser profile, logs, and durable conversation database beneath `${DOCKERDIR}/appdata/mimicgate`. The SQLite database stores conversation text in plaintext.
 
 ## Browser smoke checks
 
@@ -31,12 +31,12 @@ uv run python scripts/diagnose_chatgpt.py
 uv run python scripts/test_multi_turn.py
 ```
 
-For API-level verification, start CatGPT and exercise these cases:
+For API-level verification, start MimicGate and exercise these cases:
 
 1. Call `/v1/models` and confirm the live ChatGPT model/reasoning variants appear.
 2. Send two turns with the same `conversation_id`; confirm the second call reuses the thread and does not duplicate verified history.
-3. Change an earlier message under that ID; confirm CatGPT starts a new thread.
-4. Send `X-CatGPT-Thread-Mode: fresh`; confirm it does not reuse a prior thread.
+3. Change an earlier message under that ID; confirm MimicGate starts a new thread.
+4. Send `X-MimicGate-Thread-Mode: fresh`; confirm it does not reuse a prior thread.
 5. If `CHATGPT_PROJECT_URL` is configured, confirm every resulting `/c/...` URL remains under the project.
 6. Exercise `tool_choice` values `none`, `required`, and a named function.
 

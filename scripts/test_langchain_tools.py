@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-LangChain test script for the OpenAI-compatible CatGPT API.
+LangChain test script for the OpenAI-compatible MimicGate API.
 
 Tests:
   1. Simple chat (no tools)
@@ -10,7 +10,7 @@ Tests:
   5. Image input (single image + text, multiple images)
 
 Prerequisites:
-  - CatGPT API server running: python -m src.api.server
+  - MimicGate API server running: python -m src.api.server
   - pip install langchain langchain-openai openai
 
 Usage:
@@ -47,8 +47,8 @@ if _provider == "minimax":
 elif _provider == "claude":
     MODEL = "claude-browser"
 else:
-    MODEL = "catgpt-browser"
-API_KEY = "dummy123"  # CatGPT doesn't require auth
+    MODEL = "mimicgate-browser"
+API_KEY = "dummy123"  # MimicGate doesn't require auth
 
 # Image test assets
 IMAGE_DIR = Path(__file__).resolve().parent.parent / "downloads" / "images"
@@ -529,7 +529,7 @@ def test_file_attachment():
 
 def main():
     print("=" * 60)
-    print("  CatGPT — LangChain OpenAI-Compatible API Tests")
+    print("  MimicGate — LangChain OpenAI-Compatible API Tests")
     print("=" * 60)
     print(f"\nBase URL: {BASE_URL}")
     print(f"Model:    {MODEL}")

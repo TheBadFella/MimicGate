@@ -180,7 +180,7 @@ class ChatGPTClient:
 
         # 1. Switch model if requested before interacting with the composer
         if model or reasoning_effort:
-            await self.ensure_model(model or "catgpt-browser", reasoning_effort=reasoning_effort)
+            await self.ensure_model(model or "mimicgate-browser", reasoning_effort=reasoning_effort)
 
         # 2. Brief pause (human would take a moment to start typing)
         await random_delay(250, 700)
@@ -990,7 +990,7 @@ class ChatGPTClient:
     def _create_prompt_attachment(text: str) -> str:
         """Persist a prompt as a UTF-8 temporary file for ChatGPT upload."""
         file_descriptor, filename = tempfile.mkstemp(
-            prefix="catgpt-long-prompt-",
+            prefix="mimicgate-long-prompt-",
             suffix=".txt",
         )
         try:

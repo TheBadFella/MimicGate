@@ -93,30 +93,39 @@ SECTIONS: tuple[tuple[str, tuple[tuple[str, str, str], ...]], ...] = (
         ("OLLAMA_ACTIVE_MODEL_TTL_SECONDS", "900", "How long active models remain listed."),
     )),
     ("Terminal client", (
-        ("CATGPT_API_URL", "http://localhost:8000/v1", "OpenAI-compatible base URL used by the terminal client."),
+        ("MIMICGATE_API_URL", "http://localhost:8000/v1", "OpenAI-compatible base URL used by the terminal client."),
+        ("CATGPT_API_URL", "empty", "Legacy alias accepted when `MIMICGATE_API_URL` is unset."),
         ("OPENAI_API_BASE", "empty", "Fallback API base URL used by the terminal client."),
-        ("CATGPT_API_KEY", "OPENAI_API_KEY or dummy123", "Terminal-client token; also the Compose input for `API_TOKEN`."),
+        ("MIMICGATE_API_KEY", "OPENAI_API_KEY or dummy123", "Terminal-client token; also the Compose input for `API_TOKEN`."),
+        ("CATGPT_API_KEY", "empty", "Legacy alias accepted when `MIMICGATE_API_KEY` is unset; also a legacy Compose input for `API_TOKEN`."),
         ("OPENAI_API_KEY", "empty", "Fallback terminal-client token."),
-        ("CATGPT_MODEL", "catgpt-browser", "Default terminal-client model."),
+        ("MIMICGATE_MODEL", "mimicgate-browser", "Default terminal-client model."),
+        ("CATGPT_MODEL", "empty", "Legacy alias accepted when `MIMICGATE_MODEL` is unset."),
     )),
     ("Container GUI", (
-        ("APP_NAME", "CatGPT", "Name displayed by the container GUI."),
+        ("APP_NAME", "MimicGate", "Name displayed by the container GUI."),
         ("SECURE_CONNECTION", "0", "Enable HTTPS in the jlesage web GUI."),
         ("KEEP_APP_RUNNING", "1", "Keep the GUI container alive when the app exits."),
         ("USER_ID", "1000", "Container process user ID."),
         ("GROUP_ID", "1000", "Container process group ID."),
-        ("VNC_PASSWORD", "catgpt", "Web GUI/VNC password."),
+        ("VNC_PASSWORD", "mimicgate", "Web GUI/VNC password."),
     )),
 )
 
 COMPOSE_INPUTS: tuple[tuple[str, str, str], ...] = (
-    ("DOCKERDIR", ".", "Host directory under which persistent `appdata/catgpt` volumes are created."),
-    ("CATGPT_IMAGE", "ghcr.io/thebadfella/catgpt:latest", "Container image used by Compose."),
-    ("CATGPT_PULL_POLICY", "missing", "Compose image pull policy."),
-    ("CATGPT_USER_ID", "1000", "Host user ID mapped to container `USER_ID`."),
-    ("CATGPT_GROUP_ID", "1000", "Host group ID mapped to container `GROUP_ID`."),
-    ("CATGPT_API_KEY", "dummy123", "Value passed to container `API_TOKEN`."),
-    ("CATGPT_VNC_PASSWORD", "catgpt", "Value passed to container `VNC_PASSWORD`."),
+    ("DOCKERDIR", ".", "Host directory under which persistent `appdata/mimicgate` volumes are created."),
+    ("MIMICGATE_IMAGE", "ghcr.io/thebadfella/mimicgate:latest", "Container image used by Compose."),
+    ("CATGPT_IMAGE", "empty", "Legacy alias for `MIMICGATE_IMAGE`."),
+    ("MIMICGATE_PULL_POLICY", "missing", "Compose image pull policy."),
+    ("CATGPT_PULL_POLICY", "empty", "Legacy alias for `MIMICGATE_PULL_POLICY`."),
+    ("MIMICGATE_USER_ID", "1000", "Host user ID mapped to container `USER_ID`."),
+    ("CATGPT_USER_ID", "empty", "Legacy alias for `MIMICGATE_USER_ID`."),
+    ("MIMICGATE_GROUP_ID", "1000", "Host group ID mapped to container `GROUP_ID`."),
+    ("CATGPT_GROUP_ID", "empty", "Legacy alias for `MIMICGATE_GROUP_ID`."),
+    ("MIMICGATE_API_KEY", "dummy123", "Value passed to container `API_TOKEN`."),
+    ("CATGPT_API_KEY", "empty", "Legacy alias for `MIMICGATE_API_KEY`."),
+    ("MIMICGATE_VNC_PASSWORD", "mimicgate", "Value passed to container `VNC_PASSWORD`."),
+    ("CATGPT_VNC_PASSWORD", "empty", "Legacy alias for `MIMICGATE_VNC_PASSWORD`."),
     ("PROVIDER", "chatgpt", "Provider passed through to the container."),
     ("MINIMAX_REGION", "global_en", "MiniMax region passed through to the container."),
     ("MINIMAX_BASE_URL", "empty", "Optional MiniMax base URL passed through to the container."),
@@ -130,7 +139,9 @@ COMPOSE_INPUTS: tuple[tuple[str, str, str], ...] = (
 )
 
 DYNAMIC_SOURCE_VARIABLES = {"DISPLAY_WIDTH", "DISPLAY_HEIGHT"}
-COMPOSE_SUBSTITUTION_RE = re.compile(r"\$\{([A-Z][A-Z0-9_]*)(?::-([^}]*))?\}")
+# Matches every `${NAME` occurrence, including the inner name of a nested
+# default such as `${MIMICGATE_IMAGE:-${CATGPT_IMAGE:-default}}`.
+COMPOSE_SUBSTITUTION_RE = re.compile(r"\$\{([A-Z][A-Z0-9_]*)")
 COMPOSE_KEY_RE = re.compile(r"^\s{6}([A-Z][A-Z0-9_]*):", re.MULTILINE)
 
 
@@ -222,10 +233,10 @@ def render() -> str:
         "Compose reads a root `.env` file for `${...}` substitution. Start with only the values you want to change:",
         "",
         "```dotenv",
-        "CATGPT_API_KEY=replace-me",
-        "CATGPT_VNC_PASSWORD=replace-me",
-        "CATGPT_USER_ID=1000",
-        "CATGPT_GROUP_ID=1000",
+        "MIMICGATE_API_KEY=replace-me",
+        "MIMICGATE_VNC_PASSWORD=replace-me",
+        "MIMICGATE_USER_ID=1000",
+        "MIMICGATE_GROUP_ID=1000",
         "```",
         "",
         "These are the variables consumed directly by `docker-compose.yml`:",
@@ -233,7 +244,7 @@ def render() -> str:
         *_table(COMPOSE_INPUTS),
         "",
         "> [!IMPORTANT]",
-        "> A variable in `.env` is not automatically available inside the container. For a runtime variable not listed above, add it under `services.catgpt.environment` in `docker-compose.yml` (or a Compose override).",
+        "> A variable in `.env` is not automatically available inside the container. For a runtime variable not listed above, add it under `services.mimicgate.environment` in `docker-compose.yml` (or a Compose override).",
         "",
         "## Direct and container runtime variables",
         "",

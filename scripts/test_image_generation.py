@@ -3,7 +3,7 @@
 Test script for the OpenAI-compatible Image Generation endpoint.
 
 Tests the POST /v1/images/generations endpoint by generating images
-via the CatGPT API and verifying the response format matches OpenAI's spec.
+via the MimicGate API and verifying the response format matches OpenAI's spec.
 
 Tests:
   1. Generate a single image (b64_json format)
@@ -12,8 +12,8 @@ Tests:
   4. Use the OpenAI SDK client.images.generate()
 
 Prerequisites:
-  - CatGPT API server running: python -m src.api.server
-  - OR Docker: docker compose up --build -d catgpt
+  - MimicGate API server running: python -m src.api.server
+  - OR Docker: docker compose up --build -d mimicgate
   - pip install openai requests
 
 Usage:
@@ -279,7 +279,7 @@ def test_4_openai_sdk():
 
 def main():
     print("\n" + "=" * 70)
-    print("  CatGPT — Image Generation API Test Suite")
+    print("  MimicGate — Image Generation API Test Suite")
     print("  Endpoint: POST /v1/images/generations")
     print(f"  Server:   {BASE_URL}")
     print("=" * 70)
@@ -294,7 +294,7 @@ def main():
     except requests.ConnectionError:
         print(f"\n  ERROR: Cannot connect to {BASE_URL}")
         print("  Start the server: python -m src.api.server")
-        print("  Or Docker: docker compose up --build -d catgpt")
+        print("  Or Docker: docker compose up --build -d mimicgate")
         sys.exit(1)
 
     # Verify auth works

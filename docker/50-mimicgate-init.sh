@@ -1,9 +1,9 @@
 #!/bin/sh
 set -e
 
-# ── CatGPT Container Initialization (runs as root before startapp.sh) ──
+# ── MimicGate Container Initialization (runs as root before startapp.sh) ──
 
-echo "[catgpt-init] Preparing runtime directories..."
+echo "[mimicgate-init] Preparing runtime directories..."
 mkdir -p /app/browser_data /app/logs /app/state /app/downloads/images /app/downloads/audio
 
 # This script runs after jlesage initializes USER_ID/GROUP_ID and the app user.
@@ -17,10 +17,10 @@ take-ownership /app/downloads
 rm -f /app/browser_data/SingletonLock \
       /app/browser_data/SingletonSocket \
       /app/browser_data/SingletonCookie
-echo "[catgpt-init] Stale Chromium locks cleaned"
+echo "[mimicgate-init] Stale Chromium locks cleaned"
 
 # Pre-resolve DNS for Chrome to prevent Docker DNS proxy (127.0.0.11) issues
-echo "[catgpt-init] Pre-resolving DNS for Chrome..."
+echo "[mimicgate-init] Pre-resolving DNS for Chrome..."
 python3 -c "
 import os, socket
 provider = os.environ.get('PROVIDER', 'chatgpt').lower()
@@ -87,11 +87,11 @@ for d in domains:
 if resolved:
     try:
         with open('/etc/hosts', 'a') as f:
-            f.write('\n# Pre-resolved DNS for Chrome (added by catgpt-init)\n')
+            f.write('\n# Pre-resolved DNS for Chrome (added by mimicgate-init)\n')
             for entry in resolved:
                 f.write(entry + '\n')
         print(f'  Added {len(resolved)} entries to /etc/hosts')
     except Exception as e:
         print(f'  WARNING: Could not write to /etc/hosts: {e}')
 " || true
-echo "[catgpt-init] Initialization complete."
+echo "[mimicgate-init] Initialization complete."

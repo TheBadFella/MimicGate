@@ -1,6 +1,6 @@
 # API Reference
 
-CatGPT Gateway exposes an OpenAI-compatible API. Any client that works with the OpenAI API works here.
+MimicGate Gateway exposes an OpenAI-compatible API. Any client that works with the OpenAI API works here.
 
 ---
 
@@ -65,7 +65,7 @@ from openai import OpenAI
 client = OpenAI(base_url="http://localhost:8000/v1", api_key="dummy123")
 
 response = client.chat.completions.create(
-    model="claude-browser",  # or "catgpt-browser"
+    model="claude-browser",  # or "mimicgate-browser"
     messages=[
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": "What is quantum computing?"}
@@ -88,18 +88,18 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `model` | string | yes | Default browser models (`catgpt-browser`, `claude-browser`, `gemini-browser`) or explicit model IDs (e.g. `gpt-5.6-sol`, `gemini-3.8-flash`, `gemini-3.1-pro`) |
+| `model` | string | yes | Default browser models (`mimicgate-browser`, `claude-browser`, `gemini-browser`) or explicit model IDs (e.g. `gpt-5.6-sol`, `gemini-3.8-flash`, `gemini-3.1-pro`). The legacy `catgpt-browser` alias is accepted and behaves like `mimicgate-browser`. |
 | `messages` | array | yes | Array of message objects |
 | `tools` | array | no | Tool/function definitions |
 | `tool_choice` | string/object | no | `auto`, `none`, `required`, or specific function |
 | `temperature` | float | no | Ignored (browser controls this) |
 | `max_tokens` | int | no | Ignored |
-| `stream` | bool | no | SSE is accepted for IDE clients such as Cline. The browser finishes first, then CatGPT emits the completed message as event-stream chunks. |
+| `stream` | bool | no | SSE is accepted for IDE clients such as Cline. The browser finishes first, then MimicGate emits the completed message as event-stream chunks. |
 | `read_aloud` | bool | no | Supported on ChatGPT and Gemini. Downloads the browser-generated audio and returns it at `choices[0].message.audio`. |
 | `reasoning_effort` | string | no | Reasoning level for ChatGPT and Gemini. Unsupported values are clamped to the nearest available level or map to thinking models. |
-| `conversation_id` | string | no | Durable logical conversation ID. CatGPT verifies history before reusing the mapped browser thread. |
+| `conversation_id` | string | no | Durable logical conversation ID. MimicGate verifies history before reusing the mapped browser thread. |
 
-`conversation_id` may instead be supplied as `X-CatGPT-Conversation-Id`. Send either full history or only the next turn. If full history is a verified prefix of the stored transcript, CatGPT sends only the delta; divergent history starts a clean browser thread. Use `X-CatGPT-Thread-Mode: fresh` to force a new ephemeral thread. Fresh mode cannot be combined with `thread_id` or `conversation_id`.
+`conversation_id` may instead be supplied as `X-MimicGate-Conversation-Id`. Send either full history or only the next turn. If full history is a verified prefix of the stored transcript, MimicGate sends only the delta; divergent history starts a clean browser thread. Use `X-MimicGate-Thread-Mode: fresh` to force a new ephemeral thread. Fresh mode cannot be combined with `thread_id` or `conversation_id`. The legacy `X-CatGPT-Conversation-Id`, `X-CatGPT-Thread-Mode`, and `X-CatGPT-App-Key` headers remain supported; the `X-MimicGate-*` names take precedence when both are present.
 
 **Response:**
 
@@ -140,7 +140,7 @@ curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer dummy123" \
   -d '{
-    "model": "catgpt-browser",
+    "model": "mimicgate-browser",
     "messages": [{"role": "user", "content": "Reply with one short sentence."}],
     "read_aloud": true
   }'
@@ -420,7 +420,7 @@ curl -X POST http://localhost:8000/v1/images/generations \
 
 **`GET /v1/models`**
 
-Returns the available models for the active provider. For ChatGPT, CatGPT reads the live model and reasoning controls and caches the result; configured aliases remain available as a fallback if discovery fails.
+Returns the available models for the active provider. For ChatGPT, MimicGate reads the live model and reasoning controls and caches the result; configured aliases remain available as a fallback if discovery fails.
 
 ```bash
 curl http://localhost:8000/v1/models -H "Authorization: Bearer dummy123"
@@ -429,7 +429,7 @@ curl http://localhost:8000/v1/models -H "Authorization: Bearer dummy123"
 | Provider | Model ID | Owned By |
 |---|---|---|
 | Claude | `claude-browser` | `anthropic` |
-| ChatGPT | `catgpt-browser` | `catgpt` |
+| ChatGPT | `mimicgate-browser` | `mimicgate` |
 
 ---
 
@@ -467,7 +467,7 @@ curl -X POST http://localhost:8000/v1/responses \
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `model` | string | yes | `claude-browser` or `catgpt-browser` |
+| `model` | string | yes | `claude-browser` or `mimicgate-browser` |
 | `input` | string or array | yes | User input as a string or array of input items with `role` and `content` |
 | `instructions` | string | no | System instructions (converted to a system message) |
 | `tools` | array | no | Tool/function definitions (same format as chat completions) |
@@ -519,13 +519,13 @@ Both `/v1/responses` and `/{app_name}/v1/responses` are supported.
 
 ### ChatGPT project confinement
 
-Set `CHATGPT_PROJECT_URL` to a URL shaped like `https://chatgpt.com/g/g-p-.../project` to keep new and resumed ChatGPT conversations inside that project. CatGPT validates the URL at runtime and fails the request if ChatGPT redirects a generated thread outside the configured project.
+Set `CHATGPT_PROJECT_URL` to a URL shaped like `https://chatgpt.com/g/g-p-.../project` to keep new and resumed ChatGPT conversations inside that project. MimicGate validates the URL at runtime and fails the request if ChatGPT redirects a generated thread outside the configured project.
 
 ---
 
 ## Custom REST API
 
-In addition to the OpenAI-compatible endpoints, CatGPT exposes a simpler custom API:
+In addition to the OpenAI-compatible endpoints, MimicGate exposes a simpler custom API:
 
 | Method | Endpoint | Description |
 |---|---|---|
@@ -562,7 +562,7 @@ curl -H "Authorization: Bearer dummy123" http://localhost:8000/status
 
 ## TUI Terminal Client
 
-CatGPT includes a terminal chat interface with a cyberpunk theme, built with Textual.
+MimicGate includes a terminal chat interface with a cyberpunk theme, built with Textual.
 
 ```bash
 python -m src.cli.app
@@ -589,7 +589,7 @@ Shortcuts: `Ctrl+N` (new), `Ctrl+T` (threads), `Ctrl+L` (clear), `Ctrl+Q` (quit)
 
 | Behavior | Claude | ChatGPT | Gemini |
 |---|---|---|---|
-| Model ID | `claude-browser` | `catgpt-browser` | `gemini-browser` (or `gemini-3.8-flash`, etc.) |
+| Model ID | `claude-browser` | `mimicgate-browser` | `gemini-browser` (or `gemini-3.8-flash`, etc.) |
 | Image generation | Not supported (501) | Supported (DALL-E) | Supported (Imagen 3) |
 | Table rendering | Tab-separated text | Markdown with pipes | Markdown with pipes |
 | Avg response time | 15-20s | 7-10s | 5-10s |

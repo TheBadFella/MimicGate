@@ -900,7 +900,7 @@ class GeminiClient:
     def _create_prompt_attachment(text: str) -> str:
         """Persist a prompt as a UTF-8 temporary file for Gemini upload."""
         fd, filename = tempfile.mkstemp(
-            prefix="catgpt-gemini-prompt-",
+            prefix="mimicgate-gemini-prompt-",
             suffix=".txt",
         )
         try:

@@ -1,5 +1,5 @@
 {
-  description = "CatGPT browser-automation gateway";
+  description = "MimicGate browser-automation gateway";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -310,12 +310,12 @@
           default = {
             type = "app";
             program = "${proxyScript}/bin/catgpt-proxy";
-            meta.description = "Run CatGPT FastAPI proxy";
+            meta.description = "Run MimicGate FastAPI proxy";
           };
           proxy = {
             type = "app";
             program = "${proxyScript}/bin/catgpt-proxy";
-            meta.description = "Run CatGPT FastAPI proxy";
+            meta.description = "Run MimicGate FastAPI proxy";
           };
           login = {
             type = "app";
@@ -325,7 +325,7 @@
           tui = {
             type = "app";
             program = "${tuiScript}/bin/catgpt-tui";
-            meta.description = "Run CatGPT terminal UI";
+            meta.description = "Run MimicGate terminal UI";
           };
         };
 

@@ -31,7 +31,7 @@ async def main():
 
     try:
         print("\n" + "=" * 60)
-        print(f"  CatGPT Gateway -- {provider_name} First Login")
+        print(f"  MimicGate Gateway -- {provider_name} First Login")
         print("=" * 60)
         print(f"\n  Provider:         {provider_name}")
         print(f"  Browser data dir: {Config.BROWSER_DATA_DIR}")

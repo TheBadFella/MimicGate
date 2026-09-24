@@ -189,7 +189,7 @@ async def lifespan(app: FastAPI):
 
     lines = [
         sep,
-        "  CatGPT — READY".center(W),
+        "  MimicGate — READY".center(W),
         sep,
         f"  {session_status}",
         session_line,
@@ -217,9 +217,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="CatGPT Gateway API",
+    title="MimicGate API",
     description=(
-        "Browser automation API for ChatGPT. "
+        "MimicGate browser automation API for ChatGPT. "
         "Sends messages via browser and returns responses."
     ),
     version="1.0.0",

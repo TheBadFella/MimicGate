@@ -1,4 +1,4 @@
-# Contributing to CatGPT Gateway
+# Contributing to MimicGate Gateway
 
 Thanks for your interest in contributing! This project is open source and we welcome all kinds of contributions: bug fixes, new features, documentation improvements, and new provider integrations.
 
@@ -9,8 +9,8 @@ Thanks for your interest in contributing! This project is open source and we wel
 1. **Fork** the repo on GitHub
 2. **Clone** your fork:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/CatGPT-Gateway.git
-   cd CatGPT-Gateway
+   git clone https://github.com/YOUR_USERNAME/MimicGate.git
+   cd MimicGate
    ```
 3. **Set up** the development environment:
    ```bash
@@ -135,7 +135,7 @@ Quick reference for where to find things:
 | DOM selectors | `src/selectors.py`, `src/claude/selectors.py` |
 | Browser management | `src/browser/manager.py` |
 | Configuration | `src/config.py` |
-| Docker setup | `docker/10-catgpt-init.sh`, `docker/startapp.sh`, `docker/Dockerfile` |
+| Docker setup | `docker/50-mimicgate-init.sh`, `docker/startapp.sh`, `docker/Dockerfile` |
 | Tests | `scripts/test_*.py` |
 | Documentation | `docs/` |
 
