@@ -212,9 +212,7 @@ async def preview_dashboard() -> HTMLResponse:
       font-weight: 700;
       letter-spacing: -0.01em;
       color: var(--dash-heading);
-      display: flex;
-      align-items: center;
-      gap: 6px;
+      line-height: 1;
     }
     .brand-title span { color: var(--dash-accent); }
 
