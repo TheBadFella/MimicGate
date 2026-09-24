@@ -81,9 +81,20 @@ class BrowserTabPool:
         log.info("Opened worker browser tab")
         return page
 
+    def _get_context(self) -> Any | None:
+        ctx = getattr(self._browser, "context", None)
+        if callable(ctx):
+            try:
+                return ctx()
+            except Exception:
+                return getattr(self._browser, "_context", None)
+        if ctx is not None:
+            return ctx
+        return getattr(self._browser, "_context", None)
+
     def _worker_tab_count(self) -> int:
         control = self._control_page()
-        context = getattr(self._browser, "context", None)
+        context = self._get_context()
         pages = list(getattr(context, "pages", []) or [])
         return sum(1 for page in pages if page is not control and self._page_is_open(page))
 
@@ -252,6 +263,98 @@ class BrowserTabPool:
                 await self._close_page(page)
             self._semaphore.release()
 
+    async def list_tabs(self) -> list[dict[str, Any]]:
+        """Return inspection metadata for all open browser pages."""
+        context = self._get_context()
+        pages = list(getattr(context, "pages", []) or [])
+        control = self._control_page()
+
+        page_to_session: dict[Any, str] = {}
+        for sk, p in list(self._pages.items()):
+            page_to_session[p] = sk
+
+        now = time.monotonic()
+        results: list[dict[str, Any]] = []
+        for i, page in enumerate(pages):
+            if not self._page_is_open(page):
+                continue
+            is_control = bool(control is not None and page is control)
+            session_key = page_to_session.get(page)
+            if is_control and not session_key:
+                session_key = CONTROL_SESSION
+            elif not session_key:
+                session_key = "ephemeral"
+
+            lock = self._locks.get(session_key) if session_key else None
+            is_busy = bool(lock and lock.locked())
+
+            last_used = self._lru.get(session_key)
+            last_used_sec = round(now - last_used, 1) if last_used else None
+
+            url = ""
+            title = ""
+            try:
+                url = page.url or ""
+            except Exception:
+                pass
+            try:
+                title = await page.title() if hasattr(page, "title") else ""
+            except Exception:
+                pass
+
+            results.append({
+                "index": i,
+                "session_key": session_key,
+                "url": url,
+                "title": title or ("Control Tab" if is_control else f"Worker Tab {i}"),
+                "is_control": is_control,
+                "is_busy": is_busy,
+                "last_active_seconds_ago": last_used_sec,
+            })
+        return results
+
+    async def capture_tab_screenshot(self, tab_index: int) -> bytes:
+        """Capture a JPEG screenshot of a specific tab index."""
+        context = self._get_context()
+        pages = list(getattr(context, "pages", []) or [])
+        if tab_index < 0 or tab_index >= len(pages):
+            raise IndexError(f"Tab index {tab_index} out of range (0-{len(pages)-1})")
+        page = pages[tab_index]
+        if not self._page_is_open(page):
+            raise RuntimeError(f"Tab {tab_index} is closed")
+        screenshot_fn = getattr(page, "screenshot", None)
+        if not callable(screenshot_fn):
+            raise RuntimeError(f"Tab {tab_index} does not support screenshot")
+        return await page.screenshot(type="jpeg", quality=65, timeout=5000)
+
+    async def close_tab_by_index(self, tab_index: int) -> dict[str, Any]:
+        """Safely close a worker tab by its index in context.pages."""
+        context = self._get_context()
+        pages = list(getattr(context, "pages", []) or [])
+        if tab_index < 0 or tab_index >= len(pages):
+            raise IndexError(f"Tab index {tab_index} out of range (0-{len(pages)-1})")
+        page = pages[tab_index]
+        if self._is_control_page(page):
+            raise ValueError("Cannot close control tab")
+        if not self._page_is_open(page):
+            return {"status": "already_closed", "index": tab_index}
+
+        for sk, p in list(self._pages.items()):
+            if p is page:
+                url = ""
+                try:
+                    url = page.url or ""
+                except Exception:
+                    pass
+                if "/c/" in url or "/chat/" in url or "/app/" in url:
+                    self._urls[sk] = url
+                self._pages.pop(sk, None)
+                self._initialized.discard(sk)
+                break
+
+        await self._close_page(page)
+        return {"status": "closed", "index": tab_index}
+
 
 _tab_pool: BrowserTabPool | None = None
 
@@ -273,6 +376,27 @@ def configure_tab_pool(browser: Any | None) -> None:
 
 def get_tab_pool() -> BrowserTabPool | None:
     return _tab_pool
+
+
+async def list_browser_tabs() -> list[dict[str, Any]]:
+    pool = _tab_pool
+    if pool is not None:
+        return await pool.list_tabs()
+    return []
+
+
+async def capture_browser_screenshot(tab_index: int) -> bytes:
+    pool = _tab_pool
+    if pool is not None:
+        return await pool.capture_tab_screenshot(tab_index)
+    raise RuntimeError("Browser tab pool not configured")
+
+
+async def close_browser_tab(tab_index: int) -> dict[str, Any]:
+    pool = _tab_pool
+    if pool is not None:
+        return await pool.close_tab_by_index(tab_index)
+    raise RuntimeError("Browser tab pool not configured")
 
 
 @asynccontextmanager

@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
+from fastapi.staticfiles import StaticFiles
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -31,6 +33,7 @@ from src.config import Config
 from src.api.ollama_routes import ollama_router
 from src.api.routes import router, set_client
 from src.api.openai_routes import openai_router, set_openai_client
+from src.api.monitor_routes import router as monitor_router
 from src.api.browser_gate import configure_tab_pool
 from src.log import setup_logging
 
@@ -185,6 +188,8 @@ async def lifespan(app: FastAPI):
         ("GET ", f"{host}/status", "Status"),
         ("GET ", f"{host}/healthz", "Health check (no auth)"),
         ("GET ", f"{host}/docs", "API docs (no auth)"),
+        ("GET ", f"{host}/preview", "Live Multi-Tab Preview Dashboard"),
+        ("GET ", f"{host}/v1/tabs", "List active browser tabs"),
     ]
 
     lines = [
@@ -260,7 +265,15 @@ class BearerTokenMiddleware:
     Skips auth for /docs, /openapi.json, and health-check paths.
     """
 
-    OPEN_PATHS = {b"/docs", b"/redoc", b"/openapi.json", b"/healthz"}
+    OPEN_PATHS = {
+        b"/docs",
+        b"/redoc",
+        b"/openapi.json",
+        b"/healthz",
+        b"/preview",
+        b"/dashboard",
+        b"/v1/preview",
+    }
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
@@ -276,7 +289,10 @@ class BearerTokenMiddleware:
             return
 
         path_str = scope.get("path", "")
-        if path_str in {"/docs", "/redoc", "/openapi.json", "/healthz"}:
+        if (
+            path_str in {"/docs", "/redoc", "/openapi.json", "/healthz", "/preview", "/dashboard", "/v1/preview"}
+            or path_str.startswith("/assets")
+        ):
             await self.app(scope, receive, send)
             return
 
@@ -333,6 +349,13 @@ app.add_middleware(
 app.include_router(router)
 app.include_router(openai_router)
 app.include_router(ollama_router)
+app.include_router(monitor_router)
+
+_assets_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "assets")
+if not os.path.isdir(_assets_dir):
+    _assets_dir = "assets"
+if os.path.isdir(_assets_dir):
+    app.mount("/assets", StaticFiles(directory=_assets_dir), name="assets")
 
 
 @app.get("/healthz", include_in_schema=False)

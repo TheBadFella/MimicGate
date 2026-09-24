@@ -161,7 +161,7 @@ MimicGate adds extensive multi-protocol support, provider coverage, and resilien
 | **Asynchronous Jobs API** (`/v1/jobs/...`) | ✅ Background completion polling | - |
 | **Structured Multipage Extraction** | ✅ Page-by-page JSON extraction | - |
 | **Secure Non-Root jlesage Container** | ✅ Non-root GUI on port 5800 | - |
-| **Live Multi-Tab Preview Dashboard** | - | ✅ |
+| **Live Multi-Tab Preview Dashboard** | ✅ Real-time dark monitor on port 8650 (`/preview`) | ✅ Basic |
 
 <sub>Comparison verified against <a href="https://github.com/GautamVhavle/CatGPT-Gateway">upstream</a> at commit <code>1771f5b</code>.</sub>
 
@@ -231,6 +231,7 @@ curl http://localhost:8650/v1/chat/completions \
 | **Anthropic** | `/v1/messages` |
 | **Ollama** | `/api/chat`, `/api/generate`, `/api/embed`, `/api/tags`, `/api/version` |
 | **Cline / OpenCode** | `/cline/v1/chat/completions` (OpenAI format with simulated SSE streaming) |
+| **Monitor & Dashboard** | `/preview`, `/dashboard`, `/v1/tabs`, `/v1/tabs/{index}/screenshot` |
 | **Native Routes** | `/chat`, `/thread/{id}/chat`, `/thread/new`, `/threads`, `/status` |
 
 ---
