@@ -2,7 +2,7 @@
 Live multi-tab browser monitor and dashboard routes for MimicGate.
 
 Provides endpoints to inspect, snapshot, and close background browser tabs,
-plus a self-contained dark dashboard in the Unpackerr style.
+plus a self-contained square dark dashboard inspired by UnpackUI.
 """
 
 from __future__ import annotations
@@ -61,11 +61,11 @@ async def get_tab_screenshot(index: int) -> Response:
         raise HTTPException(status_code=404, detail=str(exc))
     except Exception as exc:
         log.warning("Tab %s screenshot failed: %s", index, exc)
-        # Return a fallback SVG placeholder so the UI card renders cleanly
         svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
-  <rect width="640" height="360" fill="#131418"/>
-  <text x="50%" y="45%" text-anchor="middle" fill="#6c7380" font-family="sans-serif" font-size="16">Preview Unavailable</text>
-  <text x="50%" y="58%" text-anchor="middle" fill="#444b55" font-family="monospace" font-size="12">Tab {index}: {str(exc)[:45]}</text>
+  <rect width="640" height="360" fill="#111111"/>
+  <rect width="640" height="360" fill="none" stroke="#2d2d2d" stroke-width="2"/>
+  <text x="50%" y="45%" text-anchor="middle" fill="#777777" font-family="monospace" font-size="14" font-weight="bold">PREVIEW UNAVAILABLE</text>
+  <text x="50%" y="58%" text-anchor="middle" fill="#555555" font-family="monospace" font-size="11">Tab {index}: {str(exc)[:45]}</text>
 </svg>"""
         return Response(
             content=svg.encode("utf-8"),
@@ -92,55 +92,62 @@ async def close_tab(index: int) -> dict[str, Any]:
 @router.get("/dashboard", response_class=HTMLResponse)
 @router.get("/v1/preview", response_class=HTMLResponse)
 async def preview_dashboard() -> HTMLResponse:
-    """Serve the real-time dark multi-tab monitor dashboard."""
+    """Serve the real-time square dark multi-tab monitor dashboard."""
     html = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>MimicGate — Live Multi-Tab Monitor</title>
+  <title>MimicGate — Live Monitor</title>
   <link rel="icon" type="image/png" href="/assets/favicon-32x32.png" />
   <style>
+    /* UnpackUI-inspired Dark Theme Variables */
     :root {
-      --bg: #090a0d;
-      --surface: #101216;
-      --card-bg: #15171d;
-      --border: #232732;
-      --border-accent: #2e3442;
-      --text-main: #f0f3f8;
-      --text-muted: #7e8799;
-      --text-dim: #4d5463;
-      --accent-mint: #80e8ba;
-      --accent-cyan: #38bdf8;
-      --accent-yellow: #facc15;
-      --accent-purple: #c084fc;
-      --accent-red: #f87171;
-      --accent-blue: #60a5fa;
-      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, Helvetica, Arial, sans-serif;
+      --dash-bg: #090909;
+      --dash-panel: #111111;
+      --dash-card: #151515;
+      --dash-border: #242424;
+      --dash-border-strong: #383838;
+      --dash-text: #eaeaea;
+      --dash-heading: #ffffff;
+      --dash-muted: #888888;
+      --dash-dim: #505050;
+      --dash-accent: #80e8ba;
+      --dash-good: #16c784;
+      --dash-warn: #f6c453;
+      --dash-bad: #ff4d5e;
+      --dash-cyan: #38bdf8;
+      --dash-purple: #c084fc;
       --font-mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     }
 
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    /* Global reset to sharp square design */
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      border-radius: 0 !important; /* Strict square UI */
+    }
+
     body {
-      background: var(--bg);
-      color: var(--text-main);
+      background: var(--dash-bg);
+      color: var(--dash-text);
       font-family: var(--font-sans);
       min-height: 100vh;
       display: flex;
       flex-direction: column;
-      padding: 0;
       background-image: 
-        linear-gradient(to right, rgba(255, 255, 255, 0.02) 1px, transparent 1px),
-        linear-gradient(to bottom, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
-      background-size: 32px 32px;
+        linear-gradient(to right, rgba(255, 255, 255, 0.015) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
+      background-size: 24px 24px;
     }
 
-    /* Top Navigation */
+    /* Top Navigation Bar */
     header {
-      background: rgba(16, 18, 22, 0.85);
-      backdrop-filter: blur(12px);
-      border-bottom: 1px solid var(--border);
-      padding: 12px 24px;
+      background: #0f0f0f;
+      border-bottom: 1px solid var(--dash-border);
+      padding: 10px 24px;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -153,184 +160,190 @@ async def preview_dashboard() -> HTMLResponse:
       align-items: center;
       gap: 12px;
     }
-    .brand-logo {
+    .brand-logo-img {
       width: 28px;
       height: 28px;
-      border-radius: 6px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: #1b1e26;
-      border: 1px solid var(--border);
+      display: block;
+      border: 1px solid var(--dash-border);
+      background: #181818;
+      object-fit: cover;
     }
     .brand-title {
-      font-size: 1.15rem;
+      font-size: 1.12rem;
       font-weight: 700;
-      letter-spacing: -0.02em;
+      letter-spacing: -0.01em;
+      color: var(--dash-heading);
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
     }
-    .brand-title span { color: var(--accent-mint); }
-    .badge-live {
+    .brand-title span { color: var(--dash-accent); }
+
+    /* UnpackUI Live Chip */
+    .stamp-chip {
       display: inline-flex;
       align-items: center;
-      gap: 5px;
-      background: rgba(128, 232, 186, 0.1);
-      border: 1px solid rgba(128, 232, 186, 0.3);
-      color: var(--accent-mint);
+      gap: 7px;
+      padding: 4px 10px;
+      border: 1px solid var(--dash-border);
+      background: #141414;
+      color: var(--dash-text);
       font-size: 0.72rem;
+      font-family: var(--font-mono);
       font-weight: 600;
-      padding: 2px 8px;
-      border-radius: 9999px;
       text-transform: uppercase;
       letter-spacing: 0.05em;
     }
-    .badge-live::before {
+    .stamp-chip::before {
       content: "";
-      width: 6px;
-      height: 6px;
-      background: var(--accent-mint);
-      border-radius: 50%;
+      width: 7px;
+      height: 7px;
+      border-radius: 50% !important; /* Circle indicator inside chip */
+      background: var(--dash-good);
+      box-shadow: 0 0 8px rgba(22, 199, 132, 0.8);
       animation: pulse 2s infinite;
     }
     @keyframes pulse {
-      0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(128, 232, 186, 0.7); }
-      70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(128, 232, 186, 0); }
-      100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(128, 232, 186, 0); }
+      0% { opacity: 0.7; }
+      50% { opacity: 1; transform: scale(1.1); }
+      100% { opacity: 0.7; }
     }
 
     .nav-actions {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 8px;
     }
-    .btn {
-      background: #181b22;
-      border: 1px solid var(--border);
-      color: var(--text-main);
+    .btn-square {
+      background: #171717;
+      border: 1px solid var(--dash-border);
+      color: var(--dash-text);
       padding: 6px 14px;
-      border-radius: 6px;
-      font-size: 0.82rem;
+      font-size: 0.78rem;
+      font-family: var(--font-mono);
       font-weight: 500;
       cursor: pointer;
       display: inline-flex;
       align-items: center;
       gap: 6px;
       text-decoration: none;
-      transition: all 0.15s ease;
+      transition: background 0.1s, border-color 0.1s;
     }
-    .btn:hover {
-      background: #222630;
-      border-color: var(--border-accent);
-      color: #fff;
+    .btn-square:hover {
+      background: #222222;
+      border-color: var(--dash-border-strong);
+      color: #ffffff;
     }
-    .btn-danger {
-      border-color: rgba(248, 113, 113, 0.3);
-      color: var(--accent-red);
+    .btn-square-danger {
+      border-color: rgba(255, 77, 94, 0.4);
+      color: var(--dash-bad);
+      background: #181213;
     }
-    .btn-danger:hover {
-      background: rgba(248, 113, 113, 0.12);
-      border-color: var(--accent-red);
+    .btn-square-danger:hover {
+      background: rgba(255, 77, 94, 0.18);
+      border-color: var(--dash-bad);
+      color: #ffffff;
     }
 
     /* Container */
     main {
-      max-width: 1400px;
+      max-width: 1440px;
       width: 100%;
       margin: 0 auto;
-      padding: 24px;
+      padding: 20px 24px;
       display: flex;
       flex-direction: column;
-      gap: 20px;
+      gap: 18px;
     }
 
-    /* Metric Summary Strip (Unpackerr top cards) */
-    .metric-strip {
+    /* Top Stat Row (Unpackerr exact top cards) */
+    .stat-row {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
       gap: 12px;
     }
-    .metric-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-top: 3px solid var(--border-accent);
-      border-radius: 6px;
+    .stat-card {
+      background: var(--dash-panel);
+      border: 1px solid var(--dash-border);
+      border-top: 3px solid var(--dash-border);
       padding: 14px 16px;
       display: flex;
       flex-direction: column;
       gap: 6px;
+      min-height: 80px;
+      justify-content: center;
     }
-    .metric-card.accent-mint { border-top-color: var(--accent-mint); }
-    .metric-card.accent-cyan { border-top-color: var(--accent-cyan); }
-    .metric-card.accent-yellow { border-top-color: var(--accent-yellow); }
-    .metric-card.accent-purple { border-top-color: var(--accent-purple); }
-    .metric-card.accent-blue { border-top-color: var(--accent-blue); }
-    .metric-card.accent-red { border-top-color: var(--accent-red); }
+    .stat-card.accent-warn { border-top-color: var(--dash-warn); }
+    .stat-card.accent-cyan { border-top-color: var(--dash-cyan); }
+    .stat-card.accent-bad { border-top-color: var(--dash-bad); }
+    .stat-card.accent-good { border-top-color: var(--dash-good); }
+    .stat-card.accent-mint { border-top-color: var(--dash-accent); }
+    .stat-card.accent-purple { border-top-color: var(--dash-purple); }
 
-    .metric-label {
-      font-size: 0.72rem;
-      font-weight: 600;
+    .stat-label {
+      font-size: 0.68rem;
+      font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.08em;
-      color: var(--text-muted);
+      color: var(--dash-muted);
+      font-family: var(--font-mono);
     }
-    .metric-value {
-      font-size: 1.6rem;
-      font-weight: 700;
+    .stat-value {
+      font-size: 1.85rem;
+      font-weight: 800;
       font-family: var(--font-mono);
       line-height: 1;
-      color: #ffffff;
+      color: var(--dash-heading);
     }
 
-    /* Sub-metrics Pill Row */
-    .submetric-row {
+    /* Secondary Compact Metrics Grid (UnpackUI secondary strip) */
+    .submetric-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-      gap: 10px;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 8px;
     }
-    .submetric-pill {
-      background: #111317;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 8px 14px;
+    .submetric-item {
+      background: var(--dash-panel);
+      border: 1px solid var(--dash-border);
+      padding: 9px 14px;
       display: flex;
       justify-content: space-between;
       align-items: center;
-      font-size: 0.8rem;
+      font-size: 0.78rem;
     }
-    .submetric-pill span:first-child { color: var(--text-muted); }
-    .submetric-pill span:last-child {
+    .submetric-item span:first-child {
+      color: var(--dash-muted);
+    }
+    .submetric-item span:last-child {
       font-family: var(--font-mono);
       font-weight: 600;
-      color: var(--text-main);
+      color: var(--dash-text);
     }
 
-    /* Section Containers */
-    .section-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 8px;
+    /* Section Panels */
+    .dashboard-panel {
+      background: var(--dash-panel);
+      border: 1px solid var(--dash-border);
       display: flex;
       flex-direction: column;
-      overflow: hidden;
     }
-    .section-header {
-      padding: 16px 20px;
-      border-bottom: 1px solid var(--border);
+    .panel-header {
+      padding: 12px 18px;
+      border-bottom: 1px solid var(--dash-border);
       display: flex;
       justify-content: space-between;
       align-items: center;
-      background: rgba(21, 23, 29, 0.4);
+      background: #141414;
     }
-    .section-title-wrap h2 {
-      font-size: 1.05rem;
-      font-weight: 600;
+    .panel-title-wrap h2 {
+      font-size: 0.95rem;
+      font-weight: 700;
       letter-spacing: -0.01em;
+      color: var(--dash-heading);
     }
-    .section-title-wrap p {
-      font-size: 0.8rem;
-      color: var(--text-muted);
+    .panel-title-wrap p {
+      font-size: 0.76rem;
+      color: var(--dash-muted);
       margin-top: 2px;
     }
 
@@ -338,29 +351,26 @@ async def preview_dashboard() -> HTMLResponse:
     .tab-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
-      gap: 16px;
-      padding: 20px;
+      gap: 14px;
+      padding: 18px;
     }
     .tab-card {
-      background: var(--card-bg);
-      border: 1px solid var(--border);
-      border-radius: 8px;
+      background: var(--dash-card);
+      border: 1px solid var(--dash-border);
       display: flex;
       flex-direction: column;
-      overflow: hidden;
-      transition: border-color 0.2s ease, transform 0.2s ease;
+      transition: border-color 0.15s ease;
     }
     .tab-card:hover {
-      border-color: var(--border-accent);
-      transform: translateY(-2px);
+      border-color: var(--dash-border-strong);
     }
     .tab-card-header {
-      padding: 10px 14px;
+      padding: 9px 14px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      background: #181b22;
-      border-bottom: 1px solid var(--border);
+      background: #181818;
+      border-bottom: 1px solid var(--dash-border);
     }
     .tab-identity {
       display: flex;
@@ -368,45 +378,44 @@ async def preview_dashboard() -> HTMLResponse:
       gap: 8px;
     }
     .tab-index-badge {
-      background: #252a36;
+      background: #252525;
+      border: 1px solid var(--dash-border-strong);
       font-family: var(--font-mono);
-      font-size: 0.75rem;
+      font-size: 0.72rem;
       font-weight: 700;
-      padding: 2px 6px;
-      border-radius: 4px;
-      color: var(--accent-cyan);
+      padding: 2px 7px;
+      color: var(--dash-cyan);
     }
     .tab-status-pill {
-      font-size: 0.72rem;
+      font-size: 0.7rem;
+      font-family: var(--font-mono);
       font-weight: 600;
       padding: 2px 8px;
-      border-radius: 9999px;
-      display: flex;
-      align-items: center;
-      gap: 5px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
     }
     .tab-status-pill.status-control {
       background: rgba(192, 132, 252, 0.12);
-      color: var(--accent-purple);
+      color: var(--dash-purple);
       border: 1px solid rgba(192, 132, 252, 0.3);
     }
     .tab-status-pill.status-busy {
-      background: rgba(250, 204, 21, 0.12);
-      color: var(--accent-yellow);
-      border: 1px solid rgba(250, 204, 21, 0.3);
+      background: rgba(246, 196, 83, 0.12);
+      color: var(--dash-warn);
+      border: 1px solid rgba(246, 196, 83, 0.3);
     }
     .tab-status-pill.status-idle {
-      background: rgba(128, 232, 186, 0.12);
-      color: var(--accent-mint);
-      border: 1px solid rgba(128, 232, 186, 0.3);
+      background: rgba(22, 199, 132, 0.12);
+      color: var(--dash-good);
+      border: 1px solid rgba(22, 199, 132, 0.3);
     }
 
     .tab-preview-wrap {
       position: relative;
       width: 100%;
       aspect-ratio: 16 / 9;
-      background: #0d0e12;
-      border-bottom: 1px solid var(--border);
+      background: #0b0b0b;
+      border-bottom: 1px solid var(--dash-border);
       overflow: hidden;
       cursor: zoom-in;
     }
@@ -415,32 +424,35 @@ async def preview_dashboard() -> HTMLResponse:
       height: 100%;
       object-fit: cover;
       display: block;
-      transition: opacity 0.2s ease;
     }
+
     .tab-card-body {
       padding: 12px 14px;
       display: flex;
       flex-direction: column;
-      gap: 6px;
-      font-size: 0.78rem;
+      gap: 5px;
+      font-size: 0.76rem;
+      background: #141414;
     }
     .tab-meta-row {
       display: flex;
       justify-content: space-between;
       align-items: center;
     }
-    .tab-meta-label { color: var(--text-muted); }
+    .tab-meta-label {
+      color: var(--dash-muted);
+    }
     .tab-meta-value {
       font-family: var(--font-mono);
-      color: var(--text-main);
-      max-width: 240px;
+      color: var(--dash-text);
+      max-width: 250px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
 
-    /* History Table */
-    .history-table-wrap {
+    /* UnpackUI Table Styling */
+    .table-wrap {
       width: 100%;
       overflow-x: auto;
     }
@@ -448,24 +460,25 @@ async def preview_dashboard() -> HTMLResponse:
       width: 100%;
       border-collapse: collapse;
       text-align: left;
-      font-size: 0.82rem;
+      font-size: 0.78rem;
     }
     th {
-      padding: 12px 16px;
-      background: #151820;
-      color: var(--text-muted);
-      font-weight: 600;
+      padding: 10px 14px;
+      background: #141414;
+      color: var(--dash-muted);
+      font-weight: 700;
       text-transform: uppercase;
-      font-size: 0.7rem;
-      letter-spacing: 0.05em;
-      border-bottom: 1px solid var(--border);
+      font-size: 0.68rem;
+      letter-spacing: 0.06em;
+      border-bottom: 1px solid var(--dash-border);
+      font-family: var(--font-mono);
     }
     td {
-      padding: 12px 16px;
-      border-bottom: 1px solid var(--border);
-      color: var(--text-main);
+      padding: 11px 14px;
+      border-bottom: 1px solid var(--dash-border);
+      color: var(--dash-text);
     }
-    tr:hover td { background: rgba(255, 255, 255, 0.015); }
+    tr:hover td { background: rgba(255, 255, 255, 0.02); }
     .mono { font-family: var(--font-mono); }
 
     /* Modal for enlarged screenshot */
@@ -473,8 +486,7 @@ async def preview_dashboard() -> HTMLResponse:
       display: none;
       position: fixed;
       inset: 0;
-      background: rgba(0, 0, 0, 0.85);
-      backdrop-filter: blur(8px);
+      background: rgba(0, 0, 0, 0.88);
       z-index: 200;
       align-items: center;
       justify-content: center;
@@ -484,10 +496,9 @@ async def preview_dashboard() -> HTMLResponse:
     .modal-content {
       max-width: 90vw;
       max-height: 90vh;
-      border-radius: 8px;
-      border: 1px solid var(--border-accent);
-      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
-      overflow: hidden;
+      border: 1px solid var(--dash-border-strong);
+      box-shadow: 0 0 30px rgba(0, 0, 0, 0.8);
+      background: #000;
     }
     .modal-content img {
       width: 100%;
@@ -501,76 +512,76 @@ async def preview_dashboard() -> HTMLResponse:
 
   <header>
     <div class="brand">
-      <div class="brand-logo">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#80e8ba" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
-        </svg>
-      </div>
-      <div class="brand-title">MimicGate <span>Monitor</span></div>
-      <div class="badge-live">Live</div>
+      <img src="/assets/mimicgate_icon.png" alt="MimicGate" class="brand-logo-img" />
+      <div class="brand-title">Mimic<span>Gate</span></div>
+      <div class="stamp-chip">Live</div>
     </div>
     <div class="nav-actions">
-      <button class="btn" id="btn-toggle-refresh" onclick="toggleAutoRefresh()">Pause</button>
-      <button class="btn" onclick="fetchData()">Refresh</button>
-      <a href="http://localhost:5800" target="_blank" class="btn" title="Open full interactive noVNC desktop">noVNC GUI (:5800)</a>
-      <a href="/docs" target="_blank" class="btn">API Docs</a>
+      <button class="btn-square" id="btn-toggle-refresh" onclick="toggleAutoRefresh()">Pause</button>
+      <button class="btn-square" onclick="fetchData()">Refresh</button>
+      <a href="http://localhost:5800" target="_blank" class="btn-square" title="Open full interactive noVNC desktop">noVNC Desktop (:5800)</a>
+      <a href="/docs" target="_blank" class="btn-square">API Docs</a>
     </div>
   </header>
 
   <main>
-    <!-- Top Metric Strip (Unpackerr Style) -->
-    <div class="metric-strip">
-      <div class="metric-card accent-mint">
-        <div class="metric-label">Active Tabs</div>
-        <div class="metric-value" id="val-active-tabs">0</div>
+    <!-- Top Stat Cards (Unpackerr Top Row) -->
+    <div class="stat-row">
+      <div class="stat-card accent-warn">
+        <div class="stat-label">Active Tabs</div>
+        <div class="stat-value" id="val-active-tabs">0</div>
       </div>
-      <div class="metric-card accent-cyan">
-        <div class="metric-label">Max Tabs Cap</div>
-        <div class="metric-value" id="val-max-tabs">0</div>
+      <div class="stat-card accent-cyan">
+        <div class="stat-label">Max Tabs Cap</div>
+        <div class="stat-value" id="val-max-tabs">0</div>
       </div>
-      <div class="metric-card accent-yellow">
-        <div class="metric-label">Concurrency</div>
-        <div class="metric-value" id="val-concurrency">0</div>
+      <div class="stat-card accent-bad">
+        <div class="stat-label">Concurrency</div>
+        <div class="stat-value" id="val-concurrency">0</div>
       </div>
-      <div class="metric-card accent-purple">
-        <div class="metric-label">Provider</div>
-        <div class="metric-value" id="val-provider" style="font-size: 1.3rem;">—</div>
+      <div class="stat-card accent-mint">
+        <div class="stat-label">Provider</div>
+        <div class="stat-value" id="val-provider" style="font-size: 1.35rem;">—</div>
       </div>
-      <div class="metric-card accent-blue">
-        <div class="metric-label">Uptime</div>
-        <div class="metric-value" id="val-uptime" style="font-size: 1.3rem;">0s</div>
+      <div class="stat-card accent-purple">
+        <div class="stat-label">Uptime</div>
+        <div class="stat-value" id="val-uptime" style="font-size: 1.35rem;">0s</div>
       </div>
-      <div class="metric-card accent-mint">
-        <div class="metric-label">Gateway Status</div>
-        <div class="metric-value" style="font-size: 1.3rem; color: var(--accent-mint);">READY</div>
+      <div class="stat-card accent-good">
+        <div class="stat-label">Gateway Status</div>
+        <div class="stat-value" style="font-size: 1.35rem; color: var(--dash-good);">READY</div>
       </div>
     </div>
 
-    <!-- Secondary Context Pills -->
-    <div class="submetric-row">
-      <div class="submetric-pill">
+    <!-- Secondary Compact Metrics Row (Unpackerr sub-metrics strip) -->
+    <div class="submetric-grid">
+      <div class="submetric-item">
         <span>Provider Base URL</span>
         <span id="pill-url">—</span>
       </div>
-      <div class="submetric-pill">
-        <span>Tab Pool Mode</span>
-        <span id="pill-pool">Active (LRU Eviction)</span>
+      <div class="submetric-item">
+        <span>Tab Pool Strategy</span>
+        <span>LRU Eviction</span>
       </div>
-      <div class="submetric-pill">
+      <div class="submetric-item">
         <span>Auto-Refresh Interval</span>
         <span id="pill-refresh">2.0s</span>
+      </div>
+      <div class="submetric-item">
+        <span>Control Tab Mode</span>
+        <span>Protected (#0)</span>
       </div>
     </div>
 
     <!-- Active Tabs Section -->
-    <div class="section-card">
-      <div class="section-header">
-        <div class="section-title-wrap">
+    <div class="dashboard-panel">
+      <div class="panel-header">
+        <div class="panel-title-wrap">
           <h2 id="tabs-section-heading">Active Browser Tabs (0)</h2>
           <p>Real-time visual monitoring of background worker tabs, session affinity, and conversation threads.</p>
         </div>
         <div class="nav-actions">
-          <button class="btn" onclick="fetchData()">Reload Screenshots</button>
+          <button class="btn-square" onclick="fetchData()">Reload Screenshots</button>
         </div>
       </div>
 
@@ -579,15 +590,15 @@ async def preview_dashboard() -> HTMLResponse:
       </div>
     </div>
 
-    <!-- Sessions and Concurrency Table -->
-    <div class="section-card">
-      <div class="section-header">
-        <div class="section-title-wrap">
+    <!-- Session Registry Table -->
+    <div class="dashboard-panel">
+      <div class="panel-header">
+        <div class="panel-title-wrap">
           <h2>Session Registry</h2>
           <p>Active persistent session keys mapped to underlying browser tabs and thread URLs.</p>
         </div>
       </div>
-      <div class="history-table-wrap">
+      <div class="table-wrap">
         <table>
           <thead>
             <tr>
@@ -631,7 +642,7 @@ async def preview_dashboard() -> HTMLResponse:
 
     function renderDashboard(data) {
       document.getElementById("val-active-tabs").textContent = data.tab_count || 0;
-      document.getElementById("val-max-tabs").textContent = data.max_active_tabs || 5;
+      document.getElementById("val-max-tabs").textContent = data.max_active_tabs || 4;
       document.getElementById("val-concurrency").textContent = data.max_concurrent_requests || 3;
       document.getElementById("val-provider").textContent = (data.provider || "chatgpt").toUpperCase();
       document.getElementById("val-uptime").textContent = formatUptime(data.uptime_seconds || 0);
@@ -646,8 +657,8 @@ async def preview_dashboard() -> HTMLResponse:
       const container = document.getElementById("tabs-container");
       if (!tabs.length) {
         container.innerHTML = `
-          <div style="grid-column: 1 / -1; padding: 40px; text-align: center; color: var(--text-muted);">
-            No browser tabs currently active. A tab will launch when the gateway receives a request.
+          <div style="grid-column: 1 / -1; padding: 40px; text-align: center; color: var(--dash-muted); font-family: var(--font-mono); font-size: 0.82rem;">
+            No browser tabs currently active. A worker tab will launch when the gateway receives a request.
           </div>
         `;
         return;
@@ -666,8 +677,8 @@ async def preview_dashboard() -> HTMLResponse:
         }
 
         const closeBtn = tab.is_control
-          ? `<span style="font-size: 0.72rem; color: var(--text-dim);">Protected</span>`
-          : `<button class="btn btn-danger" style="padding: 2px 8px; font-size: 0.72rem;" onclick="closeTab(${tab.index})">Close</button>`;
+          ? `<span style="font-size: 0.7rem; color: var(--dash-dim); font-family: var(--font-mono); text-transform: uppercase;">Protected</span>`
+          : `<button class="btn-square btn-square-danger" style="padding: 2px 8px; font-size: 0.7rem;" onclick="closeTab(${tab.index})">Close</button>`;
 
         return `
           <div class="tab-card">
@@ -707,22 +718,22 @@ async def preview_dashboard() -> HTMLResponse:
     function renderTable(tabs) {
       const tbody = document.getElementById("table-body");
       if (!tabs.length) {
-        tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 24px;">No active sessions registered.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--dash-muted); padding: 24px; font-family: var(--font-mono);">No active sessions registered.</td></tr>`;
         return;
       }
 
       tbody.innerHTML = tabs.map(tab => {
         const closeAction = tab.is_control
-          ? `<span style="color: var(--text-dim);">—</span>`
-          : `<button class="btn btn-danger" style="padding: 2px 8px; font-size: 0.72rem;" onclick="closeTab(${tab.index})">Close</button>`;
+          ? `<span style="color: var(--dash-dim);">—</span>`
+          : `<button class="btn-square btn-square-danger" style="padding: 2px 8px; font-size: 0.7rem;" onclick="closeTab(${tab.index})">Close</button>`;
 
         return `
           <tr>
             <td class="mono">#${tab.index}</td>
             <td class="mono">${tab.session_key || 'ephemeral'}</td>
             <td><span class="tab-status-pill ${tab.is_control ? 'status-control' : tab.is_busy ? 'status-busy' : 'status-idle'}">${tab.is_control ? 'Control' : tab.is_busy ? 'Busy' : 'Idle'}</span></td>
-            <td>${tab.last_active_seconds_ago !== null ? tab.last_active_seconds_ago + 's ago' : 'active'}</td>
-            <td class="mono" style="max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${tab.url}">${tab.url || 'about:blank'}</td>
+            <td class="mono">${tab.last_active_seconds_ago !== null ? tab.last_active_seconds_ago + 's ago' : 'active'}</td>
+            <td class="mono" style="max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${tab.url}">${tab.url || 'about:blank'}</td>
             <td>${closeAction}</td>
           </tr>
         `;
