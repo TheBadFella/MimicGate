@@ -109,6 +109,8 @@ SECTIONS: tuple[tuple[str, tuple[tuple[str, str, str], ...]], ...] = (
         ("USER_ID", "1000", "Container process user ID."),
         ("GROUP_ID", "1000", "Container process group ID."),
         ("VNC_PASSWORD", "mimicgate", "Web GUI/VNC password."),
+        ("VNC_PORT", "5800", "Web GUI/noVNC external port number."),
+        ("VNC_URL", "empty", "Optional reverse-proxy or custom hostname URL for the web GUI."),
     )),
 )
 
@@ -126,6 +128,12 @@ COMPOSE_INPUTS: tuple[tuple[str, str, str], ...] = (
     ("CATGPT_API_KEY", "empty", "Legacy alias for `MIMICGATE_API_KEY`."),
     ("MIMICGATE_VNC_PASSWORD", "mimicgate", "Value passed to container `VNC_PASSWORD`."),
     ("CATGPT_VNC_PASSWORD", "empty", "Legacy alias for `MIMICGATE_VNC_PASSWORD`."),
+    ("MIMICGATE_VNC_PORT", "5800", "Host port mapped to the web GUI / VNC session."),
+    ("CATGPT_VNC_PORT", "empty", "Legacy alias for `MIMICGATE_VNC_PORT`."),
+    ("VNC_PORT", "5800", "Fallback host port mapped to the web GUI / VNC session."),
+    ("MIMICGATE_VNC_URL", "empty", "Optional external URL or reverse-proxy hostname for the web GUI."),
+    ("CATGPT_VNC_URL", "empty", "Legacy alias for `MIMICGATE_VNC_URL`."),
+    ("VNC_URL", "empty", "Fallback external URL or reverse-proxy hostname for the web GUI."),
     ("PROVIDER", "chatgpt", "Provider passed through to the container."),
     ("MINIMAX_REGION", "global_en", "MiniMax region passed through to the container."),
     ("MINIMAX_BASE_URL", "empty", "Optional MiniMax base URL passed through to the container."),

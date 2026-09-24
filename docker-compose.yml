@@ -20,7 +20,7 @@ services:
       - app_services
     ports:
       - "8650:8000" # API Port
-      - "5800:5800" # jlesage Web GUI (HTTP, or HTTPS with SECURE_CONNECTION=1)
+      - "${MIMICGATE_VNC_PORT:-${CATGPT_VNC_PORT:-${VNC_PORT:-5800}}}:5800" # jlesage Web GUI (HTTP, or HTTPS with SECURE_CONNECTION=1)
       # - "5900:5900" # Direct VNC port (optional)
     tmpfs:
       - /tmp:exec,mode=1777
@@ -82,8 +82,10 @@ services:
       API_CONVERSATION_DB: /app/state/conversations.sqlite3
       API_CONVERSATION_RETENTION_SECONDS: ${API_CONVERSATION_RETENTION_SECONDS:-2592000}
       API_CONVERSATION_MAX_ROUTES: ${API_CONVERSATION_MAX_ROUTES:-10000}
-      # VNC Authentication
+      # VNC Authentication & Web GUI URL
       VNC_PASSWORD: ${MIMICGATE_VNC_PASSWORD:-${CATGPT_VNC_PASSWORD:-mimicgate}}
+      VNC_PORT: ${MIMICGATE_VNC_PORT:-${CATGPT_VNC_PORT:-${VNC_PORT:-5800}}}
+      VNC_URL: ${MIMICGATE_VNC_URL:-${CATGPT_VNC_URL:-${VNC_URL:-}}}
       # Logging (verbose for Docker)
       LOG_LEVEL: "DEBUG"
       VERBOSE: "true"

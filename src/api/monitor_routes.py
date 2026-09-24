@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 from typing import Any
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 
 from src.api.browser_gate import (
@@ -33,7 +33,7 @@ _SERVER_START_TIME = time.monotonic()
 
 
 @router.get("/v1/tabs")
-async def get_tabs() -> dict[str, Any]:
+async def get_tabs(request: Request = None) -> dict[str, Any]:
     """List all open browser tabs, concurrency state, and diagnostics."""
     pool = get_tab_pool()
     tabs = await list_browser_tabs()
@@ -41,6 +41,7 @@ async def get_tabs() -> dict[str, Any]:
     concurrency = get_concurrency_stats()
     telemetry_summary = telemetry.get_summary()
 
+    host = request.url.hostname if (request is not None and getattr(request, "url", None)) else None
     diagnostics = {
         "provider": Config.PROVIDER,
         "provider_url": Config.provider_url(),
@@ -48,7 +49,9 @@ async def get_tabs() -> dict[str, Any]:
         "headless": Config.HEADLESS,
         "stealth": True,
         "display": f"{getattr(Config, 'VIEWPORT_WIDTH', 1366)}x{getattr(Config, 'VIEWPORT_HEIGHT', 768)}",
-        "novnc_url": "http://localhost:5800",
+        "novnc_url": Config.get_vnc_url(host),
+        "vnc_port": Config.VNC_PORT,
+        "vnc_url_override": Config.VNC_URL,
     }
 
     return {
@@ -140,7 +143,7 @@ async def preview_dashboard() -> HTMLResponse:
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>MimicGate — Live Monitor</title>
+  <title>MimicGate - Live Monitor</title>
   <link rel="icon" type="image/png" href="/assets/favicon-32x32.png" />
   <style>
     :root {
@@ -752,7 +755,7 @@ async def preview_dashboard() -> HTMLResponse:
       <button class="btn-square" id="btn-toggle-density" onclick="toggleDensity()">Compact View</button>
       <button class="btn-square" id="btn-toggle-refresh" onclick="toggleAutoRefresh()">Pause</button>
       <button class="btn-square" onclick="fetchData()">Refresh</button>
-      <a href="http://localhost:5800" target="_blank" class="btn-square" title="Open interactive noVNC desktop session">noVNC (:5800)</a>
+      <a href="__VNC_URL__" target="_blank" class="btn-square" id="nav-vnc-btn" title="Open interactive noVNC desktop session">__VNC_LABEL__</a>
       <a href="/docs" target="_blank" class="btn-square">API Docs</a>
     </div>
   </header>
@@ -779,7 +782,7 @@ async def preview_dashboard() -> HTMLResponse:
         </div>
       </div>
       <div>
-        <a href="http://localhost:5800" target="_blank" class="btn-square" style="padding: 3px 10px; font-size: 0.72rem;">VNC Remote Console</a>
+        <a href="__VNC_URL__" target="_blank" class="btn-square" id="diag-vnc-btn" style="padding: 3px 10px; font-size: 0.72rem;">VNC Remote Console</a>
       </div>
     </div>
 
@@ -1165,6 +1168,28 @@ async def preview_dashboard() -> HTMLResponse:
       if (diag.channel) document.getElementById("diag-channel").textContent = diag.channel;
       if (diag.stealth !== undefined) document.getElementById("diag-stealth").textContent = diag.stealth ? "ACTIVE" : "DISABLED";
 
+      let resolvedVncUrl = diag.novnc_url || "http://localhost:5800";
+      let resolvedVncLabel = `noVNC (:${diag.vnc_port || 5800})`;
+      if (diag.vnc_url_override) {
+        resolvedVncUrl = diag.vnc_url_override;
+        if (!resolvedVncUrl.startsWith("http://") && !resolvedVncUrl.startsWith("https://")) {
+          resolvedVncUrl = "https://" + resolvedVncUrl;
+        }
+        resolvedVncLabel = "noVNC (Web GUI)";
+      } else if (window.location.hostname && window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1") {
+        resolvedVncUrl = `${window.location.protocol}//${window.location.hostname}:${diag.vnc_port || 5800}`;
+      }
+
+      const navVncBtn = document.getElementById("nav-vnc-btn");
+      if (navVncBtn) {
+        navVncBtn.href = resolvedVncUrl;
+        navVncBtn.textContent = resolvedVncLabel;
+      }
+      const diagVncBtn = document.getElementById("diag-vnc-btn");
+      if (diagVncBtn) {
+        diagVncBtn.href = resolvedVncUrl;
+      }
+
       renderTabs(data.tabs || []);
       renderTable(data.tabs || []);
     }
@@ -1424,4 +1449,7 @@ async def preview_dashboard() -> HTMLResponse:
   </script>
 </body>
 </html>"""
+    initial_vnc_url = Config.get_vnc_url()
+    initial_vnc_label = "noVNC (Web GUI)" if Config.VNC_URL else f"noVNC (:{Config.VNC_PORT})"
+    html_content = html_content.replace("__VNC_URL__", initial_vnc_url).replace("__VNC_LABEL__", initial_vnc_label)
     return HTMLResponse(content=html_content, status_code=200)

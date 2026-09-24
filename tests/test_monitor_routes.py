@@ -122,6 +122,49 @@ class MonitorRoutesTests(unittest.TestCase):
         self.assertIn("messages", entry["payload"])
         self.assertEqual(entry["model"], "gpt-5.6-sol")
 
+    def test_vnc_url_resolution_defaults(self) -> None:
+        with patch.object(Config, "VNC_PORT", 5800), patch.object(Config, "VNC_URL", ""):
+            self.assertEqual(Config.get_vnc_url(), "http://localhost:5800")
+            self.assertEqual(Config.get_vnc_url("192.168.1.100"), "http://192.168.1.100:5800")
+
+    def test_vnc_url_resolution_custom_port(self) -> None:
+        with patch.object(Config, "VNC_PORT", 5805), patch.object(Config, "VNC_URL", ""):
+            self.assertEqual(Config.get_vnc_url(), "http://localhost:5805")
+            self.assertEqual(Config.get_vnc_url("proxy.local"), "http://proxy.local:5805")
+
+    def test_vnc_url_resolution_override(self) -> None:
+        with patch.object(Config, "VNC_PORT", 5800), patch.object(Config, "VNC_URL", "https://vnc.example.com"):
+            self.assertEqual(Config.get_vnc_url(), "https://vnc.example.com")
+            self.assertEqual(Config.get_vnc_url("otherhost"), "https://vnc.example.com")
+
+        with patch.object(Config, "VNC_PORT", 5800), patch.object(Config, "VNC_URL", "vnc.example.com"):
+            self.assertEqual(Config.get_vnc_url(), "https://vnc.example.com")
+
+    def test_tabs_diagnostics_includes_vnc_settings(self) -> None:
+        with patch.object(Config, "VNC_PORT", 5910), patch.object(Config, "VNC_URL", "https://proxy.net/vnc"):
+            resp = self.client.get("/v1/tabs")
+            self.assertEqual(resp.status_code, 200)
+            diag = resp.json()["diagnostics"]
+            self.assertEqual(diag["vnc_port"], 5910)
+            self.assertEqual(diag["vnc_url_override"], "https://proxy.net/vnc")
+            self.assertEqual(diag["novnc_url"], "https://proxy.net/vnc")
+
+    def test_dashboard_html_renders_vnc_settings(self) -> None:
+        # Test custom port button label and href
+        with patch.object(Config, "VNC_PORT", 5808), patch.object(Config, "VNC_URL", ""):
+            resp = self.client.get("/dashboard")
+            self.assertEqual(resp.status_code, 200)
+            self.assertIn('href="http://localhost:5808"', resp.text)
+            self.assertIn("noVNC (:5808)", resp.text)
+
+        # Test reverse-proxy URL override button label and href
+        with patch.object(Config, "VNC_PORT", 5800), patch.object(Config, "VNC_URL", "https://my-vnc.domain.org"):
+            resp = self.client.get("/dashboard")
+            self.assertEqual(resp.status_code, 200)
+            self.assertIn('href="https://my-vnc.domain.org"', resp.text)
+            self.assertIn("noVNC (Web GUI)", resp.text)
+
 
 if __name__ == "__main__":
     unittest.main()
+

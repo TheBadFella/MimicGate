@@ -275,7 +275,36 @@ class Config:
     API_TOKEN: str = os.getenv("API_TOKEN", "")  # Bearer token for API auth (empty = no auth)
 
     # VNC
-    VNC_PASSWORD: str = os.getenv("VNC_PASSWORD", "mimicgate")
+    VNC_PASSWORD: str = (
+        os.getenv("MIMICGATE_VNC_PASSWORD")
+        or os.getenv("CATGPT_VNC_PASSWORD")
+        or os.getenv("VNC_PASSWORD", "mimicgate")
+    )
+    VNC_PORT: int = int(
+        os.getenv("MIMICGATE_VNC_PORT")
+        or os.getenv("CATGPT_VNC_PORT")
+        or os.getenv("VNC_PORT", "5800")
+    )
+    VNC_URL: str = (
+        os.getenv("MIMICGATE_VNC_URL")
+        or os.getenv("CATGPT_VNC_URL")
+        or os.getenv("VNC_URL", "")
+    ).strip().rstrip("/")
+
+    @classmethod
+    def get_vnc_url(cls, host: str | None = None) -> str:
+        """Return the resolved noVNC Web GUI URL.
+
+        If VNC_URL is explicitly set (e.g. reverse proxy URL), it is used directly.
+        Otherwise returns http://<host or localhost>:<VNC_PORT>.
+        """
+        if cls.VNC_URL:
+            url = cls.VNC_URL
+            if not url.startswith(("http://", "https://")):
+                url = f"https://{url}"
+            return url
+        target_host = host or "localhost"
+        return f"http://{target_host}:{cls.VNC_PORT}"
 
     # Viewport base (will be jittered ±20px)
     VIEWPORT_WIDTH: int = 1280
