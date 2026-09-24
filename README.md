@@ -10,9 +10,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/TheBadFella/CatGPT/releases/latest"><img src="https://img.shields.io/github/v/release/TheBadFella/CatGPT?style=for-the-badge&color=1976D2" alt="Latest release" /></a>
-  <a href="https://github.com/TheBadFella/CatGPT/pkgs/container/mimicgate"><img src="https://img.shields.io/badge/GHCR-ready-00897B?style=for-the-badge&logo=docker&logoColor=white" alt="GHCR image" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/TheBadFella/CatGPT?style=for-the-badge&color=F9A825" alt="MIT license" /></a>
+  <a href="https://github.com/TheBadFella/MimicGate/releases/latest"><img src="https://img.shields.io/github/v/release/TheBadFella/MimicGate?style=for-the-badge&color=1976D2" alt="Latest release" /></a>
+  <a href="https://github.com/TheBadFella/MimicGate/pkgs/container/mimicgate"><img src="https://img.shields.io/badge/GHCR-ready-00897B?style=for-the-badge&logo=docker&logoColor=white" alt="GHCR image" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/TheBadFella/MimicGate?style=for-the-badge&color=F9A825" alt="MIT license" /></a>
 </p>
 
 <p align="center">
