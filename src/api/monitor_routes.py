@@ -1,8 +1,9 @@
 """
 Live multi-tab browser monitor and dashboard routes for MimicGate.
 
-Provides endpoints to inspect, snapshot, and close background browser tabs,
-plus a self-contained square dark dashboard inspired by UnpackUI.
+Provides endpoints to inspect, snapshot, reset, and close background browser tabs,
+access gateway telemetry and recent request activity, plus a self-contained square
+dark dashboard inspired by UnpackUI.
 """
 
 from __future__ import annotations
@@ -15,9 +16,12 @@ from fastapi.responses import HTMLResponse
 from src.api.browser_gate import (
     capture_browser_screenshot,
     close_browser_tab,
+    get_concurrency_stats,
     get_tab_pool,
     list_browser_tabs,
+    reset_browser_tab,
 )
+from src.api.telemetry import telemetry
 from src.config import Config
 from src.log import setup_logging
 
@@ -30,10 +34,22 @@ _SERVER_START_TIME = time.monotonic()
 
 @router.get("/v1/tabs")
 async def get_tabs() -> dict[str, Any]:
-    """List all open browser tabs and concurrency state."""
+    """List all open browser tabs, concurrency state, and diagnostics."""
     pool = get_tab_pool()
     tabs = await list_browser_tabs()
     uptime_sec = round(time.monotonic() - _SERVER_START_TIME, 1)
+    concurrency = get_concurrency_stats()
+    telemetry_summary = telemetry.get_summary()
+
+    diagnostics = {
+        "provider": Config.PROVIDER,
+        "provider_url": Config.provider_url(),
+        "channel": Config.BROWSER_CHANNEL,
+        "headless": Config.HEADLESS,
+        "stealth": True,
+        "display": f"{getattr(Config, 'VIEWPORT_WIDTH', 1366)}x{getattr(Config, 'VIEWPORT_HEIGHT', 768)}",
+        "novnc_url": "http://localhost:5800",
+    }
 
     return {
         "provider": Config.PROVIDER,
@@ -43,6 +59,9 @@ async def get_tabs() -> dict[str, Any]:
         "tab_pool_active": pool is not None,
         "uptime_seconds": uptime_sec,
         "tab_count": len(tabs),
+        "concurrency": concurrency,
+        "telemetry": telemetry_summary,
+        "diagnostics": diagnostics,
         "tabs": tabs,
     }
 
@@ -78,30 +97,52 @@ async def get_tab_screenshot(index: int) -> Response:
 async def close_tab(index: int) -> dict[str, Any]:
     """Close an idle worker tab by index (Tab 0 control page cannot be closed)."""
     try:
-        result = await close_browser_tab(index)
-        return result
+        return await close_browser_tab(index)
+    except IndexError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/v1/tabs/{index}/reset")
+async def reset_tab(index: int) -> dict[str, Any]:
+    """Reset a worker or control tab back to clean new chat / provider home."""
+    try:
+        return await reset_browser_tab(index)
     except IndexError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@router.get("/v1/gateway/activity")
+async def get_gateway_activity() -> dict[str, Any]:
+    """Return rolling gateway request activity and latency metrics."""
+    return {
+        "summary": telemetry.get_summary(),
+        "concurrency": get_concurrency_stats(),
+        "requests": telemetry.get_recent_requests(30),
+    }
+
+
 @router.get("/preview", response_class=HTMLResponse)
 @router.get("/dashboard", response_class=HTMLResponse)
 @router.get("/v1/preview", response_class=HTMLResponse)
 async def preview_dashboard() -> HTMLResponse:
-    """Serve the real-time square dark multi-tab monitor dashboard."""
-    html = """<!DOCTYPE html>
+    """
+    Serve the Live Multi-Tab Preview Dashboard.
+    Follows UnpackUI square dark aesthetic with live tabs, telemetry, playground, and activity feed.
+    """
+    html_content = """<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
+  <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MimicGate — Live Monitor</title>
   <link rel="icon" type="image/png" href="/assets/favicon-32x32.png" />
   <style>
-    /* UnpackUI-inspired Dark Theme Variables */
     :root {
       --dash-bg: #090909;
       --dash-panel: #111111;
@@ -122,12 +163,11 @@ async def preview_dashboard() -> HTMLResponse:
       --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     }
 
-    /* Global reset to sharp square design */
     * {
       box-sizing: border-box;
       margin: 0;
       padding: 0;
-      border-radius: 0 !important; /* Strict square UI */
+      border-radius: 0 !important;
     }
 
     body {
@@ -143,7 +183,6 @@ async def preview_dashboard() -> HTMLResponse:
       background-size: 24px 24px;
     }
 
-    /* Top Navigation Bar */
     header {
       background: #0f0f0f;
       border-bottom: 1px solid var(--dash-border);
@@ -179,7 +218,6 @@ async def preview_dashboard() -> HTMLResponse:
     }
     .brand-title span { color: var(--dash-accent); }
 
-    /* UnpackUI Live Chip */
     .stamp-chip {
       display: inline-flex;
       align-items: center;
@@ -198,7 +236,7 @@ async def preview_dashboard() -> HTMLResponse:
       content: "";
       width: 7px;
       height: 7px;
-      border-radius: 50% !important; /* Circle indicator inside chip */
+      border-radius: 50% !important;
       background: var(--dash-good);
       box-shadow: 0 0 8px rgba(22, 199, 132, 0.8);
       animation: pulse 2s infinite;
@@ -252,6 +290,11 @@ async def preview_dashboard() -> HTMLResponse:
       border-color: var(--dash-border-strong);
       color: #ffffff;
     }
+    .btn-square-active {
+      background: #252525;
+      border-color: var(--dash-accent);
+      color: var(--dash-accent);
+    }
     .btn-square-danger {
       border-color: rgba(255, 77, 94, 0.4);
       color: var(--dash-bad);
@@ -263,7 +306,6 @@ async def preview_dashboard() -> HTMLResponse:
       color: #ffffff;
     }
 
-    /* Container */
     main {
       max-width: 1440px;
       width: 100%;
@@ -274,10 +316,47 @@ async def preview_dashboard() -> HTMLResponse:
       gap: 18px;
     }
 
-    /* Top Stat Row (Unpackerr exact top cards) */
+    /* Diagnostics Banner */
+    .diag-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #121212;
+      border: 1px solid var(--dash-border);
+      padding: 10px 16px;
+      font-size: 0.78rem;
+    }
+    .diag-left {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .diag-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--font-mono);
+    }
+    .diag-label { color: var(--dash-muted); }
+    .diag-val { color: var(--dash-heading); font-weight: 600; }
+    .diag-status-ok {
+      color: var(--dash-good);
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .diag-status-warn {
+      color: var(--dash-warn);
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    /* Top Stat Row */
     .stat-row {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
       gap: 12px;
     }
     .stat-card {
@@ -299,46 +378,50 @@ async def preview_dashboard() -> HTMLResponse:
     .stat-card.accent-purple { border-top-color: var(--dash-purple); }
 
     .stat-label {
-      font-size: 0.68rem;
-      font-weight: 700;
+      font-size: 0.7rem;
       text-transform: uppercase;
+      font-family: var(--font-mono);
+      font-weight: 600;
       letter-spacing: 0.08em;
       color: var(--dash-muted);
-      font-family: var(--font-mono);
     }
     .stat-value {
-      font-size: 1.85rem;
-      font-weight: 800;
+      font-size: 1.65rem;
+      font-weight: 700;
       font-family: var(--font-mono);
-      line-height: 1;
       color: var(--dash-heading);
+      line-height: 1.1;
+    }
+    .stat-sub {
+      font-size: 0.72rem;
+      font-family: var(--font-mono);
+      color: var(--dash-muted);
     }
 
-    /* Secondary Compact Metrics Grid (UnpackUI secondary strip) */
+    /* Submetrics Strip */
     .submetric-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: 8px;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 1px;
+      background: var(--dash-border);
+      border: 1px solid var(--dash-border);
     }
     .submetric-item {
       background: var(--dash-panel);
-      border: 1px solid var(--dash-border);
       padding: 9px 14px;
       display: flex;
       justify-content: space-between;
       align-items: center;
-      font-size: 0.78rem;
+      font-size: 0.76rem;
     }
-    .submetric-item span:first-child {
-      color: var(--dash-muted);
-    }
+    .submetric-item span:first-child { color: var(--dash-muted); }
     .submetric-item span:last-child {
       font-family: var(--font-mono);
       font-weight: 600;
-      color: var(--dash-text);
+      color: var(--dash-heading);
     }
 
-    /* Section Panels */
+    /* Panels */
     .dashboard-panel {
       background: var(--dash-panel);
       border: 1px solid var(--dash-border);
@@ -346,95 +429,94 @@ async def preview_dashboard() -> HTMLResponse:
       flex-direction: column;
     }
     .panel-header {
-      padding: 12px 18px;
+      padding: 14px 18px;
       border-bottom: 1px solid var(--dash-border);
       display: flex;
-      justify-content: space-between;
       align-items: center;
-      background: #141414;
+      justify-content: space-between;
+      background: #131313;
     }
     .panel-title-wrap h2 {
       font-size: 0.95rem;
       font-weight: 700;
-      letter-spacing: -0.01em;
       color: var(--dash-heading);
+      letter-spacing: -0.01em;
     }
     .panel-title-wrap p {
-      font-size: 0.76rem;
+      font-size: 0.74rem;
       color: var(--dash-muted);
       margin-top: 2px;
     }
 
-    /* Tab Cards Grid */
-    .tab-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
-      gap: 14px;
+    /* Tabs Grid (Cards View) */
+    .tabs-grid {
       padding: 18px;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+      gap: 18px;
     }
+
     .tab-card {
       background: var(--dash-card);
       border: 1px solid var(--dash-border);
       display: flex;
       flex-direction: column;
-      transition: border-color 0.15s ease;
+      transition: border-color 0.15s;
     }
     .tab-card:hover {
       border-color: var(--dash-border-strong);
     }
-    .tab-card-header {
-      padding: 9px 14px;
+    .tab-header {
+      padding: 10px 14px;
+      background: #191919;
+      border-bottom: 1px solid var(--dash-border);
       display: flex;
       align-items: center;
       justify-content: space-between;
-      background: #181818;
-      border-bottom: 1px solid var(--dash-border);
     }
-    .tab-identity {
+    .tab-title-group {
       display: flex;
       align-items: center;
       gap: 8px;
     }
-    .tab-index-badge {
-      background: #252525;
-      border: 1px solid var(--dash-border-strong);
+    .tab-badge {
       font-family: var(--font-mono);
-      font-size: 0.72rem;
+      font-size: 0.75rem;
       font-weight: 700;
-      padding: 2px 7px;
       color: var(--dash-cyan);
     }
     .tab-status-pill {
-      font-size: 0.7rem;
       font-family: var(--font-mono);
-      font-weight: 600;
-      padding: 2px 8px;
+      font-size: 0.65rem;
+      font-weight: 700;
       text-transform: uppercase;
-      letter-spacing: 0.04em;
+      padding: 2px 7px;
+      border: 1px solid transparent;
+      letter-spacing: 0.05em;
     }
-    .tab-status-pill.status-control {
-      background: rgba(192, 132, 252, 0.12);
+    .status-control {
+      background: rgba(192, 132, 252, 0.15);
+      border-color: var(--dash-purple);
       color: var(--dash-purple);
-      border: 1px solid rgba(192, 132, 252, 0.3);
     }
-    .tab-status-pill.status-busy {
-      background: rgba(246, 196, 83, 0.12);
-      color: var(--dash-warn);
-      border: 1px solid rgba(246, 196, 83, 0.3);
-    }
-    .tab-status-pill.status-idle {
-      background: rgba(22, 199, 132, 0.12);
+    .status-idle {
+      background: rgba(22, 199, 132, 0.15);
+      border-color: var(--dash-good);
       color: var(--dash-good);
-      border: 1px solid rgba(22, 199, 132, 0.3);
+    }
+    .status-busy, .status-generating, .status-submitting {
+      background: rgba(246, 196, 83, 0.15);
+      border-color: var(--dash-warn);
+      color: var(--dash-warn);
     }
 
     .tab-preview-wrap {
       position: relative;
       width: 100%;
-      aspect-ratio: 16 / 9;
-      background: #0b0b0b;
-      border-bottom: 1px solid var(--dash-border);
+      height: 220px;
+      background: #000;
       overflow: hidden;
+      border-bottom: 1px solid var(--dash-border);
       cursor: zoom-in;
     }
     .tab-preview-img {
@@ -442,9 +524,21 @@ async def preview_dashboard() -> HTMLResponse:
       height: 100%;
       object-fit: cover;
       display: block;
+      transition: transform 0.2s ease;
+    }
+    .tab-preview-wrap:hover .tab-preview-img {
+      transform: scale(1.02);
+    }
+    .tab-overlay-actions {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      display: flex;
+      gap: 6px;
+      opacity: 0.85;
     }
 
-    .tab-card-body {
+    .tab-meta-box {
       padding: 12px 14px;
       display: flex;
       flex-direction: column;
@@ -457,9 +551,7 @@ async def preview_dashboard() -> HTMLResponse:
       justify-content: space-between;
       align-items: center;
     }
-    .tab-meta-label {
-      color: var(--dash-muted);
-    }
+    .tab-meta-label { color: var(--dash-muted); }
     .tab-meta-value {
       font-family: var(--font-mono);
       color: var(--dash-text);
@@ -468,8 +560,62 @@ async def preview_dashboard() -> HTMLResponse:
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .tab-footer-actions {
+      padding: 8px 14px;
+      background: #111111;
+      border-top: 1px solid var(--dash-border);
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
 
-    /* UnpackUI Table Styling */
+    /* Compact View Styling */
+    .tabs-compact {
+      padding: 12px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .compact-tab-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--dash-card);
+      border: 1px solid var(--dash-border);
+      padding: 8px 12px;
+      gap: 12px;
+    }
+    .compact-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .compact-thumb {
+      width: 72px;
+      height: 44px;
+      border: 1px solid var(--dash-border);
+      object-fit: cover;
+      background: #000;
+      cursor: zoom-in;
+    }
+    .compact-info {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .compact-title {
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--dash-heading);
+      font-family: var(--font-mono);
+    }
+    .compact-sub {
+      font-size: 0.72rem;
+      color: var(--dash-muted);
+      font-family: var(--font-mono);
+    }
+
+    /* Tables */
     .table-wrap {
       width: 100%;
       overflow-x: auto;
@@ -492,30 +638,95 @@ async def preview_dashboard() -> HTMLResponse:
       font-family: var(--font-mono);
     }
     td {
-      padding: 11px 14px;
+      padding: 10px 14px;
       border-bottom: 1px solid var(--dash-border);
       color: var(--dash-text);
     }
     tr:hover td { background: rgba(255, 255, 255, 0.02); }
     .mono { font-family: var(--font-mono); }
 
-    /* Modal for enlarged screenshot */
+    /* Playground Panel */
+    .playground-body {
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      background: #131313;
+    }
+    .playground-row {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .pg-label {
+      font-size: 0.75rem;
+      font-family: var(--font-mono);
+      color: var(--dash-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .pg-select, .pg-input {
+      background: #1a1a1a;
+      border: 1px solid var(--dash-border);
+      color: var(--dash-heading);
+      padding: 8px 12px;
+      font-size: 0.8rem;
+      font-family: var(--font-mono);
+    }
+    .pg-textarea {
+      width: 100%;
+      min-height: 70px;
+      background: #181818;
+      border: 1px solid var(--dash-border);
+      color: var(--dash-heading);
+      padding: 10px 12px;
+      font-size: 0.82rem;
+      font-family: var(--font-mono);
+      resize: vertical;
+    }
+    .pg-textarea:focus, .pg-select:focus, .pg-input:focus {
+      outline: none;
+      border-color: var(--dash-accent);
+    }
+    .pg-output-box {
+      width: 100%;
+      min-height: 90px;
+      max-height: 240px;
+      overflow-y: auto;
+      background: #0b0b0b;
+      border: 1px solid var(--dash-border);
+      padding: 12px;
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      color: #98ff98;
+      white-space: pre-wrap;
+      line-height: 1.4;
+    }
+    .pg-meta-status {
+      font-size: 0.72rem;
+      font-family: var(--font-mono);
+      color: var(--dash-muted);
+    }
+
+    /* Modal */
     .modal {
       display: none;
       position: fixed;
       inset: 0;
-      background: rgba(0, 0, 0, 0.88);
+      background: rgba(0, 0, 0, 0.9);
       z-index: 200;
       align-items: center;
       justify-content: center;
       padding: 24px;
+      cursor: zoom-out;
     }
     .modal.active { display: flex; }
     .modal-content {
-      max-width: 90vw;
-      max-height: 90vh;
+      max-width: 92vw;
+      max-height: 92vh;
       border: 1px solid var(--dash-border-strong);
-      box-shadow: 0 0 30px rgba(0, 0, 0, 0.8);
+      box-shadow: 0 0 40px rgba(0, 0, 0, 0.9);
       background: #000;
     }
     .modal-content img {
@@ -540,43 +751,75 @@ async def preview_dashboard() -> HTMLResponse:
       </a>
     </div>
     <div class="nav-actions">
+      <button class="btn-square" id="btn-toggle-density" onclick="toggleDensity()">Compact View</button>
       <button class="btn-square" id="btn-toggle-refresh" onclick="toggleAutoRefresh()">Pause</button>
       <button class="btn-square" onclick="fetchData()">Refresh</button>
-      <a href="http://localhost:5800" target="_blank" class="btn-square" title="Open full interactive noVNC desktop">noVNC Desktop (:5800)</a>
+      <a href="http://localhost:5800" target="_blank" class="btn-square" title="Open interactive noVNC desktop session">noVNC (:5800)</a>
       <a href="/docs" target="_blank" class="btn-square">API Docs</a>
     </div>
   </header>
 
   <main>
-    <!-- Top Stat Cards (Unpackerr Top Row) -->
+    <!-- Diagnostics & Stealth Banner (Item 2) -->
+    <div class="diag-banner">
+      <div class="diag-left">
+        <div class="diag-item">
+          <span class="diag-label">Session Status:</span>
+          <span class="diag-val diag-status-ok" id="diag-auth">ONLINE</span>
+        </div>
+        <div class="diag-item">
+          <span class="diag-label">Stealth Engine:</span>
+          <span class="diag-val" id="diag-stealth">ACTIVE</span>
+        </div>
+        <div class="diag-item">
+          <span class="diag-label">Resolution:</span>
+          <span class="diag-val" id="diag-display">1366x768</span>
+        </div>
+        <div class="diag-item">
+          <span class="diag-label">Channel:</span>
+          <span class="diag-val" id="diag-channel">chrome</span>
+        </div>
+      </div>
+      <div>
+        <a href="http://localhost:5800" target="_blank" class="btn-square" style="padding: 3px 10px; font-size: 0.72rem;">VNC Remote Console</a>
+      </div>
+    </div>
+
+    <!-- Top Stat Cards (Item 1 Telemetry) -->
     <div class="stat-row">
       <div class="stat-card accent-warn">
         <div class="stat-label">Active Tabs</div>
         <div class="stat-value" id="val-active-tabs">0</div>
+        <div class="stat-sub" id="sub-active-tabs">Cap: 4</div>
       </div>
       <div class="stat-card accent-cyan">
-        <div class="stat-label">Max Tabs Cap</div>
-        <div class="stat-value" id="val-max-tabs">0</div>
-      </div>
-      <div class="stat-card accent-bad">
-        <div class="stat-label">Concurrency</div>
-        <div class="stat-value" id="val-concurrency">0</div>
-      </div>
-      <div class="stat-card accent-mint">
-        <div class="stat-label">Provider</div>
-        <div class="stat-value" id="val-provider" style="font-size: 1.35rem;">—</div>
-      </div>
-      <div class="stat-card accent-purple">
-        <div class="stat-label">Uptime</div>
-        <div class="stat-value" id="val-uptime" style="font-size: 1.35rem;">0s</div>
+        <div class="stat-label">In-Flight / Concurrency</div>
+        <div class="stat-value" id="val-concurrency">0 / 3</div>
+        <div class="stat-sub" id="sub-concurrency">Queue: 0</div>
       </div>
       <div class="stat-card accent-good">
-        <div class="stat-label">Gateway Status</div>
-        <div class="stat-value" style="font-size: 1.35rem; color: var(--dash-good);">READY</div>
+        <div class="stat-label">Avg Latency</div>
+        <div class="stat-value" id="val-latency">0.0s</div>
+        <div class="stat-sub" id="sub-requests">0 total reqs</div>
+      </div>
+      <div class="stat-card accent-mint">
+        <div class="stat-label">Success Rate</div>
+        <div class="stat-value" id="val-success-rate">100%</div>
+        <div class="stat-sub" id="sub-errors">0 errors</div>
+      </div>
+      <div class="stat-card accent-purple">
+        <div class="stat-label">Provider</div>
+        <div class="stat-value" id="val-provider" style="font-size: 1.3rem;">—</div>
+        <div class="stat-sub" id="sub-provider-url">chatgpt.com</div>
+      </div>
+      <div class="stat-card accent-bad">
+        <div class="stat-label">Uptime</div>
+        <div class="stat-value" id="val-uptime" style="font-size: 1.3rem;">0s</div>
+        <div class="stat-sub">Tab Pool Active</div>
       </div>
     </div>
 
-    <!-- Secondary Compact Metrics Row (Unpackerr sub-metrics strip) -->
+    <!-- Secondary Meta Strip -->
     <div class="submetric-grid">
       <div class="submetric-item">
         <span>Provider Base URL</span>
@@ -596,20 +839,83 @@ async def preview_dashboard() -> HTMLResponse:
       </div>
     </div>
 
-    <!-- Active Tabs Section -->
+    <!-- Active Browser Tabs Section (Item 5 & Item 6) -->
     <div class="dashboard-panel">
       <div class="panel-header">
         <div class="panel-title-wrap">
           <h2 id="tabs-section-heading">Active Browser Tabs (0)</h2>
-          <p>Real-time visual monitoring of background worker tabs, session affinity, and conversation threads.</p>
+          <p>Real-time visual monitoring, screenshot zoom, reset, and tab lifecycle controls.</p>
         </div>
         <div class="nav-actions">
           <button class="btn-square" onclick="fetchData()">Reload Screenshots</button>
         </div>
       </div>
 
-      <div class="tab-grid" id="tabs-container">
+      <div id="tabs-container" class="tabs-grid">
         <!-- Rendered dynamically -->
+      </div>
+    </div>
+
+    <!-- Interactive Quick Prompt Playground (Item 3) -->
+    <div class="dashboard-panel">
+      <div class="panel-header">
+        <div class="panel-title-wrap">
+          <h2>Quick Prompt Playground</h2>
+          <p>Test gateway streaming completions directly against the active browser pool.</p>
+        </div>
+        <button class="btn-square" id="btn-toggle-pg" onclick="togglePlayground()">Collapse</button>
+      </div>
+      <div class="playground-body" id="pg-body">
+        <div class="playground-row">
+          <span class="pg-label">Model:</span>
+          <select id="pg-model-select" class="pg-select">
+            <option value="chatgpt-browser">chatgpt-browser (default)</option>
+            <option value="gpt-5.6-sol">gpt-5.6-sol</option>
+            <option value="gpt-5.5">gpt-5.5</option>
+            <option value="claude-3-7-sonnet">claude-3-7-sonnet</option>
+            <option value="gemini-3.8-flash">gemini-3.8-flash</option>
+          </select>
+          <span class="pg-label" style="margin-left: 12px;">Session Key:</span>
+          <input type="text" id="pg-session-input" class="pg-input" placeholder="ephemeral (auto-tab)" style="width: 180px;" />
+        </div>
+        <textarea id="pg-prompt-input" class="pg-textarea" placeholder="Type a prompt to test the live browser tab (e.g. 'Explain quantum entanglement in 2 sentences')..."></textarea>
+        <div class="playground-row" style="justify-content: space-between;">
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <button class="btn-square btn-square-active" id="btn-pg-send" onclick="sendPlaygroundPrompt()">Send Prompt</button>
+            <button class="btn-square btn-square-danger" id="btn-pg-abort" onclick="abortPlaygroundPrompt()" disabled>Stop</button>
+            <button class="btn-square" onclick="clearPlayground()">Clear</button>
+          </div>
+          <span class="pg-meta-status" id="pg-meta-timer">Ready</span>
+        </div>
+        <div class="pg-output-box" id="pg-output">Response stream will appear here...</div>
+      </div>
+    </div>
+
+    <!-- Gateway Request Activity Feed (Item 4) -->
+    <div class="dashboard-panel">
+      <div class="panel-header">
+        <div class="panel-title-wrap">
+          <h2>Gateway Request Activity (Live Feed)</h2>
+          <p>Rolling telemetry log of incoming API calls, model routing, latency, and status codes.</p>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Method</th>
+              <th>Endpoint</th>
+              <th>Model</th>
+              <th>Status</th>
+              <th>Latency</th>
+              <th>Client IP</th>
+            </tr>
+          </thead>
+          <tbody id="activity-table-body">
+            <tr><td colspan="7" style="text-align: center; color: var(--dash-muted); padding: 18px; font-family: var(--font-mono);">No request activity recorded yet.</td></tr>
+          </tbody>
+        </table>
       </div>
     </div>
 
@@ -627,57 +933,253 @@ async def preview_dashboard() -> HTMLResponse:
             <tr>
               <th>Tab Index</th>
               <th>Session Identity</th>
-              <th>Status</th>
+              <th>State</th>
               <th>Last Active</th>
               <th>Current Page URL</th>
-              <th>Action</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody id="table-body">
-            <!-- Rendered dynamically -->
+            <tr><td colspan="6" style="text-align: center; color: var(--dash-muted); padding: 24px; font-family: var(--font-mono);">Loading session table...</td></tr>
           </tbody>
         </table>
       </div>
     </div>
   </main>
 
-  <!-- Enlarge Image Modal -->
-  <div class="modal" id="image-modal" onclick="closeModal()">
+  <!-- High-Res Zoom Modal -->
+  <div class="modal" id="modal" onclick="closeModal()">
     <div class="modal-content" onclick="event.stopPropagation()">
-      <img id="modal-img" src="" alt="Enlarged screenshot" />
+      <img id="modal-img" src="" alt="Enlarged Tab Snapshot" />
     </div>
   </div>
 
   <script>
-    let autoRefresh = true;
-    let refreshTimer = null;
+    let isAutoRefresh = true;
+    let refreshInterval = null;
+    let isCompact = localStorage.getItem("mimicgate_density") === "compact";
+    let playgroundAbortController = null;
 
-    async function fetchData() {
-      try {
-        const res = await fetch("/v1/tabs");
-        if (!res.ok) return;
-        const data = await res.json();
-        renderDashboard(data);
-      } catch (err) {
-        console.warn("Failed to poll /v1/tabs:", err);
+    function formatUptime(seconds) {
+      if (seconds < 60) return `${Math.floor(seconds)}s`;
+      if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.floor(seconds % 60)}s`;
+      return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+    }
+
+    function toggleDensity() {
+      isCompact = !isCompact;
+      localStorage.setItem("mimicgate_density", isCompact ? "compact" : "cards");
+      document.getElementById("btn-toggle-density").textContent = isCompact ? "Cards View" : "Compact View";
+      fetchData();
+    }
+
+    function togglePlayground() {
+      const body = document.getElementById("pg-body");
+      const btn = document.getElementById("btn-toggle-pg");
+      if (body.style.display === "none") {
+        body.style.display = "flex";
+        btn.textContent = "Collapse";
+      } else {
+        body.style.display = "none";
+        btn.textContent = "Expand";
       }
     }
 
-    function renderDashboard(data) {
-      document.getElementById("val-active-tabs").textContent = data.tab_count || 0;
-      document.getElementById("val-max-tabs").textContent = data.max_active_tabs || 4;
-      document.getElementById("val-concurrency").textContent = data.max_concurrent_requests || 3;
-      document.getElementById("val-provider").textContent = (data.provider || "chatgpt").toUpperCase();
-      document.getElementById("val-uptime").textContent = formatUptime(data.uptime_seconds || 0);
-      document.getElementById("pill-url").textContent = data.provider_url || "—";
-      document.getElementById("tabs-section-heading").textContent = `Active Browser Tabs (${data.tab_count || 0})`;
+    function openModal(src) {
+      const modal = document.getElementById("modal");
+      const modalImg = document.getElementById("modal-img");
+      modalImg.src = src;
+      modal.classList.add("active");
+    }
 
-      renderTabCards(data.tabs || []);
+    function closeModal() {
+      document.getElementById("modal").classList.remove("active");
+    }
+
+    async function closeTab(index) {
+      if (!confirm(`Are you sure you want to close worker Tab #${index}?`)) return;
+      try {
+        const res = await fetch(`/v1/tabs/${index}/close`, { method: "POST" });
+        if (!res.ok) {
+          const err = await res.json();
+          alert(`Error closing tab: ${err.detail || 'Failed'}`);
+        }
+        await fetchData();
+      } catch (err) {
+        alert(`Failed to request tab close: ${err}`);
+      }
+    }
+
+    async function resetTab(index) {
+      if (!confirm(`Reset Tab #${index} back to a clean new chat?`)) return;
+      try {
+        const res = await fetch(`/v1/tabs/${index}/reset`, { method: "POST" });
+        if (!res.ok) {
+          const err = await res.json();
+          alert(`Error resetting tab: ${err.detail || 'Failed'}`);
+        }
+        await fetchData();
+      } catch (err) {
+        alert(`Failed to reset tab: ${err}`);
+      }
+    }
+
+    function reloadSingleTab(index) {
+      const img = document.getElementById(`tab-img-${index}`);
+      if (img) {
+        img.src = `/v1/tabs/${index}/screenshot?t=${Date.now()}`;
+      }
+    }
+
+    async function sendPlaygroundPrompt() {
+      const prompt = document.getElementById("pg-prompt-input").value.trim();
+      if (!prompt) return;
+      const model = document.getElementById("pg-model-select").value;
+      const sessionKey = document.getElementById("pg-session-input").value.trim();
+      const output = document.getElementById("pg-output");
+      const meta = document.getElementById("pg-meta-timer");
+      const btnSend = document.getElementById("btn-pg-send");
+      const btnAbort = document.getElementById("btn-pg-abort");
+
+      output.textContent = "";
+      btnSend.disabled = true;
+      btnAbort.disabled = false;
+      const startTime = performance.now();
+      meta.textContent = "Streaming...";
+
+      playgroundAbortController = new AbortController();
+
+      try {
+        const headers = { "Content-Type": "application/json" };
+        if (sessionKey) headers["x-session-key"] = sessionKey;
+
+        const resp = await fetch("/v1/chat/completions", {
+          method: "POST",
+          headers,
+          signal: playgroundAbortController.signal,
+          body: JSON.stringify({
+            model: model,
+            messages: [{ role: "user", content: prompt }],
+            stream: true
+          })
+        });
+
+        if (!resp.ok) {
+          const err = await resp.text();
+          output.textContent = `HTTP ${resp.status} Error:\n${err}`;
+          meta.textContent = `Failed (${((performance.now() - startTime) / 1000).toFixed(1)}s)`;
+          return;
+        }
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || !trimmed.startsWith("data:")) continue;
+            const dataStr = trimmed.replace(/^data:\\s*/, "");
+            if (dataStr === "[DONE]") break;
+            try {
+              const json = JSON.parse(dataStr);
+              const delta = json.choices?.[0]?.delta?.content || "";
+              output.textContent += delta;
+              output.scrollTop = output.scrollHeight;
+            } catch (_) {}
+          }
+        }
+        const totalSec = ((performance.now() - startTime) / 1000).toFixed(1);
+        meta.textContent = `Completed in ${totalSec}s`;
+      } catch (err) {
+        if (err.name === "AbortError") {
+          meta.textContent = "Aborted";
+          output.textContent += "\\n[Stream cancelled by user]";
+        } else {
+          output.textContent += `\\n[Stream error: ${err}]`;
+          meta.textContent = "Error";
+        }
+      } finally {
+        btnSend.disabled = false;
+        btnAbort.disabled = true;
+        fetchData();
+      }
+    }
+
+    function abortPlaygroundPrompt() {
+      if (playgroundAbortController) {
+        playgroundAbortController.abort();
+      }
+    }
+
+    function clearPlayground() {
+      document.getElementById("pg-output").textContent = "Response stream will appear here...";
+      document.getElementById("pg-prompt-input").value = "";
+      document.getElementById("pg-meta-timer").textContent = "Ready";
+    }
+
+    async function loadModels() {
+      try {
+        const res = await fetch("/v1/models");
+        if (res.ok) {
+          const data = await res.json();
+          const select = document.getElementById("pg-model-select");
+          if (data.data && Array.isArray(data.data) && data.data.length) {
+            select.innerHTML = data.data.map(m => `<option value="${m.id}">${m.id}</option>`).join("");
+          }
+        }
+      } catch (_) {}
+    }
+
+    function renderDashboard(data) {
+      const conc = data.concurrency || {};
+      const tele = data.telemetry || {};
+      const diag = data.diagnostics || {};
+
+      document.getElementById("val-active-tabs").textContent = data.tab_count || 0;
+      document.getElementById("sub-active-tabs").textContent = `Cap: ${data.max_active_tabs || 4}`;
+
+      const inFlight = conc.in_flight !== undefined ? conc.in_flight : 0;
+      const maxConc = conc.max_concurrency || data.max_concurrent_requests || 3;
+      document.getElementById("val-concurrency").textContent = `${inFlight} / ${maxConc}`;
+      document.getElementById("sub-concurrency").textContent = `Queue: ${conc.waiting || 0} waiting`;
+
+      const avgLatencySec = ((tele.avg_latency_ms || 0) / 1000).toFixed(1);
+      document.getElementById("val-latency").textContent = `${avgLatencySec}s`;
+      document.getElementById("sub-requests").textContent = `${tele.total_requests || 0} total reqs`;
+
+      document.getElementById("val-success-rate").textContent = `${tele.success_rate_percent || 100}%`;
+      document.getElementById("sub-errors").textContent = `${tele.failed_requests || 0} errors`;
+
+      document.getElementById("val-provider").textContent = (data.provider || "chatgpt").toUpperCase();
+      document.getElementById("sub-provider-url").textContent = (data.provider_url || "chatgpt.com").replace(/^https?:\\/\\//, '');
+      document.getElementById("val-uptime").textContent = formatUptime(data.uptime_seconds || 0);
+      document.getElementById("pill-url").textContent = data.provider_url || "https://chatgpt.com";
+
+      if (diag.display) document.getElementById("diag-display").textContent = diag.display;
+      if (diag.channel) document.getElementById("diag-channel").textContent = diag.channel;
+      if (diag.stealth !== undefined) document.getElementById("diag-stealth").textContent = diag.stealth ? "ACTIVE" : "DISABLED";
+
+      renderTabs(data.tabs || []);
       renderTable(data.tabs || []);
     }
 
-    function renderTabCards(tabs) {
+    function renderTabs(tabs) {
+      document.getElementById("tabs-section-heading").textContent = `Active Browser Tabs (${tabs.length})`;
       const container = document.getElementById("tabs-container");
+
+      if (isCompact) {
+        container.className = "tabs-compact";
+      } else {
+        container.className = "tabs-grid";
+      }
+
       if (!tabs.length) {
         container.innerHTML = `
           <div style="grid-column: 1 / -1; padding: 40px; text-align: center; color: var(--dash-muted); font-family: var(--font-mono); font-size: 0.82rem;">
@@ -687,17 +1189,43 @@ async def preview_dashboard() -> HTMLResponse:
         return;
       }
 
-      const timestamp = Date.now();
+      if (isCompact) {
+        container.innerHTML = tabs.map(tab => {
+          const timestamp = Date.now();
+          const screenshotSrc = `/v1/tabs/${tab.index}/screenshot?t=${timestamp}`;
+          const statusClass = tab.is_control ? 'status-control' : (tab.is_busy ? 'status-busy' : 'status-idle');
+          const statusLabel = tab.state ? tab.state.toUpperCase() : (tab.is_control ? 'CONTROL' : tab.is_busy ? 'BUSY' : 'IDLE');
+
+          const closeBtn = tab.is_control
+            ? `<span style="font-size: 0.7rem; color: var(--dash-dim); font-family: var(--font-mono);">PROTECTED</span>`
+            : `<button class="btn-square btn-square-danger" style="padding: 3px 8px; font-size: 0.7rem;" onclick="closeTab(${tab.index})">Close</button>`;
+
+          return `
+            <div class="compact-tab-row">
+              <div class="compact-left">
+                <img src="${screenshotSrc}" class="compact-thumb" onclick="openModal('${screenshotSrc}')" title="Click to zoom" />
+                <div class="compact-info">
+                  <div class="compact-title">#${tab.index} &bull; ${tab.title || 'Tab'}</div>
+                  <div class="compact-sub">${tab.session_key || 'ephemeral'} &bull; ${tab.url || 'about:blank'}</div>
+                </div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span class="tab-status-pill ${statusClass}">${statusLabel}</span>
+                <button class="btn-square" style="padding: 3px 8px; font-size: 0.7rem;" onclick="resetTab(${tab.index})">Reset</button>
+                <button class="btn-square" style="padding: 3px 8px; font-size: 0.7rem;" onclick="reloadSingleTab(${tab.index})">Snapshot</button>
+                ${closeBtn}
+              </div>
+            </div>
+          `;
+        }).join("");
+        return;
+      }
+
       container.innerHTML = tabs.map(tab => {
-        let statusClass = "status-idle";
-        let statusLabel = "Idle";
-        if (tab.is_control) {
-          statusClass = "status-control";
-          statusLabel = "Control Tab";
-        } else if (tab.is_busy) {
-          statusClass = "status-busy";
-          statusLabel = "Busy";
-        }
+        const timestamp = Date.now();
+        const screenshotSrc = `/v1/tabs/${tab.index}/screenshot?t=${timestamp}`;
+        const statusClass = tab.is_control ? 'status-control' : (tab.is_busy ? 'status-busy' : 'status-idle');
+        const statusLabel = tab.state ? tab.state.toUpperCase() : (tab.is_control ? 'CONTROL' : tab.is_busy ? 'BUSY' : 'IDLE');
 
         const closeBtn = tab.is_control
           ? `<span style="font-size: 0.7rem; color: var(--dash-dim); font-family: var(--font-mono); text-transform: uppercase;">Protected</span>`
@@ -705,33 +1233,40 @@ async def preview_dashboard() -> HTMLResponse:
 
         return `
           <div class="tab-card">
-            <div class="tab-card-header">
-              <div class="tab-identity">
-                <span class="tab-index-badge">#${tab.index}</span>
+            <div class="tab-header">
+              <div class="tab-title-group">
+                <span class="tab-badge">#${tab.index}</span>
                 <span class="tab-status-pill ${statusClass}">${statusLabel}</span>
               </div>
               <div>${closeBtn}</div>
             </div>
-            <div class="tab-preview-wrap" onclick="openModal('/v1/tabs/${tab.index}/screenshot?t=${timestamp}')">
-              <img class="tab-preview-img" src="/v1/tabs/${tab.index}/screenshot?t=${timestamp}" alt="Tab ${tab.index} screenshot" loading="lazy" />
+            <div class="tab-preview-wrap" onclick="openModal('${screenshotSrc}')" title="Click to enlarge screenshot">
+              <img id="tab-img-${tab.index}" src="${screenshotSrc}" alt="Tab ${tab.index} Preview" class="tab-preview-img" onerror="this.src='/v1/tabs/${tab.index}/screenshot?t=' + Date.now()" />
+              <div class="tab-overlay-actions">
+                <button class="btn-square" style="padding: 2px 6px; font-size: 0.68rem; background: rgba(0,0,0,0.7);" onclick="event.stopPropagation(); reloadSingleTab(${tab.index})">Snapshot</button>
+              </div>
             </div>
-            <div class="tab-card-body">
+            <div class="tab-meta-box">
               <div class="tab-meta-row">
                 <span class="tab-meta-label">Title</span>
-                <span class="tab-meta-value" title="${tab.title || 'Untitled'}">${tab.title || 'Untitled'}</span>
+                <span class="tab-meta-value" title="${tab.title}">${tab.title || '—'}</span>
               </div>
               <div class="tab-meta-row">
                 <span class="tab-meta-label">Session</span>
-                <span class="tab-meta-value">${tab.session_key || '—'}</span>
+                <span class="tab-meta-value">${tab.session_key || 'ephemeral'}</span>
               </div>
               <div class="tab-meta-row">
                 <span class="tab-meta-label">URL</span>
-                <span class="tab-meta-value" title="${tab.url || 'about:blank'}">${tab.url || 'about:blank'}</span>
+                <span class="tab-meta-value" title="${tab.url}">${tab.url || '—'}</span>
               </div>
               <div class="tab-meta-row">
                 <span class="tab-meta-label">Last Active</span>
                 <span class="tab-meta-value">${tab.last_active_seconds_ago !== null ? tab.last_active_seconds_ago + 's ago' : 'active'}</span>
               </div>
+            </div>
+            <div class="tab-footer-actions">
+              <button class="btn-square" style="padding: 2px 8px; font-size: 0.7rem;" onclick="resetTab(${tab.index})">Reset Chat</button>
+              <button class="btn-square" style="padding: 2px 8px; font-size: 0.7rem;" onclick="reloadSingleTab(${tab.index})">Force Snapshot</button>
             </div>
           </div>
         `;
@@ -750,83 +1285,99 @@ async def preview_dashboard() -> HTMLResponse:
           ? `<span style="color: var(--dash-dim);">—</span>`
           : `<button class="btn-square btn-square-danger" style="padding: 2px 8px; font-size: 0.7rem;" onclick="closeTab(${tab.index})">Close</button>`;
 
+        const statusClass = tab.is_control ? 'status-control' : tab.is_busy ? 'status-busy' : 'status-idle';
+        const statusText = tab.state ? tab.state.toUpperCase() : (tab.is_control ? 'CONTROL' : tab.is_busy ? 'BUSY' : 'IDLE');
+
         return `
           <tr>
             <td class="mono">#${tab.index}</td>
             <td class="mono">${tab.session_key || 'ephemeral'}</td>
-            <td><span class="tab-status-pill ${tab.is_control ? 'status-control' : tab.is_busy ? 'status-busy' : 'status-idle'}">${tab.is_control ? 'Control' : tab.is_busy ? 'Busy' : 'Idle'}</span></td>
+            <td><span class="tab-status-pill ${statusClass}">${statusText}</span></td>
             <td class="mono">${tab.last_active_seconds_ago !== null ? tab.last_active_seconds_ago + 's ago' : 'active'}</td>
             <td class="mono" style="max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${tab.url}">${tab.url || 'about:blank'}</td>
-            <td>${closeAction}</td>
+            <td>
+              <div style="display: flex; gap: 4px;">
+                <button class="btn-square" style="padding: 2px 6px; font-size: 0.7rem;" onclick="resetTab(${tab.index})">Reset</button>
+                ${closeAction}
+              </div>
+            </td>
           </tr>
         `;
       }).join("");
     }
 
-    async function closeTab(index) {
-      if (!confirm(`Are you sure you want to close Tab #${index}?`)) return;
-      try {
-        const res = await fetch(`/v1/tabs/${index}/close`, { method: "POST" });
-        if (res.ok) {
-          fetchData();
-        } else {
-          const err = await res.json();
-          alert(`Could not close tab: ${err.detail || 'Unknown error'}`);
-        }
-      } catch (err) {
-        alert(`Error closing tab: ${err}`);
+    function renderActivity(data) {
+      const tbody = document.getElementById("activity-table-body");
+      const requests = data.requests || [];
+      if (!requests.length) {
+        tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--dash-muted); padding: 18px; font-family: var(--font-mono);">No request activity recorded yet. Call /v1/chat/completions to stream requests.</td></tr>`;
+        return;
       }
+
+      tbody.innerHTML = requests.map(req => {
+        const isOk = req.status_code >= 200 && req.status_code < 400;
+        const statusBadge = isOk
+          ? `<span style="color: var(--dash-good); font-family: var(--font-mono); font-weight: 700;">${req.status_code} OK</span>`
+          : `<span style="color: var(--dash-bad); font-family: var(--font-mono); font-weight: 700;">${req.status_code} ERR</span>`;
+
+        return `
+          <tr>
+            <td class="mono">${req.time_str}</td>
+            <td class="mono" style="font-weight: 700;">${req.method}</td>
+            <td class="mono" style="max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${req.path}</td>
+            <td class="mono">${req.model}</td>
+            <td>${statusBadge}</td>
+            <td class="mono">${req.duration_ms}ms</td>
+            <td class="mono">${req.client_ip}</td>
+          </tr>
+        `;
+      }).join("");
     }
 
-    function formatUptime(sec) {
-      if (sec < 60) return `${Math.round(sec)}s`;
-      if (sec < 3600) return `${Math.floor(sec / 60)}m ${Math.round(sec % 60)}s`;
-      return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`;
+    async function fetchData() {
+      try {
+        const [tabsRes, actRes] = await Promise.all([
+          fetch("/v1/tabs"),
+          fetch("/v1/gateway/activity")
+        ]);
+        if (tabsRes.ok) {
+          const data = await tabsRes.json();
+          renderDashboard(data);
+        }
+        if (actRes.ok) {
+          const actData = await actRes.json();
+          renderActivity(actData);
+        }
+      } catch (err) {
+        console.error("Dashboard fetch error:", err);
+      }
     }
 
     function toggleAutoRefresh() {
-      autoRefresh = !autoRefresh;
       const btn = document.getElementById("btn-toggle-refresh");
-      const pill = document.getElementById("pill-refresh");
-      if (autoRefresh) {
+      isAutoRefresh = !isAutoRefresh;
+      if (isAutoRefresh) {
         btn.textContent = "Pause";
-        pill.textContent = "2.0s";
-        startPolling();
+        startAutoRefresh();
       } else {
         btn.textContent = "Resume";
-        pill.textContent = "Paused";
-        stopPolling();
+        clearInterval(refreshInterval);
       }
     }
 
-    function startPolling() {
-      stopPolling();
-      refreshTimer = setInterval(fetchData, 2000);
+    function startAutoRefresh() {
+      clearInterval(refreshInterval);
+      refreshInterval = setInterval(fetchData, 2000);
     }
 
-    function stopPolling() {
-      if (refreshTimer) {
-        clearInterval(refreshTimer);
-        refreshTimer = null;
-      }
+    // Initial boot
+    if (isCompact) {
+      document.getElementById("btn-toggle-density").textContent = "Cards View";
     }
-
-    function openModal(src) {
-      const modal = document.getElementById("image-modal");
-      const img = document.getElementById("modal-img");
-      img.src = src;
-      modal.classList.add("active");
-    }
-
-    function closeModal() {
-      document.getElementById("image-modal").classList.remove("active");
-    }
-
-    // Initial load and start polling
+    loadModels();
     fetchData();
-    startPolling();
+    startAutoRefresh();
   </script>
 </body>
-</html>
-"""
-    return HTMLResponse(content=html)
+</html>"""
+    return HTMLResponse(content=html_content, status_code=200)

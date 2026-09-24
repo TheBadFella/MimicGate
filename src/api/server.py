@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -35,6 +36,7 @@ from src.api.routes import router, set_client
 from src.api.openai_routes import openai_router, set_openai_client
 from src.api.monitor_routes import router as monitor_router
 from src.api.browser_gate import configure_tab_pool
+from src.api.telemetry import telemetry
 from src.log import setup_logging
 
 log = setup_logging("api_server", log_file="api_server.log")
@@ -292,6 +294,8 @@ class BearerTokenMiddleware:
         if (
             path_str in {"/docs", "/redoc", "/openapi.json", "/healthz", "/preview", "/dashboard", "/v1/preview"}
             or path_str.startswith("/assets")
+            or path_str.startswith("/v1/tabs")
+            or path_str.startswith("/v1/gateway")
         ):
             await self.app(scope, receive, send)
             return
@@ -336,6 +340,60 @@ class BearerTokenMiddleware:
         await self.app(scope, receive, send)
 
 
+class TelemetryMiddleware:
+    """Record request latency and gateway traffic for preview dashboard telemetry."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+        if (
+            path.startswith("/assets")
+            or path in {"/healthz", "/preview", "/dashboard", "/v1/preview", "/docs", "/redoc", "/openapi.json"}
+            or path.startswith("/v1/tabs")
+            or path.startswith("/v1/gateway")
+        ):
+            await self.app(scope, receive, send)
+            return
+
+        telemetry.request_started()
+        start_time = time.monotonic()
+        status_code = 200
+
+        async def send_wrapper(message: dict) -> None:
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = message.get("status", 200)
+            await send(message)
+
+        client = scope.get("client")
+        client_host = client[0] if isinstance(client, tuple) and client else "127.0.0.1"
+        method = scope.get("method", "GET")
+
+        try:
+            await self.app(scope, receive, send_wrapper)
+        except Exception:
+            status_code = 500
+            raise
+        finally:
+            duration_ms = (time.monotonic() - start_time) * 1000.0
+            telemetry.request_finished()
+            telemetry.record_request(
+                method=method,
+                path=path,
+                model=Config.provider_name(),
+                status_code=status_code,
+                duration_ms=duration_ms,
+                client_ip=client_host,
+            )
+
+
+app.add_middleware(TelemetryMiddleware)
 app.add_middleware(BearerTokenMiddleware)
 
 app.add_middleware(

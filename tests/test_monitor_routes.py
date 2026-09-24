@@ -88,6 +88,22 @@ class MonitorRoutesTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 400)
         self.assertIn("control tab", resp.json()["detail"].lower())
 
+    def test_reset_tab(self) -> None:
+        resp = self.client.post("/v1/tabs/0/reset")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["status"], "reset")
+        self.assertEqual(data["index"], 0)
+
+    def test_gateway_activity_endpoint(self) -> None:
+        resp = self.client.get("/v1/gateway/activity")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIn("summary", data)
+        self.assertIn("concurrency", data)
+        self.assertIn("requests", data)
+        self.assertIn("total_requests", data["summary"])
+
 
 if __name__ == "__main__":
     unittest.main()
