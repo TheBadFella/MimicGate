@@ -106,6 +106,7 @@ class Selectors:
         "button[data-testid='copy-turn-action-button']",
         "button[data-testid*='copy-turn' i]",
         "button[aria-label='Copy message']",
+        "button[aria-label='Copy']",
     ]
 
     # ── Generated images inside assistant responses ───────────────────

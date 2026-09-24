@@ -10,25 +10,52 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/TheBadFella/MimicGate/releases/latest"><img src="https://img.shields.io/github/v/release/TheBadFella/MimicGate?style=for-the-badge&color=1976D2" alt="Latest release" /></a>
-  <a href="https://github.com/TheBadFella/MimicGate/pkgs/container/mimicgate"><img src="https://img.shields.io/badge/GHCR-ready-00897B?style=for-the-badge&logo=docker&logoColor=white" alt="GHCR image" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/TheBadFella/MimicGate?style=for-the-badge&color=F9A825" alt="MIT license" /></a>
+  <a href="https://github.com/TheBadFella/CatGPT/releases/latest"><img src="https://img.shields.io/github/v/release/TheBadFella/CatGPT?style=for-the-badge&color=1976D2" alt="Latest release" /></a>
+  <a href="https://github.com/TheBadFella/CatGPT/pkgs/container/mimicgate"><img src="https://img.shields.io/badge/GHCR-ready-00897B?style=for-the-badge&logo=docker&logoColor=white" alt="GHCR image" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/TheBadFella/CatGPT?style=for-the-badge&color=F9A825" alt="MIT license" /></a>
 </p>
 
 <p align="center">
   <a href="#quick-start">Quick Start</a> ·
+  <a href="#fork-vs-upstream">Fork vs Upstream</a> ·
   <a href="#key-capabilities">Features</a> ·
   <a href="#providers">Providers</a> ·
   <a href="#parallelization-and-tab-lifecycle">Concurrency</a> ·
   <a href="#thread-management-and-conversation-continuity">Threads</a> ·
   <a href="#multimodal-and-image-handling">Images</a> ·
-  <a href="#fork-vs-upstream">Fork vs Upstream</a> ·
   <a href="docs/README.md">Documentation</a>
 </p>
 
 ---
 
 MimicGate turns logged-in browser sessions into standard, developer-friendly API endpoints. ChatGPT, Claude, and Gemini operate through a persistent, stealth-automated browser context; MiniMax uses its official API while sharing the exact same gateway interface. It is designed for private, self-hosted developer integrations, local coding agents, and home labs.
+
+## Fork vs Upstream
+
+Both projects share the foundational browser gateway concept: ChatGPT and Claude support, OpenAI Chat Completions, basic tool calling, vision inputs, multi-tab concurrency, and Docker deployment.
+
+MimicGate adds extensive multi-protocol support, provider coverage, and resilience enhancements:
+
+| Capability | MimicGate (This Repository) | Upstream (CatGPT-Gateway) |
+|---|:---:|:---:|
+| **Google Gemini Provider** | ✅ Browser-backed with Imagen 3 and TTS | - |
+| **MiniMax Provider** | ✅ Official API integration | - |
+| **OpenAI Responses API** (`/v1/responses`) | ✅ Full input/output conversion | - |
+| **Anthropic Messages Adapter** (`/v1/messages`) | ✅ Full schema translation | - |
+| **Ollama Compatible API** (`/api/chat`, `/api/generate`, `/api/tags`) | ✅ Full emulation | - |
+| **App-Scoped Namespaces** (`/{app_name}/v1/...`) | ✅ Isolated threads and state | - |
+| **Composer History Deduplication** | ✅ Automatically trims repeated turns | - |
+| **Long-Prompt Attachment Fallback** | ✅ Tested up to 1.4M chars | - |
+| **ChatGPT Read-Aloud Audio / TTS Capture** | ✅ Audio generation endpoint | - |
+| **Configurable Reasoning Effort** | ✅ `low`, `medium`, `high` flags | - |
+| **Asynchronous Jobs API** (`/v1/jobs/...`) | ✅ Background completion polling | - |
+| **Structured Multipage Extraction** | ✅ Page-by-page JSON extraction | - |
+| **Secure Non-Root jlesage Container** | ✅ Non-root GUI on port 5800 | - |
+| **Live Multi-Tab Preview Dashboard** | ✅ UnpackUI dark dashboard with live telemetry, prompt playground, request feed with payload inspection, and tab lifecycle controls | ⚠️ Basic static screenshot |
+
+<sub>Comparison verified against <a href="https://github.com/GautamVhavle/CatGPT-Gateway">upstream</a> at commit <code>1771f5b</code>.</sub>
+
+---
 
 ## Key Capabilities
 
@@ -137,33 +164,6 @@ MimicGate supports comprehensive vision, file upload, and image generation flows
 * **Endpoints**: Exposes standard OpenAI `/v1/images/generations` endpoints.
 * **Engines**: Routes prompts directly to ChatGPT (DALL-E) or Gemini (Imagen 3).
 * **Extraction**: Monitors the DOM for rendered image artifacts, extracts high-resolution generated media, and returns them as either URLs or base64 encoded strings (`b64_json`).
-
----
-
-## Fork vs Upstream
-
-Both projects share the foundational browser gateway concept: ChatGPT and Claude support, OpenAI Chat Completions, basic tool calling, vision inputs, multi-tab concurrency, and Docker deployment.
-
-MimicGate adds extensive multi-protocol support, provider coverage, and resilience enhancements:
-
-| Capability | MimicGate (This Repository) | Upstream (CatGPT-Gateway) |
-|---|:---:|:---:|
-| **Google Gemini Provider** | ✅ Browser-backed with Imagen 3 and TTS | - |
-| **MiniMax Provider** | ✅ Official API integration | - |
-| **OpenAI Responses API** (`/v1/responses`) | ✅ Full input/output conversion | - |
-| **Anthropic Messages Adapter** (`/v1/messages`) | ✅ Full schema translation | - |
-| **Ollama Compatible API** (`/api/chat`, `/api/generate`, `/api/tags`) | ✅ Full emulation | - |
-| **App-Scoped Namespaces** (`/{app_name}/v1/...`) | ✅ Isolated threads and state | - |
-| **Composer History Deduplication** | ✅ Automatically trims repeated turns | - |
-| **Long-Prompt Attachment Fallback** | ✅ Tested up to 1.4M chars | - |
-| **ChatGPT Read-Aloud Audio / TTS Capture** | ✅ Audio generation endpoint | - |
-| **Configurable Reasoning Effort** | ✅ `low`, `medium`, `high` flags | - |
-| **Asynchronous Jobs API** (`/v1/jobs/...`) | ✅ Background completion polling | - |
-| **Structured Multipage Extraction** | ✅ Page-by-page JSON extraction | - |
-| **Secure Non-Root jlesage Container** | ✅ Non-root GUI on port 5800 | - |
-| **Live Multi-Tab Preview Dashboard** | ✅ UnpackUI dark dashboard with live telemetry, prompt playground, request feed with payload inspection, and tab lifecycle controls | ⚠️ Basic static screenshot |
-
-<sub>Comparison verified against <a href="https://github.com/GautamVhavle/CatGPT-Gateway">upstream</a> at commit <code>1771f5b</code>.</sub>
 
 ---
 
