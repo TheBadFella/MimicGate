@@ -1,6 +1,6 @@
 [project]
 name = "mimicgate"
-version = "8.0.0"
+version = "9.0.0"
 description = "MimicGate: a browser-backed, multi-protocol AI gateway for ChatGPT, Claude, Gemini, and MiniMax exposed through OpenAI-compatible APIs."
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
