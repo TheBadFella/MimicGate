@@ -66,9 +66,9 @@ MimicGate abstracts multiple frontier AI providers behind a single uniform inter
 
 | Provider | Mechanism | Primary Model ID | Capabilities and Highlights |
 |---|---|---|---|
-| **ChatGPT** | Persistent browser | `mimicgate-browser` (or `gpt-4o`, `o3-mini`, etc.) | Vision, file attachments, DALL-E image generation, read-aloud TTS capture, reasoning effort control (`low`/`medium`/`high`), project confinement (`CHATGPT_PROJECT_URL`). |
-| **Claude** | Persistent browser | `claude-browser` | Conversational turns, vision, file attachments, structured tool calling. |
-| **Gemini** | Persistent browser | `gemini-browser` (or `gemini-2.5-pro`, `gemini-2.5-flash`, etc.) | Text chat, vision, file attachments, Imagen 3 image generation, read-aloud audio capture, thinking/reasoning effort modes. |
+| **ChatGPT** | Persistent browser | `mimicgate-browser` (or `gpt-5.6-sol`, `gpt-5.5`, etc.) | Vision, file attachments, DALL-E image generation, read-aloud TTS capture, reasoning effort control (`low`/`medium`/`high`), project confinement (`CHATGPT_PROJECT_URL`). |
+| **Claude** | Persistent browser | `claude-browser` (or `claude-3-7-sonnet`, `claude-3-5-sonnet`) | Conversational turns, vision, file attachments, structured tool calling. |
+| **Gemini** | Persistent browser | `gemini-browser` (or `gemini-3.8-flash`, `gemini-3.1-pro`, etc.) | Text chat, vision, file attachments, Imagen 3 image generation, read-aloud audio capture, thinking/reasoning effort modes. |
 | **MiniMax** | Official API | `MiniMax-M2.7` | Pure HTTP API proxy providing fast, non-browser completions using official provider credentials. |
 
 ---
