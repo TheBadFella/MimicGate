@@ -1,10 +1,10 @@
 #!/bin/sh
 set -e
 
-# ── CatGPT Application Startup Script (executed by jlesage/baseimage-gui) ──
+# ── MimicGate Application Startup Script (executed by jlesage/baseimage-gui) ──
 
 echo "============================================================"
-echo "  CatGPT Gateway — Starting Backend Server & Browser Session"
+echo "  MimicGate Gateway — Starting Backend Server & Browser Session"
 echo "============================================================"
 
 # Navigate to application root

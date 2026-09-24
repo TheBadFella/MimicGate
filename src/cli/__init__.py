@@ -1,3 +1,5 @@
-"""CATGPT CLI - Textual TUI for ChatGPT browser automation."""
+"""MIMICGATE CLI - Textual TUI for MimicGate browser automation."""
 
-from src.cli.app import CatGPTApp
+from src.cli.app import CatGPTApp, MimicGateApp
+
+__all__ = ["CatGPTApp", "MimicGateApp"]

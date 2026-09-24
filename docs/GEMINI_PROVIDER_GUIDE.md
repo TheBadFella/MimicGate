@@ -1,6 +1,6 @@
 # Google Gemini Setup Guide
 
-CatGPT Gateway supports Google Gemini (`https://gemini.google.com`) through persistent browser automation. This allows OpenAI-compatible clients, Anthropic Messages clients, Ollama clients, and IDE extensions like Cline to interact with Gemini through standard APIs.
+MimicGate Gateway supports Google Gemini (`https://gemini.google.com`) through persistent browser automation. This allows OpenAI-compatible clients, Anthropic Messages clients, Ollama clients, and IDE extensions like Cline to interact with Gemini through standard APIs.
 
 ---
 
@@ -29,8 +29,8 @@ CatGPT Gateway supports Google Gemini (`https://gemini.google.com`) through pers
 
 ```dotenv
 PROVIDER=gemini
-CATGPT_API_KEY=your-api-key
-CATGPT_VNC_PASSWORD=your-vnc-password
+MIMICGATE_API_KEY=your-api-key
+MIMICGATE_VNC_PASSWORD=your-vnc-password
 ```
 
 2. Start the container:
@@ -49,7 +49,7 @@ curl http://localhost:8650/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "gemini-browser",
-    "messages": [{"role": "user", "content": "Hello from CatGPT!"}]
+    "messages": [{"role": "user", "content": "Hello from MimicGate!"}]
   }'
 ```
 
@@ -80,7 +80,7 @@ python -m src.api.server
 
 ## Authentication and First Login
 
-CatGPT Gateway uses a persistent browser profile. You only need to log in once, and your session tokens and cookies will be preserved across restarts.
+MimicGate Gateway uses a persistent browser profile. You only need to log in once, and your session tokens and cookies will be preserved across restarts.
 
 > [!NOTE]
 > Third-party "Sign in with Google" OAuth buttons are often blocked by Google bot detection when logging into external services like ChatGPT or Claude. However, when using the Gemini provider, you are signing directly into your Google Account on `gemini.google.com`, which works normally.
@@ -91,7 +91,7 @@ CatGPT Gateway uses a persistent browser profile. You only need to log in once, 
 2. Sign into your Google Account using your email and password.
 3. Complete any two-factor verification prompts (such as Google Authenticator, SMS, or phone prompts).
 4. Wait until the Gemini conversation page loads with the prompt input box visible.
-5. Close the browser GUI tab. The profile is saved in `${DOCKERDIR}/appdata/catgpt/browser` on the host.
+5. Close the browser GUI tab. The profile is saved in `${DOCKERDIR}/appdata/mimicgate/browser` on the host.
 
 ### Local Login Flow
 
@@ -105,7 +105,7 @@ CatGPT Gateway uses a persistent browser profile. You only need to log in once, 
 
 ## Available Models
 
-CatGPT interacts directly with Gemini's model switcher (`<bard-mode-switcher>`) to select the requested model before submitting prompts.
+MimicGate interacts directly with Gemini's model switcher (`<bard-mode-switcher>`) to select the requested model before submitting prompts.
 
 | Public Model ID | UI Menu Label | Description |
 |---|---|---|
@@ -127,7 +127,7 @@ The following aliases are pre-configured:
 
 To ensure smooth compatibility with clients configured for other providers, the following model IDs automatically resolve to the active browser model (`gemini-browser`):
 
-- `catgpt-browser`, `claude-browser`
+- `mimicgate-browser`, `claude-browser`
 - `auto`, `default`, `browser`, `gemini`
 - `gpt-4o`, `gpt-4o-mini`, `gpt-4`, `gpt-3.5-turbo`
 
@@ -141,9 +141,9 @@ When Google releases a new model or changes UI labels in the Gemini interface, t
 
 ### How Users Can Request Support for New Models
 
-If you notice a new model in Gemini that is not yet recognized by CatGPT:
+If you notice a new model in Gemini that is not yet recognized by MimicGate:
 
-1. Open a GitHub Issue at [https://github.com/TheBadFella/CatGPT/issues](https://github.com/TheBadFella/CatGPT/issues).
+1. Open a GitHub Issue at [https://github.com/TheBadFella/MimicGate/issues](https://github.com/TheBadFella/MimicGate/issues).
 2. Provide the following information:
    - The model name displayed in the Gemini web interface.
    - The exact text label shown in the Gemini model switcher dropdown menu.
@@ -226,7 +226,7 @@ print(response.choices[0].message.content)
 
 ### Image Generation
 
-CatGPT routes image generation requests directly through Gemini (Imagen 3):
+MimicGate routes image generation requests directly through Gemini (Imagen 3):
 
 ```python
 from openai import OpenAI
@@ -245,7 +245,7 @@ Images can also be requested via the standard `POST /v1/images/generations` HTTP
 
 ### Text-to-Speech (Read Aloud)
 
-CatGPT supports Gemini's native read-aloud functionality. When `read_aloud: true` is included in the request body, CatGPT triggers Gemini's TTS audio, captures the audio stream, saves it to the downloads directory, and returns the audio metadata in the response:
+MimicGate supports Gemini's native read-aloud functionality. When `read_aloud: true` is included in the request body, MimicGate triggers Gemini's TTS audio, captures the audio stream, saves it to the downloads directory, and returns the audio metadata in the response:
 
 ```bash
 curl http://localhost:8650/v1/chat/completions \
@@ -264,16 +264,16 @@ To use Gemini with Cline or OpenCode:
 
 1. Set the API provider to **OpenAI Compatible**.
 2. Base URL: `http://localhost:8650/cline/v1`
-3. API Key: your `CATGPT_API_KEY` (e.g. `dummy123`).
+3. API Key: your `MIMICGATE_API_KEY` (e.g. `dummy123`).
 4. Model ID: `gemini-browser` or `gemini-3.8-flash`.
 
-CatGPT maintains conversation continuity and tab affinity for Cline requests automatically.
+MimicGate maintains conversation continuity and tab affinity for Cline requests automatically.
 
 ---
 
 ## Related Documentation
 
-- [Documentation Index](README.md): Overview of all CatGPT Gateway guides and manuals.
+- [Documentation Index](README.md): Overview of all MimicGate Gateway guides and manuals.
 - [Installation & Setup Guide](INSTALLATION_AND_SETUP.md): Docker, local installation, and operational guidance.
 - [Environment Variables](ENVIRONMENT_VARIABLES.md): Full reference of all configuration options.
 - [Model & Reasoning Selection Guide](MODEL_AND_REASONING_SELECTION.md): Model selector details across providers.

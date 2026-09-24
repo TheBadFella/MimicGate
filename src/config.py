@@ -191,7 +191,7 @@ class Config:
             return list_gemini_model_ids()
         if cls.PROVIDER == "minimax":
             return cls.MINIMAX_MODEL_IDS
-        return ("catgpt-browser",)
+        return ("mimicgate-browser", "catgpt-browser")
 
     @classmethod
     def default_model_id(cls) -> str:
@@ -208,7 +208,7 @@ class Config:
         if cls.PROVIDER != "minimax":
             return requested or cls.default_model_id()
 
-        if not requested or requested in {"catgpt-browser", "claude-browser", "gemini-browser"}:
+        if not requested or requested in {"mimicgate-browser", "catgpt-browser", "claude-browser", "gemini-browser"}:
             return cls.MINIMAX_MODEL
         if requested not in cls.MINIMAX_MODEL_IDS:
             supported = ", ".join(cls.MINIMAX_MODEL_IDS)
@@ -221,7 +221,7 @@ class Config:
     def provider_owner(cls) -> str:
         """Return the owner label used by the models endpoint."""
         owners = {
-            "chatgpt": "catgpt",
+            "chatgpt": "mimicgate",
             "claude": "anthropic",
             "gemini": "google",
             "minimax": "minimax",
@@ -275,7 +275,7 @@ class Config:
     API_TOKEN: str = os.getenv("API_TOKEN", "")  # Bearer token for API auth (empty = no auth)
 
     # VNC
-    VNC_PASSWORD: str = os.getenv("VNC_PASSWORD", "catgpt")
+    VNC_PASSWORD: str = os.getenv("VNC_PASSWORD", "mimicgate")
 
     # Viewport base (will be jittered ±20px)
     VIEWPORT_WIDTH: int = 1280

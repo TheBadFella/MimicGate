@@ -57,13 +57,13 @@ async def ensure_logged_in(browser: BrowserManager, has_session: bool = False) -
     provider_name = Config.provider_name()
     if has_session:
         # Session exists but login check failed (e.g. token expired, page not ready)
-        log.warning("Session cookies found but login check failed — session may have expired.")
-        print(f"  ⚠️  {provider_name} Session Expired — Re-login Required")
+        log.warning("Session cookies found but login check failed - session may have expired.")
+        print(f"  [!] {provider_name} Session Expired - Re-login Required")
         print("=" * 60)
     else:
-        log.info("No session — starting interactive first-time login flow")
+        log.info("No session - starting interactive first-time login flow")
         print("\n" + "=" * 60)
-        print(f"  🔐 {provider_name} Login Required — First-Time Setup")
+        print(f"  [*] {provider_name} Login Required - First-Time Setup")
         print("=" * 60)
 
     target_url = Config.provider_url()
@@ -96,13 +96,13 @@ async def ensure_logged_in(browser: BrowserManager, has_session: bool = False) -
 
     # Verify login
     if await browser.is_logged_in():
-        print("\n  ✅ Login verified! Session saved.")
-        print("  You won't need to sign in again.\n")
+        print("\n  [+] Login verified! Session saved.")
+        print("  You will not need to sign in again.\n")
         log.info("Interactive login completed successfully")
         return True
     else:
-        print("\n  ⚠️  Could not verify login.")
-        print("  The session may still be saved — trying to continue...\n")
+        print("\n  [!] Could not verify login.")
+        print("  The session may still be saved - trying to continue...\n")
         log.warning("Login verification uncertain after interactive login")
-        # Don't crash — let the caller decide what to do
+        # Don't crash - let the caller decide what to do
         return False

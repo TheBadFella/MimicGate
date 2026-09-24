@@ -27,7 +27,7 @@ jobs:
         with:
           script: |
             const owner = context.repo.owner;
-            const packageName = "catgpt";
+            const packageName = "mimicgate";
             const packageType = "container";
             const keep = 3;
             const dryRun = String(core.getInput("dry_run") || "false").toLowerCase() === "true";

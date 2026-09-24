@@ -1,6 +1,6 @@
 # Setup Guide
 
-This guide covers every way to run CatGPT Gateway: Docker, local development, and Nix.
+This guide covers every way to run MimicGate Gateway: Docker, local development, and Nix.
 
 ---
 
@@ -35,8 +35,8 @@ Docker runs the entire stack in one container: virtual display, VNC, browser, an
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/TheBadFella/CatGPT.git
-cd CatGPT
+git clone https://github.com/TheBadFella/MimicGate.git
+cd MimicGate
 
 # 2. Create .env and set your own API and browser-GUI passwords
 #    See docs/ENVIRONMENT_VARIABLES.md for every supported value.
@@ -69,10 +69,10 @@ curl -X POST http://localhost:8650/v1/chat/completions \
 Minimal `.env`:
 
 ```dotenv
-CATGPT_API_KEY=replace-me
-CATGPT_VNC_PASSWORD=replace-me
-CATGPT_USER_ID=1000
-CATGPT_GROUP_ID=1000
+MIMICGATE_API_KEY=replace-me
+MIMICGATE_VNC_PASSWORD=replace-me
+MIMICGATE_USER_ID=1000
+MIMICGATE_GROUP_ID=1000
 ```
 
 ### Docker Notes
@@ -81,13 +81,13 @@ CATGPT_GROUP_ID=1000
   ```bash
   docker compose up --build -d   # rebuilds and restarts
   ```
-  `docker restart catgpt` does NOT pick up code changes.
+  `docker restart mimicgate` does NOT pick up code changes.
 
-- **Browser session persists** under `${DOCKERDIR}/appdata/catgpt/browser`. You only need to log in once.
+- **Browser session persists** under `${DOCKERDIR}/appdata/mimicgate/browser`. You only need to log in once.
 
-- **Logs** are bind-mounted under `${DOCKERDIR}/appdata/catgpt/logs` on the host.
+- **Logs** are bind-mounted under `${DOCKERDIR}/appdata/mimicgate/logs` on the host.
 
-- **The jlesage web GUI** at `http://localhost:5800` lets you see and interact with the browser (useful for debugging, CAPTCHAs, or re-login). Default VNC password: `catgpt`.
+- **The jlesage web GUI** at `http://localhost:5800` lets you see and interact with the browser (useful for debugging, CAPTCHAs, or re-login). Default VNC password: `mimicgate`.
 
 ---
 
@@ -95,8 +95,8 @@ CATGPT_GROUP_ID=1000
 
 ```bash
 # 1. Clone and enter the repo
-git clone https://github.com/TheBadFella/CatGPT.git
-cd CatGPT
+git clone https://github.com/TheBadFella/MimicGate.git
+cd MimicGate
 
 # 2. Create a virtual environment
 python3 -m venv .venv
@@ -151,7 +151,7 @@ Notes:
 
 ## First Login
 
-CatGPT Gateway uses your existing browser session. You sign in **once** and the browser profile is persisted.
+MimicGate Gateway uses your existing browser session. You sign in **once** and the browser profile is persisted.
 
 > **OAuth login note for ChatGPT and Claude:**
 > Patchright/Chromium runs in a controlled automation context where Google's third-party OAuth ("Continue with Google") blocks logins to external services like ChatGPT or Claude.
@@ -239,7 +239,7 @@ To disable auth, set `API_TOKEN=` (empty string) in `.env`.
 
 The jlesage browser UI at `http://localhost:5800` is password-protected.
 
-Default: `catgpt`. Change it via `VNC_PASSWORD` in `.env` or `docker-compose.yml`.
+Default: `mimicgate`. Change it via `VNC_PASSWORD` in `.env` or `docker-compose.yml`.
 
 ---
 
@@ -255,7 +255,7 @@ Default: `catgpt`. Change it via `VNC_PASSWORD` in `.env` or `docker-compose.yml
 
 ### Startup Sequence
 
-1. `50-catgpt-init.sh` runs as root after jlesage initializes the application user:
+1. `50-mimicgate-init.sh` runs as root after jlesage initializes the application user:
    - Create and verify directories (`browser_data`, `logs`, `downloads/images`, `downloads/audio`)
    - Clean stale Chrome lock files
    - Pre-resolve DNS domains and write to `/etc/hosts` (Docker DNS workaround)
@@ -267,16 +267,16 @@ Default: `catgpt`. Change it via `VNC_PASSWORD` in `.env` or `docker-compose.yml
 
 | Volume | Purpose |
 |---|---|
-| `${DOCKERDIR}/appdata/catgpt/config:/config` | jlesage GUI configuration, certificates, and user home |
-| `${DOCKERDIR}/appdata/catgpt/browser:/app/browser_data` | Persistent browser session (cookies, login) |
-| `${DOCKERDIR}/appdata/catgpt/logs:/app/logs` | Logs accessible from host |
+| `${DOCKERDIR}/appdata/mimicgate/config:/config` | jlesage GUI configuration, certificates, and user home |
+| `${DOCKERDIR}/appdata/mimicgate/browser:/app/browser_data` | Persistent browser session (cookies, login) |
+| `${DOCKERDIR}/appdata/mimicgate/logs:/app/logs` | Logs accessible from host |
 
 ### Health Check
 
 The container has a built-in health check hitting `/healthz` every 30 seconds.
 
 ```bash
-docker inspect --format='{{.State.Health.Status}}' catgpt
+docker inspect --format='{{.State.Health.Status}}' mimicgate
 ```
 
 ---
@@ -286,15 +286,15 @@ docker inspect --format='{{.State.Health.Status}}' catgpt
 For running as a background service with the Nix flake:
 
 ```ini
-# ~/.config/systemd/user/catgpt.service
+# ~/.config/systemd/user/mimicgate.service
 [Unit]
-Description=CatGPT Gateway
+Description=MimicGate Gateway
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/Projects/CatGPT-Gateway
+WorkingDirectory=%h/Projects/MimicGate
 ExecStart=/usr/bin/env nix run .#proxy
 Restart=on-failure
 RestartSec=5
@@ -309,8 +309,8 @@ WantedBy=default.target
 
 ```bash
 systemctl --user daemon-reload
-systemctl --user enable --now catgpt
-journalctl --user -u catgpt -f
+systemctl --user enable --now mimicgate
+journalctl --user -u mimicgate -f
 ```
 
 ---
@@ -323,7 +323,7 @@ The browser hasn't finished starting. Wait 30-45 seconds after startup.
 
 ```bash
 # Check logs
-docker logs catgpt --tail 50      # Docker
+docker logs mimicgate --tail 50      # Docker
 cat logs/api_server.log            # Local
 ```
 
@@ -349,8 +349,8 @@ The app auto-cleans these on startup, but manual cleanup may be needed after har
 Chrome inside Docker sometimes fails to resolve domains. The entrypoint script pre-resolves domains via Python. If you still see DNS errors:
 
 ```bash
-docker exec catgpt cat /etc/hosts
-docker exec catgpt curl -s https://chatgpt.com
+docker exec mimicgate cat /etc/hosts
+docker exec mimicgate curl -s https://chatgpt.com
 ```
 
 ### Code changes not taking effect (Docker)
@@ -359,13 +359,13 @@ You must rebuild:
 
 ```bash
 docker compose up --build -d   # correct
-# NOT: docker restart catgpt   # this uses the old image
+# NOT: docker restart mimicgate   # this uses the old image
 ```
 
 ### Services not running
 
 ```bash
-docker exec catgpt supervisorctl status
+docker exec mimicgate supervisorctl status
 ```
 
-All 4 services (xvfb, vnc, novnc, catgpt) should show `RUNNING`.
+All 4 services (xvfb, vnc, novnc, mimicgate) should show `RUNNING`.

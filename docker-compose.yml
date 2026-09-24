@@ -1,12 +1,12 @@
 services:
-  # CatGPT Gateway - Enhanced Container Mock for Chat Apps
-  catgpt:
-    image: ${CATGPT_IMAGE:-ghcr.io/thebadfella/catgpt:latest}
-    pull_policy: ${CATGPT_PULL_POLICY:-missing}
+  # MimicGate Gateway - Enhanced Container Mock for Chat Apps
+  mimicgate:
+    image: ${MIMICGATE_IMAGE:-${CATGPT_IMAGE:-ghcr.io/thebadfella/mimicgate:latest}}
+    pull_policy: ${MIMICGATE_PULL_POLICY:-${CATGPT_PULL_POLICY:-missing}}
     build:
       context: .
       dockerfile: docker/Dockerfile
-    container_name: catgpt
+    container_name: mimicgate
     security_opt:
       - seccomp=unconfined
       - no-new-privileges:true
@@ -28,11 +28,11 @@ services:
       - /app/browser_data/Default/Code Cache:mode=1777
     environment:
       # Application GUI (jlesage)
-      APP_NAME: "CatGPT"
+      APP_NAME: "MimicGate"
       SECURE_CONNECTION: "0"
       KEEP_APP_RUNNING: "1"
-      USER_ID: ${CATGPT_USER_ID:-1000}
-      GROUP_ID: ${CATGPT_GROUP_ID:-1000}
+      USER_ID: ${MIMICGATE_USER_ID:-${CATGPT_USER_ID:-1000}}
+      GROUP_ID: ${MIMICGATE_GROUP_ID:-${CATGPT_GROUP_ID:-1000}}
       DISPLAY_WIDTH: 1366
       DISPLAY_HEIGHT: 768
       # Browser (headed on virtual display)
@@ -67,7 +67,7 @@ services:
       # API
       API_HOST: "0.0.0.0"
       API_PORT: 8000
-      API_TOKEN: ${CATGPT_API_KEY:-dummy123}
+      API_TOKEN: ${MIMICGATE_API_KEY:-${CATGPT_API_KEY:-dummy123}}
       API_TOKEN_OPTIONAL: "true"
       # Optional: keep large system instructions in thread context and send compact reminders
       API_THREAD_CONTRACT_MODE: "true"
@@ -83,15 +83,15 @@ services:
       API_CONVERSATION_RETENTION_SECONDS: ${API_CONVERSATION_RETENTION_SECONDS:-2592000}
       API_CONVERSATION_MAX_ROUTES: ${API_CONVERSATION_MAX_ROUTES:-10000}
       # VNC Authentication
-      VNC_PASSWORD: ${CATGPT_VNC_PASSWORD:-catgpt}
+      VNC_PASSWORD: ${MIMICGATE_VNC_PASSWORD:-${CATGPT_VNC_PASSWORD:-mimicgate}}
       # Logging (verbose for Docker)
       LOG_LEVEL: "DEBUG"
       VERBOSE: "true"
     volumes:
-      - ${DOCKERDIR:-.}/appdata/catgpt/config:/config
-      - ${DOCKERDIR:-.}/appdata/catgpt/browser:/app/browser_data
-      - ${DOCKERDIR:-.}/appdata/catgpt/logs:/app/logs
-      - ${DOCKERDIR:-.}/appdata/catgpt/state:/app/state
+      - ${DOCKERDIR:-.}/appdata/mimicgate/config:/config
+      - ${DOCKERDIR:-.}/appdata/mimicgate/browser:/app/browser_data
+      - ${DOCKERDIR:-.}/appdata/mimicgate/logs:/app/logs
+      - ${DOCKERDIR:-.}/appdata/mimicgate/state:/app/state
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
       interval: 30s

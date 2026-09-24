@@ -50,6 +50,8 @@ class BrowserTabPool:
         self._locks: dict[str, asyncio.Lock] = {}
         self._lru: OrderedDict[str, float] = OrderedDict()
         self._struct_lock = asyncio.Lock()
+        self._waiting_requests: int = 0
+        self._tab_states: dict[str, str] = {}
 
     def _session_lock(self, session_key: str) -> asyncio.Lock:
         lock = self._locks.get(session_key)
@@ -81,9 +83,20 @@ class BrowserTabPool:
         log.info("Opened worker browser tab")
         return page
 
+    def _get_context(self) -> Any | None:
+        ctx = getattr(self._browser, "context", None)
+        if callable(ctx):
+            try:
+                return ctx()
+            except Exception:
+                return getattr(self._browser, "_context", None)
+        if ctx is not None:
+            return ctx
+        return getattr(self._browser, "_context", None)
+
     def _worker_tab_count(self) -> int:
         control = self._control_page()
-        context = getattr(self._browser, "context", None)
+        context = self._get_context()
         pages = list(getattr(context, "pages", []) or [])
         return sum(1 for page in pages if page is not control and self._page_is_open(page))
 
@@ -225,7 +238,11 @@ class BrowserTabPool:
         if session_key:
             lock = self._session_lock(session_key)
             await lock.acquire()
-            await self._semaphore.acquire()
+            self._waiting_requests += 1
+            try:
+                await self._semaphore.acquire()
+            finally:
+                self._waiting_requests = max(0, self._waiting_requests - 1)
             try:
                 page, first_turn = await self._open_persistent_page(session_key)
                 yield PageLease(page=page, is_first_turn=first_turn, session_key=session_key)
@@ -235,7 +252,11 @@ class BrowserTabPool:
                 lock.release()
             return
 
-        await self._semaphore.acquire()
+        self._waiting_requests += 1
+        try:
+            await self._semaphore.acquire()
+        finally:
+            self._waiting_requests = max(0, self._waiting_requests - 1)
         page = None
         keep = True
         try:
@@ -251,6 +272,147 @@ class BrowserTabPool:
             elif page is not None and not self._is_control_page(page):
                 await self._close_page(page)
             self._semaphore.release()
+
+    async def list_tabs(self) -> list[dict[str, Any]]:
+        """Return inspection metadata for all open browser pages."""
+        context = self._get_context()
+        pages = list(getattr(context, "pages", []) or [])
+        control = self._control_page()
+
+        page_to_session: dict[Any, str] = {}
+        for sk, p in list(self._pages.items()):
+            page_to_session[p] = sk
+
+        now = time.monotonic()
+        results: list[dict[str, Any]] = []
+        for i, page in enumerate(pages):
+            if not self._page_is_open(page):
+                continue
+            is_control = bool(control is not None and page is control)
+            session_key = page_to_session.get(page)
+            if is_control and not session_key:
+                session_key = CONTROL_SESSION
+            elif not session_key:
+                session_key = "ephemeral"
+
+            lock = self._locks.get(session_key) if session_key else None
+            is_busy = bool(lock and lock.locked())
+
+            last_used = self._lru.get(session_key)
+            last_used_sec = round(now - last_used, 1) if last_used else None
+
+            url = ""
+            title = ""
+            try:
+                url = page.url or ""
+            except Exception:
+                pass
+            try:
+                title = await page.title() if hasattr(page, "title") else ""
+            except Exception:
+                pass
+
+            tab_state = "control" if is_control else ("busy" if is_busy else "idle")
+            explicit = self._tab_states.get(session_key) or self._tab_states.get(str(i))
+            if explicit:
+                tab_state = explicit
+
+            results.append({
+                "index": i,
+                "session_key": session_key,
+                "url": url,
+                "title": title or ("Control Tab" if is_control else f"Worker Tab {i}"),
+                "is_control": is_control,
+                "is_busy": is_busy,
+                "state": tab_state,
+                "last_active_seconds_ago": last_used_sec,
+            })
+        return results
+
+    def set_tab_state(self, key_or_index: str | int, state: str) -> None:
+        self._tab_states[str(key_or_index)] = state
+
+    def concurrency_stats(self) -> dict[str, Any]:
+        max_conc = max(1, Config.MAX_CONCURRENT_REQUESTS)
+        avail = getattr(self._semaphore, "_value", max_conc)
+        in_flight = max(0, max_conc - avail)
+        return {
+            "max_concurrency": max_conc,
+            "in_flight": in_flight,
+            "available": avail,
+            "waiting": self._waiting_requests,
+            "max_active_tabs": Config.MAX_ACTIVE_TABS,
+            "worker_tabs": self._worker_tab_count(),
+        }
+
+    async def reset_tab_by_index(self, tab_index: int) -> dict[str, Any]:
+        """Navigate a tab back to clean new chat / provider home and clear thread state."""
+        context = self._get_context()
+        pages = list(getattr(context, "pages", []) or [])
+        if tab_index < 0 or tab_index >= len(pages):
+            raise IndexError(f"Tab index {tab_index} out of range (0-{len(pages)-1})")
+        page = pages[tab_index]
+        if not self._page_is_open(page):
+            return {"status": "closed", "index": tab_index}
+
+        for sk, p in list(self._pages.items()):
+            if p is page:
+                self._urls.pop(sk, None)
+                self._pages.pop(sk, None)
+                self._initialized.discard(sk)
+                self._tab_states.pop(sk, None)
+                break
+        self._tab_states.pop(str(tab_index), None)
+
+        target = Config.provider_url()
+        try:
+            await page.goto(target, wait_until="domcontentloaded", timeout=25000)
+            return {"status": "reset", "index": tab_index, "url": target}
+        except Exception as exc:
+            log.warning("Failed to reset tab %s: %s", tab_index, exc)
+            return {"status": "error", "error": str(exc), "index": tab_index}
+
+    async def capture_tab_screenshot(self, tab_index: int) -> bytes:
+        """Capture a JPEG screenshot of a specific tab index."""
+        context = self._get_context()
+        pages = list(getattr(context, "pages", []) or [])
+        if tab_index < 0 or tab_index >= len(pages):
+            raise IndexError(f"Tab index {tab_index} out of range (0-{len(pages)-1})")
+        page = pages[tab_index]
+        if not self._page_is_open(page):
+            raise RuntimeError(f"Tab {tab_index} is closed")
+        screenshot_fn = getattr(page, "screenshot", None)
+        if not callable(screenshot_fn):
+            raise RuntimeError(f"Tab {tab_index} does not support screenshot")
+        return await page.screenshot(type="jpeg", quality=65, timeout=5000)
+
+    async def close_tab_by_index(self, tab_index: int) -> dict[str, Any]:
+        """Safely close a worker tab by its index in context.pages."""
+        context = self._get_context()
+        pages = list(getattr(context, "pages", []) or [])
+        if tab_index < 0 or tab_index >= len(pages):
+            raise IndexError(f"Tab index {tab_index} out of range (0-{len(pages)-1})")
+        page = pages[tab_index]
+        if self._is_control_page(page):
+            raise ValueError("Cannot close control tab")
+        if not self._page_is_open(page):
+            return {"status": "already_closed", "index": tab_index}
+
+        for sk, p in list(self._pages.items()):
+            if p is page:
+                url = ""
+                try:
+                    url = page.url or ""
+                except Exception:
+                    pass
+                if "/c/" in url or "/chat/" in url or "/app/" in url:
+                    self._urls[sk] = url
+                self._pages.pop(sk, None)
+                self._initialized.discard(sk)
+                break
+
+        await self._close_page(page)
+        return {"status": "closed", "index": tab_index}
 
 
 _tab_pool: BrowserTabPool | None = None
@@ -273,6 +435,48 @@ def configure_tab_pool(browser: Any | None) -> None:
 
 def get_tab_pool() -> BrowserTabPool | None:
     return _tab_pool
+
+
+async def list_browser_tabs() -> list[dict[str, Any]]:
+    pool = _tab_pool
+    if pool is not None:
+        return await pool.list_tabs()
+    return []
+
+
+async def capture_browser_screenshot(tab_index: int) -> bytes:
+    pool = _tab_pool
+    if pool is not None:
+        return await pool.capture_tab_screenshot(tab_index)
+    raise RuntimeError("Browser tab pool not configured")
+
+
+async def close_browser_tab(tab_index: int) -> dict[str, Any]:
+    pool = _tab_pool
+    if pool is not None:
+        return await pool.close_tab_by_index(tab_index)
+    raise RuntimeError("Browser tab pool not configured")
+
+
+async def reset_browser_tab(tab_index: int) -> dict[str, Any]:
+    pool = _tab_pool
+    if pool is not None:
+        return await pool.reset_tab_by_index(tab_index)
+    raise RuntimeError("Browser tab pool not configured")
+
+
+def get_concurrency_stats() -> dict[str, Any]:
+    pool = _tab_pool
+    if pool is not None:
+        return pool.concurrency_stats()
+    return {
+        "max_concurrency": max(1, Config.MAX_CONCURRENT_REQUESTS),
+        "in_flight": 0,
+        "available": max(1, Config.MAX_CONCURRENT_REQUESTS),
+        "waiting": 0,
+        "max_active_tabs": Config.MAX_ACTIVE_TABS,
+        "worker_tabs": 0,
+    }
 
 
 @asynccontextmanager

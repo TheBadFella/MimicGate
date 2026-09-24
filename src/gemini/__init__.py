@@ -1,5 +1,5 @@
 """
-Google Gemini provider module for CatGPT Gateway.
+Google Gemini provider module for MimicGate Gateway.
 """
 
 from src.gemini.client import GeminiClient

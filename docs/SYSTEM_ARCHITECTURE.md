@@ -1,6 +1,6 @@
 # Architecture
 
-A deep dive into how CatGPT Gateway works under the hood.
+A deep dive into how MimicGate Gateway works under the hood.
 
 ---
 
@@ -138,7 +138,7 @@ Counts both `div[data-message-author-role='assistant']` (ChatGPT) and provider-s
 
 ## Tool Calling
 
-The web UIs don't have native tool-calling APIs. CatGPT implements tool calling via prompt engineering.
+The web UIs don't have native tool-calling APIs. MimicGate implements tool calling via prompt engineering.
 
 ### Flow
 
@@ -184,7 +184,7 @@ API Request (with image_url / file content parts)
 |-- _extract_file_attachments(content)     --> list of {filename, data_b64, mime_type}
 |
 |-- _download_file(url_or_dict)            --> local file path
-|   |-- data: URL       --> base64 decode, save to /tmp/catgpt_files/
+|   |-- data: URL       --> base64 decode, save to /tmp/mimicgate_files/
 |   |-- http: URL       --> download via urllib
 |   |-- dict             --> base64 decode with original filename
 |   +-- local path       --> pass through
@@ -262,12 +262,12 @@ Docker Container (jlesage/baseimage-gui:debian-12)
 |-- Web GUI (:5800)      HTML5 web access with sidebar, clipboard sync & settings
 +-- FastAPI (:8000)      API server (launched via /startapp.sh)
 |
-+-- Initialization managed by /etc/cont-init.d/50-catgpt-init.sh
++-- Initialization managed by /etc/cont-init.d/50-mimicgate-init.sh
 ```
 
 ### Startup Sequence
 
-1. `50-catgpt-init.sh` (cont-init, after jlesage user initialization):
+1. `50-mimicgate-init.sh` (cont-init, after jlesage user initialization):
    - Prepare runtime directories
    - Clean stale Chrome lock files
    - Pre-resolve DNS domains via Python, write to `/etc/hosts`

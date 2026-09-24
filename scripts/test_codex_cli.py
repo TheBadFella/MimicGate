@@ -20,7 +20,7 @@ Codex CLI sends:
   - tool_choice="auto" (default)
 
 Prerequisites:
-  - CatGPT API server running: python -m src.api.server
+  - MimicGate API server running: python -m src.api.server
   - API_TOKEN must match .env (default: dummy123)
 
 Usage:
@@ -203,7 +203,7 @@ def test_1_codex_simple_question(client: httpx.Client):
         "POST",
         "/v1/responses",
         json={
-            "model": "catgpt-browser",
+            "model": "mimicgate-browser",
             "instructions": CODEX_SYSTEM_PROMPT,
             "input": "What does the 'ls' command do in Unix? Reply in one sentence.",
             "tools": [SHELL_TOOL, APPLY_PATCH_TOOL],
@@ -242,7 +242,7 @@ def test_2_codex_tool_call_shell(client: httpx.Client):
     separator("Test 2: Codex CLI — shell tool call")
 
     resp = post_responses(client, {
-        "model": "catgpt-browser",
+        "model": "mimicgate-browser",
         "instructions": CODEX_SYSTEM_PROMPT,
         "input": "List the files in the current directory.",
         "tools": [SHELL_TOOL],
@@ -286,7 +286,7 @@ def test_3_codex_full_tool_loop(client: httpx.Client):
 
     # Turn 1: Ask something that should trigger a shell call
     resp1 = post_responses(client, {
-        "model": "catgpt-browser",
+        "model": "mimicgate-browser",
         "instructions": CODEX_SYSTEM_PROMPT,
         "input": "Run 'echo hello' in the shell.",
         "tools": [SHELL_TOOL],
@@ -312,7 +312,7 @@ def test_3_codex_full_tool_loop(client: httpx.Client):
 
     # Turn 2: Send function_call_output with the tool result
     resp2 = post_responses(client, {
-        "model": "catgpt-browser",
+        "model": "mimicgate-browser",
         "instructions": CODEX_SYSTEM_PROMPT,
         "input": [
             {"role": "user", "content": "Run 'echo hello' in the shell."},
@@ -354,7 +354,7 @@ def test_4_codex_apply_patch_tool(client: httpx.Client):
     separator("Test 4: Codex CLI — apply_patch tool call")
 
     resp = post_responses(client, {
-        "model": "catgpt-browser",
+        "model": "mimicgate-browser",
         "instructions": CODEX_SYSTEM_PROMPT,
         "input": "Create a file called hello.py that prints 'Hello, World!'",
         "tools": [SHELL_TOOL, APPLY_PATCH_TOOL],
@@ -386,7 +386,7 @@ def test_5_codex_streaming_tool_call(client: httpx.Client):
         "POST",
         "/v1/responses",
         json={
-            "model": "catgpt-browser",
+            "model": "mimicgate-browser",
             "instructions": CODEX_SYSTEM_PROMPT,
             "input": "Check what version of python is installed. Use the shell tool.",
             "tools": [SHELL_TOOL],
@@ -445,7 +445,7 @@ def test_6_codex_multiple_tools(client: httpx.Client):
     separator("Test 6: Codex CLI — multiple tools defined")
 
     resp = post_responses(client, {
-        "model": "catgpt-browser",
+        "model": "mimicgate-browser",
         "instructions": CODEX_SYSTEM_PROMPT,
         "input": "What is 2+2? Just answer directly, no tools needed.",
         "tools": [SHELL_TOOL, APPLY_PATCH_TOOL],
@@ -477,7 +477,7 @@ def test_7_codex_tool_choice_none(client: httpx.Client):
     separator("Test 7: Codex CLI — tool_choice=none")
 
     resp = post_responses(client, {
-        "model": "catgpt-browser",
+        "model": "mimicgate-browser",
         "instructions": CODEX_SYSTEM_PROMPT,
         "input": "List files in /tmp. Describe what command you would use.",
         "tools": [SHELL_TOOL],
@@ -504,7 +504,7 @@ def test_8_codex_error_tool_output(client: httpx.Client):
     separator("Test 8: Codex CLI — tool output with error")
 
     resp = post_responses(client, {
-        "model": "catgpt-browser",
+        "model": "mimicgate-browser",
         "instructions": CODEX_SYSTEM_PROMPT,
         "input": [
             {"role": "user", "content": "Check disk space on the machine."},
@@ -572,7 +572,7 @@ def main():
     BROWSER_TESTS = {1, 2, 3, 4, 5, 6, 7, 8}
 
     print("\n" + "=" * 64)
-    print("  CatGPT Gateway — Codex CLI Compatibility Test Suite")
+    print("  MimicGate Gateway — Codex CLI Compatibility Test Suite")
     print("=" * 64)
     print(f"  Base URL : {base_url}")
     print(f"  Auth     : Bearer {args.api_key[:4]}{'*' * (len(args.api_key) - 4)}")

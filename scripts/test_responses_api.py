@@ -15,7 +15,7 @@ Validates the full Responses API contract including:
   10. Response schema field-level validation
 
 Prerequisites:
-  - CatGPT API server running: python -m src.api.server
+  - MimicGate API server running: python -m src.api.server
   - API_TOKEN must match .env (default: dummy123)
 
 Usage:
@@ -221,7 +221,7 @@ def test_1_string_input(client: httpx.Client):
     separator("Test 1: Non-streaming — string input")
 
     resp = post_responses(client, {
-        "model": "catgpt-browser",
+        "model": "mimicgate-browser",
         "input": "What is the capital of Japan? Reply with the city name only.",
         "stream": False,
     })
@@ -251,7 +251,7 @@ def test_2_message_array_input(client: httpx.Client):
     separator("Test 2: Non-streaming — message array input")
 
     resp = post_responses(client, {
-        "model": "catgpt-browser",
+        "model": "mimicgate-browser",
         "input": [
             {"role": "user", "content": "What is 7 * 8? Reply with just the number."},
         ],
@@ -272,7 +272,7 @@ def test_3_instructions(client: httpx.Client):
     separator("Test 3: Non-streaming — instructions (system prompt)")
 
     resp = post_responses(client, {
-        "model": "catgpt-browser",
+        "model": "mimicgate-browser",
         "instructions": "You must respond in exactly 3 words. No more, no less.",
         "input": "Describe the ocean.",
         "stream": False,
@@ -291,7 +291,7 @@ def test_4_developer_role(client: httpx.Client):
     separator("Test 4: Non-streaming — developer role input")
 
     resp = post_responses(client, {
-        "model": "catgpt-browser",
+        "model": "mimicgate-browser",
         "input": [
             {"role": "developer", "content": "Always respond in ALL CAPS."},
             {"role": "user", "content": "Say hi."},
@@ -310,7 +310,7 @@ def test_5_input_text_content_parts(client: httpx.Client):
     separator("Test 5: Non-streaming — input_text content parts")
 
     resp = post_responses(client, {
-        "model": "catgpt-browser",
+        "model": "mimicgate-browser",
         "input": [
             {
                 "role": "user",
@@ -336,7 +336,7 @@ def test_6_streaming_event_sequence(client: httpx.Client):
         "POST",
         "/v1/responses",
         json={
-            "model": "catgpt-browser",
+            "model": "mimicgate-browser",
             "input": "What is 1+1? Reply with the number only.",
             "stream": True,
         },
@@ -402,7 +402,7 @@ def test_7_streaming_event_content(client: httpx.Client):
         "POST",
         "/v1/responses",
         json={
-            "model": "catgpt-browser",
+            "model": "mimicgate-browser",
             "input": "Say the word 'test'. Nothing else.",
             "stream": True,
         },
@@ -504,7 +504,7 @@ def test_8_tools_definition(client: httpx.Client):
     ]
 
     resp = post_responses(client, {
-        "model": "catgpt-browser",
+        "model": "mimicgate-browser",
         "input": "What's the weather in Paris?",
         "tools": tools,
         "stream": False,
@@ -541,7 +541,7 @@ def test_9_error_empty_input(client: httpx.Client):
     separator("Test 9: Error — empty input")
 
     r = client.post("/v1/responses", json={
-        "model": "catgpt-browser",
+        "model": "mimicgate-browser",
         "input": "",
         "stream": False,
     })
@@ -560,7 +560,7 @@ def test_10_error_no_auth(base_url: str):
     no_auth_client = httpx.Client(base_url=base_url, timeout=httpx.Timeout(30.0, connect=10.0))
     try:
         r = no_auth_client.post("/v1/responses", json={
-            "model": "catgpt-browser",
+            "model": "mimicgate-browser",
             "input": "hello",
             "stream": False,
         })
@@ -574,7 +574,7 @@ def test_11_metadata_passthrough(client: httpx.Client):
     separator("Test 11: Non-streaming — metadata & previous_response_id")
 
     resp = post_responses(client, {
-        "model": "catgpt-browser",
+        "model": "mimicgate-browser",
         "input": "Say OK.",
         "metadata": {"user_id": "test-123", "session": "abc"},
         "previous_response_id": "resp_fake_previous_id",
@@ -594,7 +594,7 @@ def test_12_multi_message_conversation(client: httpx.Client):
     separator("Test 12: Non-streaming — multi-turn conversation")
 
     resp = post_responses(client, {
-        "model": "catgpt-browser",
+        "model": "mimicgate-browser",
         "input": [
             {"role": "user", "content": "Remember this number: 42"},
             {"role": "assistant", "content": "Got it, I'll remember the number 42."},
@@ -649,7 +649,7 @@ def main():
     BROWSER_TESTS = {1, 2, 3, 4, 5, 6, 7, 8, 11, 12}
 
     print("\n" + "=" * 64)
-    print("  CatGPT Gateway — /v1/responses API Test Suite")
+    print("  MimicGate Gateway — /v1/responses API Test Suite")
     print("=" * 64)
     print(f"  Base URL : {base_url}")
     print(f"  Auth     : Bearer {args.api_key[:4]}{'*' * (len(args.api_key) - 4)}")

@@ -13,11 +13,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
+from fastapi.staticfiles import StaticFiles
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -31,7 +34,9 @@ from src.config import Config
 from src.api.ollama_routes import ollama_router
 from src.api.routes import router, set_client
 from src.api.openai_routes import openai_router, set_openai_client
+from src.api.monitor_routes import router as monitor_router
 from src.api.browser_gate import configure_tab_pool
+from src.api.telemetry import telemetry
 from src.log import setup_logging
 
 log = setup_logging("api_server", log_file="api_server.log")
@@ -185,11 +190,13 @@ async def lifespan(app: FastAPI):
         ("GET ", f"{host}/status", "Status"),
         ("GET ", f"{host}/healthz", "Health check (no auth)"),
         ("GET ", f"{host}/docs", "API docs (no auth)"),
+        ("GET ", f"{host}/preview", "Live Multi-Tab Preview Dashboard"),
+        ("GET ", f"{host}/v1/tabs", "List active browser tabs"),
     ]
 
     lines = [
         sep,
-        "  CatGPT — READY".center(W),
+        "  MimicGate — READY".center(W),
         sep,
         f"  {session_status}",
         session_line,
@@ -217,9 +224,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="CatGPT Gateway API",
+    title="MimicGate API",
     description=(
-        "Browser automation API for ChatGPT. "
+        "MimicGate browser automation API for ChatGPT. "
         "Sends messages via browser and returns responses."
     ),
     version="1.0.0",
@@ -260,7 +267,15 @@ class BearerTokenMiddleware:
     Skips auth for /docs, /openapi.json, and health-check paths.
     """
 
-    OPEN_PATHS = {b"/docs", b"/redoc", b"/openapi.json", b"/healthz"}
+    OPEN_PATHS = {
+        b"/docs",
+        b"/redoc",
+        b"/openapi.json",
+        b"/healthz",
+        b"/preview",
+        b"/dashboard",
+        b"/v1/preview",
+    }
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
@@ -276,7 +291,12 @@ class BearerTokenMiddleware:
             return
 
         path_str = scope.get("path", "")
-        if path_str in {"/docs", "/redoc", "/openapi.json", "/healthz"}:
+        if (
+            path_str in {"/docs", "/redoc", "/openapi.json", "/healthz", "/preview", "/dashboard", "/v1/preview"}
+            or path_str.startswith("/assets")
+            or path_str.startswith("/v1/tabs")
+            or path_str.startswith("/v1/gateway")
+        ):
             await self.app(scope, receive, send)
             return
 
@@ -320,6 +340,89 @@ class BearerTokenMiddleware:
         await self.app(scope, receive, send)
 
 
+class TelemetryMiddleware:
+    """Record request latency and gateway traffic for preview dashboard telemetry."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+        if (
+            path.startswith("/assets")
+            or path in {"/healthz", "/preview", "/dashboard", "/v1/preview", "/docs", "/redoc", "/openapi.json"}
+            or path.startswith("/v1/tabs")
+            or path.startswith("/v1/gateway")
+        ):
+            await self.app(scope, receive, send)
+            return
+
+        telemetry.request_started()
+        start_time = time.monotonic()
+        status_code = 200
+        request_body_chunks: list[bytes] = []
+
+        async def receive_wrapper() -> dict:
+            message = await receive()
+            if message["type"] == "http.request":
+                body = message.get("body", b"")
+                if body and len(b"".join(request_body_chunks)) < 16384:
+                    request_body_chunks.append(body)
+            return message
+
+        async def send_wrapper(message: dict) -> None:
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = message.get("status", 200)
+            await send(message)
+
+        client = scope.get("client")
+        client_host = client[0] if isinstance(client, tuple) and client else "127.0.0.1"
+        method = scope.get("method", "GET")
+        detected_model = Config.provider_name()
+        payload_text = ""
+
+        try:
+            await self.app(scope, receive_wrapper, send_wrapper)
+        except Exception:
+            status_code = 500
+            raise
+        finally:
+            duration_ms = (time.monotonic() - start_time) * 1000.0
+            telemetry.request_finished()
+            if request_body_chunks:
+                try:
+                    import json
+                    raw_body = b"".join(request_body_chunks).decode("utf-8", errors="replace")
+                    try:
+                        parsed = json.loads(raw_body)
+                        if isinstance(parsed, dict):
+                            if parsed.get("model"):
+                                detected_model = str(parsed["model"])
+                            payload_text = json.dumps(parsed, indent=2)
+                        else:
+                            payload_text = raw_body[:1000]
+                    except Exception:
+                        payload_text = raw_body[:1000]
+                except Exception:
+                    pass
+
+            telemetry.record_request(
+                method=method,
+                path=path,
+                model=detected_model,
+                status_code=status_code,
+                duration_ms=duration_ms,
+                client_ip=client_host,
+                payload=payload_text,
+            )
+
+
+app.add_middleware(TelemetryMiddleware)
 app.add_middleware(BearerTokenMiddleware)
 
 app.add_middleware(
@@ -333,6 +436,13 @@ app.add_middleware(
 app.include_router(router)
 app.include_router(openai_router)
 app.include_router(ollama_router)
+app.include_router(monitor_router)
+
+_assets_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "assets")
+if not os.path.isdir(_assets_dir):
+    _assets_dir = "assets"
+if os.path.isdir(_assets_dir):
+    app.mount("/assets", StaticFiles(directory=_assets_dir), name="assets")
 
 
 @app.get("/healthz", include_in_schema=False)

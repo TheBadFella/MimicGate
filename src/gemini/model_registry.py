@@ -21,6 +21,7 @@ _AUTO_MODEL_IDS = {
     "browser",
     "gemini",
     PUBLIC_GEMINI_BROWSER_MODEL_ID,
+    "mimicgate-browser",
     "catgpt-browser",
     "claude-browser",
     "gpt-4o",
