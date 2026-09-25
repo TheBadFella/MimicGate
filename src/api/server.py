@@ -292,7 +292,7 @@ class BearerTokenMiddleware:
 
         path_str = scope.get("path", "")
         if (
-            path_str in {"/docs", "/redoc", "/openapi.json", "/healthz", "/preview", "/dashboard", "/v1/preview"}
+            path_str in {"/", "/docs", "/redoc", "/openapi.json", "/healthz", "/preview", "/dashboard", "/v1/preview"}
             or path_str.startswith("/assets")
             or path_str.startswith("/v1/tabs")
             or path_str.startswith("/v1/gateway")
@@ -354,7 +354,7 @@ class TelemetryMiddleware:
         path = scope.get("path", "")
         if (
             path.startswith("/assets")
-            or path in {"/healthz", "/preview", "/dashboard", "/v1/preview", "/docs", "/redoc", "/openapi.json"}
+            or path in {"/", "/healthz", "/preview", "/dashboard", "/v1/preview", "/docs", "/redoc", "/openapi.json"}
             or path.startswith("/v1/tabs")
             or path.startswith("/v1/gateway")
         ):

@@ -130,6 +130,7 @@ async def get_gateway_activity() -> dict[str, Any]:
     }
 
 
+@router.get("/", response_class=HTMLResponse)
 @router.get("/preview", response_class=HTMLResponse)
 @router.get("/dashboard", response_class=HTMLResponse)
 @router.get("/v1/preview", response_class=HTMLResponse)

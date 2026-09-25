@@ -54,7 +54,12 @@ class MonitorRoutesTests(unittest.TestCase):
 
     def test_preview_html_served_without_auth(self) -> None:
         with patch.object(Config, "API_TOKEN", "secret123"):
-            # Ensure /preview and /dashboard are accessible without auth
+            # Ensure /, /preview and /dashboard are accessible without auth
+            resp_root = self.client.get("/")
+            self.assertEqual(resp_root.status_code, 200)
+            self.assertIn("text/html", resp_root.headers["content-type"])
+            self.assertIn("MimicGate", resp_root.text)
+
             resp = self.client.get("/preview")
             self.assertEqual(resp.status_code, 200)
             self.assertIn("text/html", resp.headers["content-type"])
