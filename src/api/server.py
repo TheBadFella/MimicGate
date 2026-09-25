@@ -43,7 +43,7 @@ log = setup_logging("api_server", log_file="api_server.log")
 
 
 class SuppressHealthyHealthzAccessFilter(logging.Filter):
-    """Hide noisy successful /healthz access logs while keeping failures visible."""
+    """Hide noisy successful access logs for health and dashboard telemetry polling while keeping failures visible."""
 
     def filter(self, record: logging.LogRecord) -> bool:  # type: ignore[override]
         try:
@@ -51,11 +51,16 @@ class SuppressHealthyHealthzAccessFilter(logging.Filter):
         except Exception:
             return True
 
-        if (
-            ('"GET /healthz' in message or '"HEAD /healthz' in message)
-            and (' 200' in message or ' 204' in message)
-        ):
-            return False
+        if (' 200' in message or ' 204' in message or ' 304' in message):
+            if (
+                '"GET /healthz' in message
+                or '"HEAD /healthz' in message
+                or '"HEAD / ' in message
+                or '"GET /v1/gateway/activity' in message
+                or '"GET /v1/tabs' in message
+                or '"GET /v1/models' in message
+            ):
+                return False
         return True
 
 

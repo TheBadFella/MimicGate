@@ -77,7 +77,7 @@ async def get_tab_screenshot(index: int) -> Response:
         return Response(
             content=jpeg_bytes,
             media_type="image/jpeg",
-            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+            headers={"Cache-Control": "private, max-age=5"},
         )
     except IndexError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
@@ -1028,9 +1028,14 @@ async def preview_dashboard() -> HTMLResponse:
     }
 
     function reloadSingleTab(index) {
+      const ts = Date.now();
       const img = document.getElementById(`tab-img-${index}`);
       if (img) {
-        img.src = `/v1/tabs/${index}/screenshot?t=${Date.now()}`;
+        img.src = `/v1/tabs/${index}/screenshot?t=${ts}`;
+      }
+      const thumb = document.getElementById(`tab-thumb-${index}`);
+      if (thumb) {
+        thumb.src = `/v1/tabs/${index}/screenshot?t=${ts}`;
       }
     }
 
@@ -1199,13 +1204,14 @@ async def preview_dashboard() -> HTMLResponse:
       document.getElementById("tabs-section-heading").textContent = `Active Browser Tabs (${tabs.length})`;
       const container = document.getElementById("tabs-container");
 
-      if (isCompact) {
-        container.className = "tabs-compact";
-      } else {
-        container.className = "tabs-grid";
+      const expectedClass = isCompact ? "tabs-compact" : "tabs-grid";
+      if (container.className !== expectedClass) {
+        container.className = expectedClass;
+        container.dataset.renderedTabs = "";
       }
 
       if (!tabs.length) {
+        container.dataset.renderedTabs = "";
         container.innerHTML = `
           <div style="grid-column: 1 / -1; padding: 40px; text-align: center; color: var(--dash-muted); font-family: var(--font-mono); font-size: 0.82rem;">
             No browser tabs currently active. A worker tab will launch when the gateway receives a request.
@@ -1214,10 +1220,39 @@ async def preview_dashboard() -> HTMLResponse:
         return;
       }
 
+      const tabKey = tabs.map(t => t.index).join(",");
+      if (container.dataset.renderedTabs === tabKey) {
+        tabs.forEach(tab => {
+          const statusClass = tab.is_control ? 'status-control' : (tab.is_busy ? 'status-busy' : 'status-idle');
+          const statusLabel = tab.state ? tab.state.toUpperCase() : (tab.is_control ? 'CONTROL' : tab.is_busy ? 'BUSY' : 'IDLE');
+          const pill = document.getElementById(`tab-pill-${tab.index}`);
+          if (pill) {
+            pill.className = `tab-status-pill ${statusClass}`;
+            pill.textContent = statusLabel;
+          }
+          const titleEl = document.getElementById(`tab-title-${tab.index}`);
+          if (titleEl) {
+            titleEl.textContent = tab.title || (tab.is_control ? 'Control Tab' : `Worker Tab ${tab.index}`);
+            titleEl.title = tab.title || '';
+          }
+          const urlEl = document.getElementById(`tab-url-${tab.index}`);
+          if (urlEl) {
+            urlEl.textContent = tab.url || '—';
+            urlEl.title = tab.url || '';
+          }
+          const activeEl = document.getElementById(`tab-active-${tab.index}`);
+          if (activeEl) {
+            activeEl.textContent = tab.last_active_seconds_ago !== null ? `${tab.last_active_seconds_ago}s ago` : 'active';
+          }
+        });
+        return;
+      }
+
+      container.dataset.renderedTabs = tabKey;
+
       if (isCompact) {
         container.innerHTML = tabs.map(tab => {
-          const timestamp = Date.now();
-          const screenshotSrc = `/v1/tabs/${tab.index}/screenshot?t=${timestamp}`;
+          const screenshotSrc = `/v1/tabs/${tab.index}/screenshot`;
           const statusClass = tab.is_control ? 'status-control' : (tab.is_busy ? 'status-busy' : 'status-idle');
           const statusLabel = tab.state ? tab.state.toUpperCase() : (tab.is_control ? 'CONTROL' : tab.is_busy ? 'BUSY' : 'IDLE');
 
@@ -1226,16 +1261,16 @@ async def preview_dashboard() -> HTMLResponse:
             : `<button class="btn-square btn-square-danger" style="padding: 3px 8px; font-size: 0.7rem;" onclick="closeTab(${tab.index})">Close</button>`;
 
           return `
-            <div class="compact-tab-row">
+            <div class="compact-tab-row" id="tab-card-${tab.index}">
               <div class="compact-left">
-                <img src="${screenshotSrc}" class="compact-thumb" onclick="openModal('${screenshotSrc}')" title="Click to zoom" />
+                <img id="tab-thumb-${tab.index}" src="${screenshotSrc}" class="compact-thumb" onclick="openModal('${screenshotSrc}')" title="Click to zoom" onerror="this.onerror=null;" />
                 <div class="compact-info">
-                  <div class="compact-title">#${tab.index} &bull; ${tab.title || 'Tab'}</div>
-                  <div class="compact-sub">${tab.session_key || 'ephemeral'} &bull; ${tab.url || 'about:blank'}</div>
+                  <div class="compact-title" id="tab-title-${tab.index}">#${tab.index} &bull; ${tab.title || 'Tab'}</div>
+                  <div class="compact-sub" id="tab-url-${tab.index}">${tab.session_key || 'ephemeral'} &bull; ${tab.url || 'about:blank'}</div>
                 </div>
               </div>
               <div style="display: flex; align-items: center; gap: 8px;">
-                <span class="tab-status-pill ${statusClass}">${statusLabel}</span>
+                <span id="tab-pill-${tab.index}" class="tab-status-pill ${statusClass}">${statusLabel}</span>
                 <button class="btn-square" style="padding: 3px 8px; font-size: 0.7rem;" onclick="resetTab(${tab.index})">Reset</button>
                 <button class="btn-square" style="padding: 3px 8px; font-size: 0.7rem;" onclick="reloadSingleTab(${tab.index})">Snapshot</button>
                 ${closeBtn}
@@ -1247,8 +1282,7 @@ async def preview_dashboard() -> HTMLResponse:
       }
 
       container.innerHTML = tabs.map(tab => {
-        const timestamp = Date.now();
-        const screenshotSrc = `/v1/tabs/${tab.index}/screenshot?t=${timestamp}`;
+        const screenshotSrc = `/v1/tabs/${tab.index}/screenshot`;
         const statusClass = tab.is_control ? 'status-control' : (tab.is_busy ? 'status-busy' : 'status-idle');
         const statusLabel = tab.state ? tab.state.toUpperCase() : (tab.is_control ? 'CONTROL' : tab.is_busy ? 'BUSY' : 'IDLE');
 
@@ -1257,16 +1291,16 @@ async def preview_dashboard() -> HTMLResponse:
           : `<button class="btn-square btn-square-danger" style="padding: 2px 8px; font-size: 0.7rem;" onclick="closeTab(${tab.index})">Close</button>`;
 
         return `
-          <div class="tab-card">
+          <div class="tab-card" id="tab-card-${tab.index}">
             <div class="tab-header">
               <div class="tab-title-group">
                 <span class="tab-badge">#${tab.index}</span>
-                <span class="tab-status-pill ${statusClass}">${statusLabel}</span>
+                <span id="tab-pill-${tab.index}" class="tab-status-pill ${statusClass}">${statusLabel}</span>
               </div>
               <div>${closeBtn}</div>
             </div>
             <div class="tab-preview-wrap" onclick="openModal('${screenshotSrc}')" title="Click to enlarge screenshot">
-              <img id="tab-img-${tab.index}" src="${screenshotSrc}" alt="Tab ${tab.index} Preview" class="tab-preview-img" onerror="this.src='/v1/tabs/${tab.index}/screenshot?t=' + Date.now()" />
+              <img id="tab-img-${tab.index}" src="${screenshotSrc}" alt="Tab ${tab.index} Preview" class="tab-preview-img" onerror="this.onerror=null;" />
               <div class="tab-overlay-actions">
                 <button class="btn-square" style="padding: 2px 6px; font-size: 0.68rem; background: rgba(0,0,0,0.7);" onclick="event.stopPropagation(); reloadSingleTab(${tab.index})">Snapshot</button>
               </div>
@@ -1274,7 +1308,7 @@ async def preview_dashboard() -> HTMLResponse:
             <div class="tab-meta-box">
               <div class="tab-meta-row">
                 <span class="tab-meta-label">Title</span>
-                <span class="tab-meta-value" title="${tab.title}">${tab.title || '—'}</span>
+                <span class="tab-meta-value" id="tab-title-${tab.index}" title="${tab.title}">${tab.title || '—'}</span>
               </div>
               <div class="tab-meta-row">
                 <span class="tab-meta-label">Session</span>
@@ -1282,11 +1316,11 @@ async def preview_dashboard() -> HTMLResponse:
               </div>
               <div class="tab-meta-row">
                 <span class="tab-meta-label">URL</span>
-                <span class="tab-meta-value" title="${tab.url}">${tab.url || '—'}</span>
+                <span class="tab-meta-value" id="tab-url-${tab.index}" title="${tab.url}">${tab.url || '—'}</span>
               </div>
               <div class="tab-meta-row">
                 <span class="tab-meta-label">Last Active</span>
-                <span class="tab-meta-value">${tab.last_active_seconds_ago !== null ? tab.last_active_seconds_ago + 's ago' : 'active'}</span>
+                <span class="tab-meta-value" id="tab-active-${tab.index}">${tab.last_active_seconds_ago !== null ? tab.last_active_seconds_ago + 's ago' : 'active'}</span>
               </div>
             </div>
             <div class="tab-footer-actions">
@@ -1437,7 +1471,7 @@ async def preview_dashboard() -> HTMLResponse:
 
     function startAutoRefresh() {
       clearInterval(refreshInterval);
-      refreshInterval = setInterval(fetchData, 2000);
+      refreshInterval = setInterval(fetchData, 5000);
     }
 
     // Initial boot

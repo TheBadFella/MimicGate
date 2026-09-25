@@ -52,6 +52,7 @@ class BrowserTabPool:
         self._struct_lock = asyncio.Lock()
         self._waiting_requests: int = 0
         self._tab_states: dict[str, str] = {}
+        self._screenshot_cache: dict[int, tuple[float, bytes]] = {}
 
     def _session_lock(self, session_key: str) -> asyncio.Lock:
         lock = self._locks.get(session_key)
@@ -363,6 +364,7 @@ class BrowserTabPool:
                 self._tab_states.pop(sk, None)
                 break
         self._tab_states.pop(str(tab_index), None)
+        self._screenshot_cache.pop(tab_index, None)
 
         target = Config.provider_url()
         try:
@@ -373,7 +375,12 @@ class BrowserTabPool:
             return {"status": "error", "error": str(exc), "index": tab_index}
 
     async def capture_tab_screenshot(self, tab_index: int) -> bytes:
-        """Capture a JPEG screenshot of a specific tab index."""
+        """Capture a JPEG screenshot of a specific tab index with cache throttling."""
+        now = time.monotonic()
+        cached = self._screenshot_cache.get(tab_index)
+        if cached and (now - cached[0]) < 4.0:
+            return cached[1]
+
         context = self._get_context()
         pages = list(getattr(context, "pages", []) or [])
         if tab_index < 0 or tab_index >= len(pages):
@@ -384,7 +391,9 @@ class BrowserTabPool:
         screenshot_fn = getattr(page, "screenshot", None)
         if not callable(screenshot_fn):
             raise RuntimeError(f"Tab {tab_index} does not support screenshot")
-        return await page.screenshot(type="jpeg", quality=65, timeout=5000)
+        jpeg_bytes = await page.screenshot(type="jpeg", quality=65, timeout=5000)
+        self._screenshot_cache[tab_index] = (now, jpeg_bytes)
+        return jpeg_bytes
 
     async def close_tab_by_index(self, tab_index: int) -> dict[str, Any]:
         """Safely close a worker tab by its index in context.pages."""
@@ -412,6 +421,7 @@ class BrowserTabPool:
                 break
 
         await self._close_page(page)
+        self._screenshot_cache.pop(tab_index, None)
         return {"status": "closed", "index": tab_index}
 
 

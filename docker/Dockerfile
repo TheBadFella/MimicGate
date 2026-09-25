@@ -68,6 +68,7 @@ ARG CACHE_BUST=1
 RUN echo "Cache bust: $CACHE_BUST"
 COPY src/ src/
 COPY scripts/ scripts/
+COPY assets/ assets/
 
 # ── Directory setup ─────────────────────────────────────────────
 RUN mkdir -p /app/browser_data /app/logs /app/state /app/downloads/images /app/downloads/audio
