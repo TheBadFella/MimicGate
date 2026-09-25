@@ -130,10 +130,10 @@ async def get_gateway_activity() -> dict[str, Any]:
     }
 
 
-@router.get("/", response_class=HTMLResponse)
-@router.get("/preview", response_class=HTMLResponse)
-@router.get("/dashboard", response_class=HTMLResponse)
-@router.get("/v1/preview", response_class=HTMLResponse)
+@router.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
+@router.api_route("/preview", methods=["GET", "HEAD"], response_class=HTMLResponse)
+@router.api_route("/dashboard", methods=["GET", "HEAD"], response_class=HTMLResponse)
+@router.api_route("/v1/preview", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def preview_dashboard() -> HTMLResponse:
     """
     Serve the Live Multi-Tab Preview Dashboard.

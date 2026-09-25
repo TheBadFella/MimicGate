@@ -51,7 +51,10 @@ class SuppressHealthyHealthzAccessFilter(logging.Filter):
         except Exception:
             return True
 
-        if '"GET /healthz' in message and (' 200' in message or ' 204' in message):
+        if (
+            ('"GET /healthz' in message or '"HEAD /healthz' in message)
+            and (' 200' in message or ' 204' in message)
+        ):
             return False
         return True
 
@@ -445,7 +448,7 @@ if os.path.isdir(_assets_dir):
     app.mount("/assets", StaticFiles(directory=_assets_dir), name="assets")
 
 
-@app.get("/healthz", include_in_schema=False)
+@app.api_route("/healthz", methods=["GET", "HEAD"], include_in_schema=False)
 async def healthz():
     """Unauthenticated health-check for Docker / load-balancers."""
     return {"status": "ok"}

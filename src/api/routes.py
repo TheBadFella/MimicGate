@@ -226,7 +226,7 @@ async def list_threads() -> ThreadListResponse:
 # ── Status ──────────────────────────────────────────────────────
 
 
-@router.get("/status", response_model=StatusResponse)
+@router.api_route("/status", methods=["GET", "HEAD"], response_model=StatusResponse)
 async def status() -> StatusResponse:
     """Health check — returns login status and current thread."""
     try:

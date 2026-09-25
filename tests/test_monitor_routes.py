@@ -69,6 +69,16 @@ class MonitorRoutesTests(unittest.TestCase):
             resp_dash = self.client.get("/dashboard")
             self.assertEqual(resp_dash.status_code, 200)
 
+    def test_head_requests_on_healthz_and_dashboard(self) -> None:
+        with patch.object(Config, "API_TOKEN", "secret123"):
+            for path in ["/", "/preview", "/dashboard", "/healthz"]:
+                resp = self.client.head(path)
+                self.assertEqual(
+                    resp.status_code,
+                    200,
+                    f"HEAD {path} should return 200, got {resp.status_code}",
+                )
+
     def test_get_tabs_list(self) -> None:
         resp = self.client.get("/v1/tabs")
         self.assertEqual(resp.status_code, 200)
