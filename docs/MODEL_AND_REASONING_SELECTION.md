@@ -4,13 +4,11 @@ MimicGate supports browser-backed ChatGPT model switching. When a request includ
 a configured model id, MimicGate opens the ChatGPT model picker, selects the
 matching model and effort, waits for confirmation, and then sends the prompt.
 
-On ChatGPT Business / Pro (August 2026), the composer button shows the current
-effort (`Instant`, `Medium`, `High`, `Extra High`, or `Pro`). The compact menu
-exposes a Power control; **Show advanced options** reveals:
-
-- **Model:** `GPT-5.6 Sol`, `GPT-5.5` (`o3` is leaving August 26 and is not
-  exposed by default)
-- **Effort:** `Instant`, `Medium`, `High`, `Extra High`, `Pro`
+On the ChatGPT Business UI checked in September 2026, the composer button shows
+the current effort. Its menu has **Select model** (`Latest`, `GPT-5.6 Sol`, and
+`GPT-5.5` on the checked account) and a **Power** slider with `Instant`,
+`Medium`, `High`, and `Extra High`. Model availability varies by account.
+MimicGate also keeps the older Advanced/Configure picker fallbacks.
 
 ## Quick Use
 
@@ -91,9 +89,9 @@ Do not set `CHATGPT_MODEL_SWITCH_TIMEOUT=1` expecting one second; that is 1 ms.
 ## Notes
 
 - Model availability depends on the logged-in ChatGPT account and plan. Free/Go
-  accounts may show Luna and a Think control instead of this Advanced picker.
-- MimicGate expands **Show advanced options** when the compact Power menu is open,
-  then clicks **Model** and **Effort**.
+  accounts may show Luna and a Think control instead of these controls.
+- MimicGate uses **Select model** and **Power** on the current picker. Older
+  layouts use **Show advanced options**, **Model**, and **Effort**.
 - UI labels change over time. Update `CHATGPT_MODEL_ALIASES` when ChatGPT
   renames picker items.
 - The CLI also supports `/model <name>`, which changes the model id sent to the
