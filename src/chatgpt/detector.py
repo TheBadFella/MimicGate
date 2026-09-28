@@ -85,6 +85,12 @@ _CONVERSATION_SNAPSHOT_JS = r"""
     const isTurnCopyButton = (el) => !isCodeCopyButton(el) && !isTableCopyButton(el);
 
     const findTurnCopyButton = (root) => {
+        if (root.matches('[data-content-search-unit-key$=":assistant"]')) {
+            const turn = root.closest('[data-content-search-turn-key]');
+            const matches = Array.from(turn?.querySelectorAll('button[aria-label="Copy" i], button[aria-label="Copy response" i]') || [])
+                .filter(isTurnCopyButton);
+            if (matches.length) return matches[matches.length - 1];
+        }
         for (const selector of copySelectors) {
             const matches = Array.from(root.querySelectorAll(selector))
                 .filter(isTurnCopyButton);
@@ -133,6 +139,9 @@ _CONVERSATION_SNAPSHOT_JS = r"""
 
     const roleOf = (root) => {
         if (!root) return "";
+        const unitKey = root.getAttribute("data-content-search-unit-key") || "";
+        if (unitKey.endsWith(":assistant")) return "assistant";
+        if (unitKey.endsWith(":user")) return "user";
         const ownRole = root.getAttribute("data-message-author-role") || root.getAttribute("data-turn") || "";
         if (ownRole === "assistant" || ownRole === "user") return ownRole;
         const roleEl = root.querySelector('[data-message-author-role="assistant"], [data-message-author-role="user"]');
@@ -149,7 +158,7 @@ _CONVERSATION_SNAPSHOT_JS = r"""
     };
 
     const stableIdOf = (root) => {
-        const attrs = ["data-message-id", "data-turn-id", "data-testid", "data-testid-message-id", "id"];
+        const attrs = ["data-content-search-unit-key", "data-message-id", "data-turn-id", "data-testid", "data-testid-message-id", "id"];
         for (const attr of attrs) {
             const value = root.getAttribute(attr);
             if (value) return value;
@@ -210,6 +219,7 @@ _CONVERSATION_SNAPSHOT_JS = r"""
     const addRoot = (el) => {
         if (!el) return;
         const promoted = el.closest([
+            '[data-content-search-unit-key]',
             "article",
             'section[data-testid^="conversation-turn-"]',
             'div[data-testid^="conversation-turn-"]',
@@ -220,6 +230,8 @@ _CONVERSATION_SNAPSHOT_JS = r"""
     };
 
     const selectors = [
+        '[data-content-search-unit-key$=":assistant"]',
+        '[data-content-search-unit-key$=":user"]',
         "article",
         'section[data-testid^="conversation-turn-"]',
         'div[data-testid^="conversation-turn-"]',
@@ -382,6 +394,12 @@ _CLICK_LATEST_COPY_BUTTON_JS = r"""
     };
     const isTurnCopyButton = (el) => !isCodeCopyButton(el) && !isTableCopyButton(el);
     const findTurnCopyButton = (root) => {
+        if (root.matches('[data-content-search-unit-key$=":assistant"]')) {
+            const turn = root.closest('[data-content-search-turn-key]');
+            const matches = Array.from(turn?.querySelectorAll('button[aria-label="Copy" i], button[aria-label="Copy response" i]') || [])
+                .filter(isTurnCopyButton);
+            if (matches.length) return matches[matches.length - 1];
+        }
         for (const selector of copySelectors) {
             const matches = Array.from(root.querySelectorAll(selector))
                 .filter(isTurnCopyButton);
@@ -392,6 +410,7 @@ _CLICK_LATEST_COPY_BUTTON_JS = r"""
         return null;
     };
     const roleOf = (root) => {
+        if ((root.getAttribute("data-content-search-unit-key") || "").endsWith(":assistant")) return "assistant";
         const ownRole = root.getAttribute("data-message-author-role") || root.getAttribute("data-turn") || "";
         if (ownRole === "assistant" || ownRole === "user") return ownRole;
         const roleEl = root.querySelector('[data-message-author-role="assistant"], [data-message-author-role="user"]');
@@ -400,7 +419,7 @@ _CLICK_LATEST_COPY_BUTTON_JS = r"""
         return "";
     };
     const stableIdOf = (root) => {
-        const attrs = ["data-message-id", "data-turn-id", "data-testid", "data-testid-message-id", "id"];
+        const attrs = ["data-content-search-unit-key", "data-message-id", "data-turn-id", "data-testid", "data-testid-message-id", "id"];
         for (const attr of attrs) {
             const value = root.getAttribute(attr);
             if (value) return value;
@@ -442,6 +461,7 @@ _CLICK_LATEST_COPY_BUTTON_JS = r"""
     const addRoot = (el) => {
         if (!el) return;
         rootSet.add(el.closest([
+            '[data-content-search-unit-key]',
             "article",
             'section[data-testid^="conversation-turn-"]',
             'div[data-testid^="conversation-turn-"]',
@@ -450,6 +470,7 @@ _CLICK_LATEST_COPY_BUTTON_JS = r"""
         ].join(",")) || el);
     };
     for (const selector of [
+        '[data-content-search-unit-key$=":assistant"]',
         "article",
         'section[data-testid^="conversation-turn-"]',
         'div[data-testid^="conversation-turn-"]',

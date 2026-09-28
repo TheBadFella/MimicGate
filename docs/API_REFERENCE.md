@@ -129,6 +129,8 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 }
 ```
 
+If MimicGate cannot extract a complete ChatGPT reply after retrying, the request returns an HTTP 500 error instead of a successful completion with empty content.
+
 ---
 
 ### Read-Aloud Audio

@@ -31,6 +31,29 @@ class _ProjectPage:
 
 
 class ChatGPTProjectTests(unittest.IsolatedAsyncioTestCase):
+    async def test_existing_chat_opens_new_chat_even_without_legacy_turn_ids(self) -> None:
+        page = _ProjectPage("https://chatgpt.com/c/existing", turns=0)
+        clicks = 0
+
+        class _NewChatButton:
+            async def is_visible(self) -> bool:
+                return True
+
+            async def click(self) -> None:
+                nonlocal clicks
+                clicks += 1
+                page.url = "https://chatgpt.com/"
+
+        page.query_selector = AsyncMock(return_value=_NewChatButton())
+        client = ChatGPTClient(page)  # type: ignore[arg-type]
+        with patch.object(Config, "CHATGPT_PROJECT_URL", ""), patch(
+            "src.chatgpt.client.asyncio.sleep", AsyncMock()
+        ):
+            await client.new_chat()
+
+        self.assertEqual(clicks, 1)
+        self.assertEqual(page.url, "https://chatgpt.com/")
+
     def test_project_url_validation(self) -> None:
         with patch.object(Config, "CHATGPT_PROJECT_URL", PROJECT_URL + "/"):
             self.assertEqual(Config.chatgpt_project_url(), PROJECT_URL)

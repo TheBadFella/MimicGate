@@ -347,6 +347,7 @@ class ChatGPTClient:
                             "has_images": has_images,
                         },
                     )
+                    raise RuntimeError("ChatGPT returned no complete response")
 
             elapsed_ms = int((time.time() - start_time) * 1000)
             thread_id = self._extract_thread_id()
@@ -464,7 +465,8 @@ class ChatGPTClient:
 
         await asyncio.sleep(0.4)
         await self._expand_advanced_picker()
-        await self._click_menu_text("Model")
+        if not await self._click_menu_text("Select model"):
+            await self._click_menu_text("Model")
 
         switched = await self._click_model_option(target.ui_labels)
         if not switched:
@@ -610,7 +612,8 @@ class ChatGPTClient:
             return list(self._discovered_model_labels)
         await asyncio.sleep(0.3)
         await self._expand_advanced_picker()
-        await self._click_menu_text("Model")
+        if not await self._click_menu_text("Select model"):
+            await self._click_menu_text("Model")
         visible = await self._collect_visible_model_options()
         labels = [
             label for label in visible
@@ -624,17 +627,24 @@ class ChatGPTClient:
 
         await self._dismiss_model_picker()
         reasoning_labels: list[str] = []
+        used_power_slider = False
         if await self._open_model_picker(current, current_label=current):
             await asyncio.sleep(0.3)
-            await self._expand_advanced_picker()
-            if await self._click_menu_text("Effort"):
+            if await self._page.locator("[data-reasoning-slider]").count():
+                used_power_slider = True
+                reasoning_labels = ["Instant", "Medium", "High", "Extra High"]
+                for label in labels:
+                    register_discovered_reasoning(label, reasoning_labels)
+            else:
+                await self._expand_advanced_picker()
+            if not reasoning_labels and await self._click_menu_text("Effort"):
                 visible_efforts = await self._collect_visible_model_options()
                 reasoning_labels = [
                     label for label in visible_efforts
                     if canonical_reasoning_effort(label, substring=True)
                 ]
         await self._dismiss_model_picker()
-        if current and reasoning_labels:
+        if current and reasoning_labels and not used_power_slider:
             register_discovered_reasoning(current, reasoning_labels)
 
         if labels:
@@ -659,7 +669,7 @@ class ChatGPTClient:
             if current_url == project_url:
                 try:
                     turn_count = await self._page.evaluate(
-                        "document.querySelectorAll('[data-testid^=\"conversation-turn-\"]').length"
+                        "document.querySelectorAll('[data-content-search-turn-key], [data-testid^=\"conversation-turn-\"]').length"
                     )
                     if turn_count == 0:
                         await self._wait_for_chat_input()
@@ -676,10 +686,10 @@ class ChatGPTClient:
             return
 
         # Already on a fresh chat — nothing to do
-        if "chatgpt.com" in self._page.url:
+        if "chatgpt.com" in self._page.url and "/c/" not in self._page.url:
             try:
                 turn_count = await self._page.evaluate(
-                    "document.querySelectorAll('[data-testid^=\"conversation-turn-\"]').length"
+                    "document.querySelectorAll('[data-content-search-turn-key], [data-testid^=\"conversation-turn-\"]').length"
                 )
                 if turn_count == 0:
                     log.info("Already on a fresh chat — skipping navigation")
@@ -698,9 +708,9 @@ class ChatGPTClient:
                     # Verify we're on a fresh chat
                     try:
                         turn_count = await self._page.evaluate(
-                            "document.querySelectorAll('[data-testid^=\"conversation-turn-\"]').length"
+                            "document.querySelectorAll('[data-content-search-turn-key], [data-testid^=\"conversation-turn-\"]').length"
                         )
-                        if turn_count == 0:
+                        if turn_count == 0 and "/c/" not in self._page.url:
                             await self._wait_for_chat_input()
                             return
                     except Exception:
@@ -1076,6 +1086,7 @@ class ChatGPTClient:
                         'button[aria-label*="stop" i]'
                     ].join(',');
                     const sendSelectors = [
+                        'button[aria-label="Send"]',
                         'button[data-testid="send-button"]',
                         '#composer-submit-button',
                         "button[aria-label='Send prompt']",
@@ -1218,6 +1229,7 @@ class ChatGPTClient:
             """
             () => {
                 const selectors = [
+                    'button[aria-label="Send"]',
                     'button[data-testid="send-button"]',
                     '#composer-submit-button',
                     "button[aria-label='Send prompt']",
@@ -1835,6 +1847,20 @@ class ChatGPTClient:
             return False
 
         await asyncio.sleep(0.3)
+        power_levels = ("Instant", "Medium", "High", "Extra High")
+        if setting_label in power_levels:
+            power = self._page.locator("[data-reasoning-slider]")
+            if await power.count():
+                current = await power.locator("[role='slider']").get_attribute("aria-valuenow")
+                if current is None:
+                    return False
+                target = power_levels.index(setting_label)
+                direction = "ArrowRight" if target > int(current) else "ArrowLeft"
+                for _ in range(abs(target - int(current))):
+                    await power.press(direction)
+                selected = await power.locator("[role='slider']").get_attribute("aria-valuenow")
+                return selected == str(target)
+
         await self._expand_advanced_picker()
         effort_opened = await self._click_menu_text("Effort")
         if not effort_opened:
@@ -2079,6 +2105,15 @@ class ChatGPTClient:
             return False
 
         await asyncio.sleep(0.3)
+        if await self._page.locator("[data-model-picker-view-toggle]").count():
+            if not await self._click_menu_text("Select model"):
+                return False
+            selected = await self._page.locator("[role='menuitemradio'][aria-checked='true']").all_text_contents()
+            confirmed = any(target_version_label in label for label in selected)
+            if confirmed:
+                self._last_model_version_label = target_version_label
+            return confirmed
+
         configure_opened = await self._expand_advanced_picker()
         if not configure_opened:
             configure_opened = await self._click_menu_text("Configure")
