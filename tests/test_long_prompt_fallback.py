@@ -163,6 +163,23 @@ class LongPromptFallbackTests(IsolatedAsyncioTestCase):
         self.assertEqual(Path(uploaded[-1]).exists(), False)
         self.assertIn("Read the attached file", typed[1])
 
+    async def test_empty_chatgpt_reply_is_not_reported_as_success(self) -> None:
+        client = _FlowClient(_FakePage(), prompt_state="ready")
+        with (
+            patch("src.chatgpt.client.human_type", new=AsyncMock()),
+            patch("src.chatgpt.client.random_delay", new=AsyncMock()),
+            patch("src.chatgpt.client.count_assistant_messages", new=AsyncMock(return_value=0)),
+            patch("src.chatgpt.client.get_latest_assistant_turn_signature", new=AsyncMock(return_value=None)),
+            patch("src.chatgpt.client.get_latest_user_turn_signature", new=AsyncMock(return_value=None)),
+            patch("src.chatgpt.client.wait_for_response_complete", new=AsyncMock(return_value=True)),
+            patch("src.chatgpt.client.extract_images_from_response", new=AsyncMock(return_value=[])),
+            patch("src.chatgpt.client.extract_last_response_via_copy", new=AsyncMock(return_value="")),
+            patch("src.chatgpt.client.capture_response_diagnostics", new=AsyncMock(return_value="diagnostic.json")),
+            patch("src.chatgpt.client.asyncio.sleep", new=AsyncMock()),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "no complete response"):
+                await client.send_message("Hello")
+
     async def test_prompt_too_long_can_be_rejected_without_fallback(self) -> None:
         client = _FlowClient(_FakePage())
 

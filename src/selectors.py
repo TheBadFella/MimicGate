@@ -14,6 +14,7 @@ class Selectors:
 
     # ── Chat input ──────────────────────────────────────────────
     CHAT_INPUT = [
+        "div[contenteditable='true'][aria-label='Ask ChatGPT']",
         "#prompt-textarea",
         "div[contenteditable='true'][id='prompt-textarea']",
         "div[contenteditable='true']",
@@ -21,6 +22,7 @@ class Selectors:
 
     # ── Send button ─────────────────────────────────────────────
     SEND_BUTTON = [
+        "button[aria-label='Send']",
         "button[data-testid='send-button']",
         "#composer-submit-button",
         "button[aria-label='Send prompt']",
@@ -30,6 +32,7 @@ class Selectors:
 
     # Model picker trigger in ChatGPT's composer/header.
     MODEL_PICKER_BUTTON = [
+        "button[aria-label='Select ChatGPT model']",
         "button[data-testid='model-switcher-dropdown-button']",
         "button[aria-haspopup='menu']:has-text('Instant')",
         "button[aria-haspopup='menu']:has-text('Thinking')",
@@ -63,6 +66,7 @@ class Selectors:
 
     # ── New chat ────────────────────────────────────────────────
     NEW_CHAT_BUTTON = [
+        "button:has-text('New chat')",
         "a[data-testid='create-new-chat-button']",
         "a[href='/']",
         "nav a[href='/']",

@@ -38,6 +38,7 @@ if "pydantic" not in sys.modules and importlib.util.find_spec("pydantic") is Non
     sys.modules["pydantic"] = pydantic_mod
 
 from src.chatgpt.client import ChatGPTClient
+from src.chatgpt.model_registry import clear_discovered_models, list_reasoning_labels
 from src.config import Config
 
 try:
@@ -82,6 +83,9 @@ class _FakePage:
         self.wait_for_selector_calls += 1
         raise RuntimeError("selector unavailable")
 
+    def locator(self, _selector: str):
+        return _AbsentLocator()
+
     async def evaluate(self, _script: str, arg=None):
         self.evaluate_calls.append(arg)
 
@@ -98,6 +102,11 @@ class _FakePage:
 
         # _collect_visible_model_options passes no arg.
         return self.visible_options
+
+
+class _AbsentLocator:
+    async def count(self) -> int:
+        return 0
 
 
 class _ConfigureOnlyClient(ChatGPTClient):
@@ -193,7 +202,74 @@ class _AdvancedEffortClient(ChatGPTClient):
         return True
 
 
+class _CurrentPickerPage(_FakePage):
+    def __init__(self) -> None:
+        super().__init__()
+        self.power = 1
+
+    def locator(self, selector: str):
+        return _CurrentPickerLocator(self, selector)
+
+
+class _CurrentPickerLocator:
+    def __init__(self, page: _CurrentPickerPage, selector: str) -> None:
+        self.page = page
+        self.selector = selector
+
+    async def count(self) -> int:
+        return 1
+
+    def locator(self, selector: str):
+        return _CurrentPickerLocator(self.page, selector)
+
+    async def get_attribute(self, name: str) -> str:
+        return str(self.page.power)
+
+    async def press(self, key: str) -> None:
+        self.page.power += 1 if key == "ArrowRight" else -1
+
+    async def all_text_contents(self) -> list[str]:
+        return ["GPT-5.5"]
+
+
+class _CurrentPickerClient(ChatGPTClient):
+    async def _dismiss_model_picker(self) -> None:
+        return None
+
+    async def _detect_current_model_label(self) -> str:
+        return "Medium"
+
+    async def _open_model_picker(self, _target_label: str, current_label: str = "") -> bool:
+        return True
+
+    async def _click_menu_text(self, target_text: str) -> bool:
+        return target_text == "Select model"
+
+    async def _collect_visible_model_options(self) -> list[str]:
+        return ["GPT-5.5"]
+
+
 class ChatGPTClientModelSwitchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_current_picker_confirms_model_and_sets_power(self) -> None:
+        page = _CurrentPickerPage()
+        client = _CurrentPickerClient(page)  # type: ignore[arg-type]
+
+        with patch("src.chatgpt.client.asyncio.sleep", _noop_sleep):
+            self.assertTrue(await client._ensure_configured_model_version("5.5"))
+            self.assertTrue(await client._ensure_advanced_effort(types.SimpleNamespace(ui_label="GPT-5.5"), "Extra High"))
+
+        self.assertEqual(client._last_model_version_label, "5.5")
+        self.assertEqual(page.power, 3)
+
+    async def test_current_picker_discovers_power_levels(self) -> None:
+        client = _CurrentPickerClient(_CurrentPickerPage())  # type: ignore[arg-type]
+        try:
+            with patch("src.chatgpt.client.asyncio.sleep", _noop_sleep):
+                self.assertEqual(await client.discover_available_models(force=True), ["GPT-5.5"])
+            self.assertEqual(list_reasoning_labels("gpt-5.5"), ("Instant", "Medium", "High", "Extra High"))
+        finally:
+            clear_discovered_models()
+
     def test_bind_page_reuses_verified_model_state_for_same_tab(self) -> None:
         root = ChatGPTClient(_FakePage())  # type: ignore[arg-type]
         leased_page = _FakePage()

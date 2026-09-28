@@ -36,6 +36,7 @@ if "playwright_stealth" not in sys.modules:
 
 from patchright.async_api import async_playwright
 
+from src.chatgpt.client import ChatGPTClient
 from src.chatgpt.detector import (
     _CLICK_LATEST_COPY_BUTTON_JS,
     _conversation_snapshot,
@@ -82,6 +83,51 @@ class DetectorCopyButtonTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self) -> None:
         await self.browser.close()
         await self.playwright_context.__aexit__(None, None, None)
+
+    async def test_current_send_button_is_clicked(self) -> None:
+        context = await self.browser.new_context()
+        page = await context.new_page()
+        await page.set_content('<form><button type="button" aria-label="Send">Send</button></form>')
+        await page.evaluate("() => document.querySelector('button').addEventListener('click', () => window.sent = true)")
+
+        self.assertEqual(await ChatGPTClient(page)._click_send(), "clicked")
+        self.assertTrue(await page.evaluate("window.sent === true"))
+        await context.close()
+
+    async def test_search_unit_turns_detect_and_copy_assistant_response(self) -> None:
+        context = await self.browser.new_context()
+        page = await context.new_page()
+        await page.set_content(
+            """
+            <main>
+              <div data-content-search-turn-key="fallback-turn-0">
+                <div data-content-search-unit-key="fallback-turn-0:0:user">
+                  <div data-user-message-bubble="true">Test prompt</div>
+                  <button aria-label="Copy message">Copy prompt</button>
+                </div>
+                <div data-content-search-unit-key="fallback-turn-0:2:assistant">
+                  <h4 data-conversation-role="assistant">ChatGPT said:</h4>
+                  <p>Test answer</p>
+                </div>
+                <button id="assistant-copy" aria-label="Copy">Copy response</button>
+              </div>
+            </main>
+            """
+        )
+        await page.evaluate(
+            "() => document.querySelector('#assistant-copy').addEventListener('click', () => window.copied = true)"
+        )
+
+        snapshot = await _conversation_snapshot(page)
+        result = await page.evaluate(_CLICK_LATEST_COPY_BUTTON_JS, None)
+
+        self.assertEqual(snapshot["userCount"], 1)
+        self.assertEqual(snapshot["assistantCount"], 1)
+        self.assertEqual(normalize_assistant_text(snapshot["latestAssistant"]["text"]), "Test answer")
+        self.assertEqual(snapshot["copyButtonCount"], 1)
+        self.assertEqual(result["reason"], "ok")
+        self.assertTrue(await page.evaluate("window.copied === true"))
+        await context.close()
 
     async def test_latest_turn_copy_ignores_code_block_copy_buttons(self) -> None:
         context = await self.browser.new_context()
