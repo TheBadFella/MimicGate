@@ -16,8 +16,14 @@ import asyncio
 import copy
 from dataclasses import dataclass
 import hashlib
+import http.client
+import ipaddress
 import json
+import mimetypes
+import os
 import re
+import socket
+import ssl
 import time
 import uuid
 from urllib.parse import urlparse
@@ -837,6 +843,236 @@ def _extract_image_urls(content) -> list[str]:
     return urls
 
 
+def _remote_attachment_addresses(hostname: str) -> list[str]:
+    """Resolve a remote attachment host once and return its validated addresses."""
+    if not hostname:
+        return []
+    if hostname.lower() in {"localhost", "localhost.localdomain"}:
+        return []
+
+    try:
+        resolved = [ipaddress.ip_address(hostname)]
+    except ValueError:
+        try:
+            infos = socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
+        except OSError:
+            return []
+        resolved = []
+        seen: set[str] = set()
+        for info in infos:
+            raw_addr = info[4][0]
+            if not raw_addr or raw_addr in seen:
+                continue
+            seen.add(raw_addr)
+            try:
+                resolved.append(ipaddress.ip_address(raw_addr))
+            except ValueError:
+                return []
+
+    if not resolved:
+        return []
+
+    def allowed(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+        if addr.is_unspecified or addr.is_multicast:
+            return False
+        if Config.REMOTE_ATTACHMENT_ALLOW_PRIVATE_NETS:
+            return True
+        return addr.is_global
+
+    # Reject the hostname entirely if DNS returns any disallowed address. This
+    # avoids selecting a public answer while a private answer is also present.
+    if not all(allowed(addr) for addr in resolved):
+        return []
+    return [str(addr) for addr in resolved]
+
+
+def _validate_remote_attachment_url(url: str) -> tuple[bool, str, list[str]]:
+    """Validate a remote attachment URL and pin the DNS result for the download."""
+    parsed = urlparse(url)
+    scheme = parsed.scheme.lower()
+    if scheme not in {"http", "https"}:
+        return False, "remote attachments must use http or https", []
+    if scheme == "http" and not Config.REMOTE_ATTACHMENT_ALLOW_HTTP:
+        return False, "plain-http remote attachments are disabled", []
+    if parsed.username or parsed.password:
+        return False, "remote attachment URLs must not contain credentials", []
+    if not parsed.hostname:
+        return False, "remote attachment URL is missing a host", []
+    try:
+        port = parsed.port
+    except ValueError:
+        return False, "remote attachment URL has an invalid port", []
+    if port is not None and not 1 <= port <= 65535:
+        return False, "remote attachment URL has an invalid port", []
+
+    addresses = _remote_attachment_addresses(parsed.hostname)
+    if not addresses:
+        return False, "remote attachment host resolves to a private or non-routable address", []
+    return True, "", addresses
+
+
+def _extension_from_remote_response(url: str, content_type: str | None) -> str:
+    """Infer a safe file extension from Content-Type first, then URL path."""
+    if content_type:
+        mime = content_type.split(";", 1)[0].strip().lower()
+        ext = mimetypes.guess_extension(mime)
+        if ext:
+            return ext.lstrip(".")
+    suffix = urlparse(url).path.rsplit("/", 1)[-1].rsplit(".", 1)
+    if len(suffix) == 2 and re.fullmatch(r"[A-Za-z0-9]{1,8}", suffix[1]):
+        return suffix[1].lower()
+    return "bin"
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    """HTTPConnection that connects to a pre-resolved IP while preserving Host."""
+
+    def __init__(self, host: str, connect_ip: str, port: int, timeout: int) -> None:
+        self._connect_ip = connect_ip
+        super().__init__(host, port=port, timeout=timeout)
+
+    def connect(self) -> None:
+        self.sock = socket.create_connection(
+            (self._connect_ip, self.port),
+            self.timeout,
+            self.source_address,
+        )
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPSConnection pinned to a validated IP with TLS SNI for the hostname."""
+
+    def __init__(self, host: str, connect_ip: str, port: int, timeout: int) -> None:
+        self._connect_ip = connect_ip
+        super().__init__(
+            host,
+            port=port,
+            timeout=timeout,
+            context=ssl.create_default_context(),
+        )
+
+    def connect(self) -> None:
+        raw_sock = socket.create_connection(
+            (self._connect_ip, self.port),
+            self.timeout,
+            self.source_address,
+        )
+        self.sock = self._context.wrap_socket(raw_sock, server_hostname=self.host)
+
+
+def _open_pinned_remote(
+    url: str,
+    addresses: list[str],
+    timeout: int,
+) -> tuple[http.client.HTTPConnection, http.client.HTTPResponse]:
+    """Open a URL by connecting only to the previously validated DNS addresses."""
+    parsed = urlparse(url)
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("remote attachment URL is missing a host")
+    port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
+    target = parsed.path or "/"
+    if parsed.query:
+        target = f"{target}?{parsed.query}"
+
+    last_error: Exception | None = None
+    for connect_ip in addresses:
+        connection: http.client.HTTPConnection
+        if parsed.scheme.lower() == "https":
+            connection = _PinnedHTTPSConnection(hostname, connect_ip, port, timeout)
+        else:
+            connection = _PinnedHTTPConnection(hostname, connect_ip, port, timeout)
+        try:
+            connection.request(
+                "GET",
+                target,
+                headers={
+                    "Accept": "*/*",
+                    "User-Agent": "MimicGate/1.0",
+                },
+            )
+            return connection, connection.getresponse()
+        except (OSError, http.client.HTTPException) as exc:
+            last_error = exc
+            connection.close()
+
+    if last_error:
+        raise last_error
+    raise OSError("remote attachment host has no usable address")
+
+
+def _download_remote_attachment(url: str, filepath_base: str) -> str | None:
+    """Download a remote attachment with DNS pinning, timeout, and size guards."""
+    ok, reason, addresses = _validate_remote_attachment_url(url)
+    if not ok:
+        log.warning(f"Rejected remote attachment URL: {reason}")
+        return None
+
+    max_bytes = max(1, Config.REMOTE_ATTACHMENT_MAX_BYTES)
+    timeout = max(1, Config.REMOTE_ATTACHMENT_TIMEOUT_SECONDS)
+    connection: http.client.HTTPConnection | None = None
+    response: http.client.HTTPResponse | None = None
+    filepath: str | None = None
+    try:
+        connection, response = _open_pinned_remote(url, addresses, timeout)
+        if 300 <= response.status < 400:
+            log.warning("Rejected remote attachment redirect with HTTP %d", response.status)
+            return None
+        if not 200 <= response.status < 300:
+            log.warning("Remote attachment returned HTTP %d", response.status)
+            return None
+
+        content_length = response.getheader("Content-Length")
+        if content_length:
+            try:
+                if int(content_length) > max_bytes:
+                    log.warning(
+                        "Rejected remote attachment larger than limit: %s bytes",
+                        content_length,
+                    )
+                    return None
+            except ValueError:
+                pass
+
+        ext = _extension_from_remote_response(url, response.getheader("Content-Type"))
+        filepath = f"{filepath_base}.{ext}"
+        total = 0
+        with open(filepath, "wb") as output:
+            while True:
+                chunk = response.read(64 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_bytes:
+                    output.close()
+                    try:
+                        os.remove(filepath)
+                    except OSError:
+                        pass
+                    log.warning(
+                        "Rejected remote attachment exceeding %d bytes",
+                        max_bytes,
+                    )
+                    return None
+                output.write(chunk)
+
+        log.info(f"Downloaded file: {filepath}")
+        return filepath
+    except Exception as exc:
+        if filepath:
+            try:
+                os.remove(filepath)
+            except OSError:
+                pass
+        log.error(f"Failed to download file from {url}: {exc}")
+        return None
+    finally:
+        if response is not None:
+            response.close()
+        if connection is not None:
+            connection.close()
+
+
 def _extract_file_attachments(content) -> list[dict]:
     """
     Extract file attachments from message content.
@@ -948,22 +1184,9 @@ async def _download_file(url_or_data: str | dict, download_dir: str = "/tmp/mimi
             log.error(f"Failed to decode base64 data URL: {e}")
             return None
     elif url.startswith(("http://", "https://")):
-        # HTTP URL - download it
-        try:
-            import urllib.request
-            ext = "bin"
-            for e in ["jpg", "jpeg", "webp", "gif", "png", "tif", "tiff", "pdf", "txt", "csv", "docx", "xlsx"]:
-                if e in url.lower():
-                    ext = e
-                    break
-            filename = f"file_{hashlib.md5(url.encode()).hexdigest()[:12]}.{ext}"
-            filepath = os.path.join(download_dir, filename)
-            urllib.request.urlretrieve(url, filepath)
-            log.info(f"Downloaded file: {filepath}")
-            return filepath
-        except Exception as e:
-            log.error(f"Failed to download file from {url}: {e}")
-            return None
+        filename_base = f"file_{hashlib.md5(url.encode()).hexdigest()[:12]}"
+        filepath_base = os.path.join(download_dir, filename_base)
+        return _download_remote_attachment(url, filepath_base)
     elif os.path.isfile(url):
         # Local file path
         return url
