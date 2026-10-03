@@ -12,6 +12,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 import os
 import time
@@ -329,7 +330,7 @@ class BearerTokenMiddleware:
             provided = anthropic_api_key
 
         expected = token.strip()
-        if provided != expected:
+        if not hmac.compare_digest(provided, expected):
             client = scope.get("client")
             client_host = client[0] if isinstance(client, tuple) and client else "unknown"
             log.warning(f"Auth failed from {client_host}: invalid token")
@@ -433,10 +434,16 @@ class TelemetryMiddleware:
 app.add_middleware(TelemetryMiddleware)
 app.add_middleware(BearerTokenMiddleware)
 
+cors_origins = Config.api_cors_origins()
+cors_allow_credentials = Config.API_CORS_ALLOW_CREDENTIALS
+if "*" in cors_origins and cors_allow_credentials:
+    log.warning("API_CORS_ALLOW_CREDENTIALS=true is incompatible with API_CORS_ORIGINS='*'; disabling credentials for CORS")
+    cors_allow_credentials = False
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=cors_origins,
+    allow_credentials=cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
