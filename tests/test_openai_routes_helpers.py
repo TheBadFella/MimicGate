@@ -6,6 +6,7 @@ import json
 import sys
 import types
 import unittest
+from unittest.mock import patch
 
 from starlette.requests import Request
 from fastapi import HTTPException
@@ -127,6 +128,69 @@ async def _collect_stream(stream_response) -> list[bytes]:
 
 
 class OpenAIRoutesHelpersTests(unittest.TestCase):
+    def test_remote_attachment_rejects_private_literal_ip(self) -> None:
+        ok, reason, addresses = openai_routes_module._validate_remote_attachment_url(
+            "https://127.0.0.1/private.pdf"
+        )
+        self.assertFalse(ok)
+        self.assertIn("private or non-routable", reason)
+        self.assertEqual(addresses, [])
+
+    def test_remote_attachment_rejects_plain_http_by_default(self) -> None:
+        original = openai_routes_module.Config.REMOTE_ATTACHMENT_ALLOW_HTTP
+        try:
+            openai_routes_module.Config.REMOTE_ATTACHMENT_ALLOW_HTTP = False
+            ok, reason, addresses = openai_routes_module._validate_remote_attachment_url(
+                "http://93.184.216.34/file.pdf"
+            )
+            self.assertFalse(ok)
+            self.assertIn("plain-http", reason)
+            self.assertEqual(addresses, [])
+        finally:
+            openai_routes_module.Config.REMOTE_ATTACHMENT_ALLOW_HTTP = original
+
+    def test_remote_attachment_rejects_mixed_public_private_dns(self) -> None:
+        answers = [
+            (openai_routes_module.socket.AF_INET, openai_routes_module.socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0)),
+            (openai_routes_module.socket.AF_INET, openai_routes_module.socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0)),
+        ]
+        with patch.object(openai_routes_module.socket, "getaddrinfo", return_value=answers):
+            self.assertEqual(
+                openai_routes_module._remote_attachment_addresses("example.test"),
+                [],
+            )
+
+    def test_pinned_http_connection_connects_to_validated_ip(self) -> None:
+        sentinel_socket = object()
+        with patch.object(
+            openai_routes_module.socket,
+            "create_connection",
+            return_value=sentinel_socket,
+        ) as create_connection:
+            connection = openai_routes_module._PinnedHTTPConnection(
+                "example.test",
+                "93.184.216.34",
+                80,
+                5,
+            )
+            connection.connect()
+
+        create_connection.assert_called_once_with(
+            ("93.184.216.34", 80),
+            5,
+            None,
+        )
+        self.assertIs(connection.sock, sentinel_socket)
+
+    def test_remote_attachment_extension_prefers_content_type(self) -> None:
+        self.assertEqual(
+            openai_routes_module._extension_from_remote_response(
+                "https://example.test/download.bin",
+                "application/pdf; charset=binary",
+            ),
+            "pdf",
+        )
+
     def test_fresh_thread_header_validation(self) -> None:
         for header in ("x-mimicgate-thread-mode", "x-catgpt-thread-mode"):
             with self.subTest(header=header):

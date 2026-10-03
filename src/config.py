@@ -254,6 +254,10 @@ class Config:
     API_PORT: int = int(os.getenv("API_PORT", "8000"))
     # If true, requests without Bearer token are allowed even when API_TOKEN is set
     API_TOKEN_OPTIONAL: bool = os.getenv("API_TOKEN_OPTIONAL", "false").lower() == "true"
+    REMOTE_ATTACHMENT_ALLOW_HTTP: bool = os.getenv("REMOTE_ATTACHMENT_ALLOW_HTTP", "false").lower() == "true"
+    REMOTE_ATTACHMENT_ALLOW_PRIVATE_NETS: bool = os.getenv("REMOTE_ATTACHMENT_ALLOW_PRIVATE_NETS", "false").lower() == "true"
+    REMOTE_ATTACHMENT_MAX_BYTES: int = int(os.getenv("REMOTE_ATTACHMENT_MAX_BYTES", str(10 * 1024 * 1024)))
+    REMOTE_ATTACHMENT_TIMEOUT_SECONDS: int = int(os.getenv("REMOTE_ATTACHMENT_TIMEOUT_SECONDS", "15"))
     # If true, cache large system instructions once per thread and send compact reminders after priming
     API_THREAD_CONTRACT_MODE: bool = os.getenv("API_THREAD_CONTRACT_MODE", "false").lower() == "true"
     API_THREAD_CONTRACT_TTL_SECONDS: int = int(os.getenv("API_THREAD_CONTRACT_TTL_SECONDS", "3600"))

@@ -124,6 +124,10 @@ When running Python directly, set these in the shell or root `.env`. In Docker, 
 | `API_PORT` | `8000` | API listen port. |
 | `API_TOKEN` | _empty_ | Bearer token; an empty value disables token authentication. |
 | `API_TOKEN_OPTIONAL` | `false` | Allow unauthenticated requests even when a token is configured. |
+| `REMOTE_ATTACHMENT_ALLOW_HTTP` | `false` | Allow plain-HTTP remote attachment URLs. |
+| `REMOTE_ATTACHMENT_ALLOW_PRIVATE_NETS` | `false` | Allow remote attachments to resolve to private, loopback, link-local, or reserved networks. |
+| `REMOTE_ATTACHMENT_MAX_BYTES` | `10485760` | Maximum remote attachment download size in bytes. |
+| `REMOTE_ATTACHMENT_TIMEOUT_SECONDS` | `15` | Timeout for remote attachment downloads in seconds. |
 | `API_THREAD_CONTRACT_MODE` | `false` | Cache large system instructions per thread and send compact reminders. |
 | `API_THREAD_CONTRACT_TTL_SECONDS` | `3600` | Thread-contract cache lifetime. |
 | `API_APP_THREAD_MODE` | `false` | Map `request.user` values to dedicated provider threads. |
