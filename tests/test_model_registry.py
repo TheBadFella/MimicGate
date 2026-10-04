@@ -34,16 +34,14 @@ class ModelRegistryTests(unittest.TestCase):
 
     def test_default_models_match_current_advanced_picker(self) -> None:
         self.assertIn("gpt-5.6-sol", model_registry.list_public_chat_models())
-        self.assertIn("gpt-5.6-sol-medium", model_registry.list_public_chat_models())
-        self.assertIn("gpt-5.6-sol-high", model_registry.list_public_chat_models())
-        self.assertIn("gpt-5.6-sol-extra-high", model_registry.list_public_chat_models())
         self.assertIn("gpt-5.6-sol-pro", model_registry.list_public_chat_models())
         self.assertIn("gpt-5.5", model_registry.list_public_chat_models())
-        self.assertIn("gpt-5.5-medium", model_registry.list_public_chat_models())
-        self.assertIn("gpt-5.5-high", model_registry.list_public_chat_models())
-        self.assertIn("gpt-5.5-thinking", model_registry.list_public_chat_models())
-        self.assertIn("gpt-5.5-extra-high", model_registry.list_public_chat_models())
         self.assertIn("gpt-5.5-pro", model_registry.list_public_chat_models())
+        for model in ("gpt-5.6-sol", "gpt-5.5"):
+            for suffix in ("medium", "high", "extra-high", "thinking"):
+                alias = f"{model}-{suffix}"
+                self.assertNotIn(alias, model_registry.list_public_chat_models())
+                self.assertTrue(model_registry.is_supported_chat_model(alias))
         self.assertNotIn("o3", model_registry.list_public_chat_models())
         self.assertTrue(model_registry.is_supported_chat_model("Instant"))
         self.assertTrue(model_registry.is_supported_chat_model("Thinking"))
@@ -121,7 +119,7 @@ class ModelRegistryTests(unittest.TestCase):
         )
         self.assertEqual((label, effort), ("High", "high"))
 
-    def test_discovered_models_and_reasoning_are_public(self) -> None:
+    def test_discovered_models_list_base_ids_and_accept_reasoning_aliases(self) -> None:
         with patch.object(model_registry.Config, "CHATGPT_MODEL_ALIASES", ""):
             model_registry.replace_discovered_catalog(
                 ["GPT-6.2 Sol"],
@@ -129,8 +127,40 @@ class ModelRegistryTests(unittest.TestCase):
             )
             public = model_registry.list_public_chat_models()
         self.assertIn("gpt-6.2-sol", public)
-        self.assertIn("gpt-6.2-sol-medium", public)
-        self.assertIn("gpt-6.2-sol-high", public)
+        self.assertNotIn("gpt-6.2-sol-medium", public)
+        self.assertNotIn("gpt-6.2-sol-high", public)
+        resolved = model_registry.resolve_model_request("gpt-6.2-sol-high")
+        self.assertEqual(resolved.model.public_id, "gpt-6.2-sol")
+        self.assertEqual(resolved.reasoning_effort, "high")
+
+    def test_configured_effort_aliases_are_hidden_but_keep_settings(self) -> None:
+        with patch.object(
+            model_registry.Config, "CHATGPT_MODEL_ALIASES",
+            "gpt-5.5=GPT-5.5,gpt-5.5-high=GPT-5.5,gpt-5.5-pro=GPT-5.5 Pro",
+        ), patch.object(model_registry.Config, "CHATGPT_MODEL_SETTINGS", "gpt-5.5-high=High"):
+            self.assertEqual(
+                model_registry.list_public_chat_models(),
+                ["mimicgate-browser", "catgpt-browser", "gpt-5.5", "gpt-5.5-pro"],
+            )
+            legacy = model_registry.resolve_model_request("gpt-5.5-high")
+            self.assertEqual(legacy.model.setting_label, "High")
+            explicit = model_registry.resolve_model_request("gpt-5.5", "high")
+            self.assertEqual(explicit.model.public_id, "gpt-5.5")
+            self.assertEqual(explicit.reasoning_effort, "high")
+
+    def test_standalone_model_with_effort_like_name_stays_public(self) -> None:
+        with patch.object(model_registry.Config, "CHATGPT_MODEL_ALIASES", "gpt-5.5-thinking=Thinking"):
+            self.assertIn("gpt-5.5-thinking", model_registry.list_public_chat_models())
+
+    def test_ollama_keeps_configured_and_discovered_effort_profiles(self) -> None:
+        from src.api.ollama_registry import get_ollama_profile, list_ollama_profiles
+
+        with patch.object(model_registry.Config, "PROVIDER", "chatgpt"), patch.object(
+            model_registry.Config, "CHATGPT_MODEL_ALIASES", "gpt-5.5=GPT-5.5,gpt-5.5-high=GPT-5.5",
+        ):
+            model_registry.register_discovered_reasoning("gpt-5.5", ["Medium", "High"])
+            self.assertIn("gpt-5.5-high", [profile.name for profile in list_ollama_profiles()])
+            self.assertIsNotNone(get_ollama_profile("gpt-5.5-medium"))
 
 
 if __name__ == "__main__":

@@ -96,7 +96,7 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 | `max_tokens` | int | no | Ignored |
 | `stream` | bool | no | SSE is accepted for IDE clients such as Cline. The browser finishes first, then MimicGate emits the completed message as event-stream chunks. |
 | `read_aloud` | bool | no | Supported on ChatGPT and Gemini. Downloads the browser-generated audio and returns it at `choices[0].message.audio`. |
-| `reasoning_effort` | string | no | Reasoning level for ChatGPT and Gemini. Unsupported values are clamped to the nearest available level or map to thinking models. |
+| `reasoning_effort` | string | no | Reasoning level for ChatGPT and Gemini, sent separately from the base model ID. Unsupported values are clamped to the nearest available level or map to thinking models. |
 | `conversation_id` | string | no | Durable logical conversation ID. MimicGate verifies history before reusing the mapped browser thread. |
 
 `conversation_id` may instead be supplied as `X-MimicGate-Conversation-Id`. Send either full history or only the next turn. If full history is a verified prefix of the stored transcript, MimicGate sends only the delta; divergent history starts a clean browser thread. Use `X-MimicGate-Thread-Mode: fresh` to force a new ephemeral thread. Fresh mode cannot be combined with `thread_id` or `conversation_id`. The legacy `X-CatGPT-Conversation-Id`, `X-CatGPT-Thread-Mode`, and `X-CatGPT-App-Key` headers remain supported; the `X-MimicGate-*` names take precedence when both are present.
