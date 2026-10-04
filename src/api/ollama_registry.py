@@ -41,7 +41,7 @@ def list_ollama_profiles() -> list[OllamaModelProfile]:
     chat_models = (
         Config.provider_model_ids()
         if Config.PROVIDER in {"minimax", "gemini", "claude"}
-        else list_public_chat_models()
+        else list_public_chat_models(include_reasoning_aliases=True)
     )
     for model in chat_models:
         normalized = normalize_model_token(model)

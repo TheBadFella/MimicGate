@@ -6,6 +6,7 @@ import json
 import sys
 import types
 import unittest
+from unittest.mock import patch
 
 from starlette.requests import Request
 from fastapi import HTTPException
@@ -127,6 +128,30 @@ async def _collect_stream(stream_response) -> list[bytes]:
 
 
 class OpenAIRoutesHelpersTests(unittest.TestCase):
+    def test_models_endpoint_lists_base_models_and_accepts_effort_alias(self) -> None:
+        with patch.object(openai_routes_module.Config, "PROVIDER", "chatgpt"), patch(
+            "src.chatgpt.model_registry.Config.CHATGPT_MODEL_ALIASES",
+            "gpt-5.5=GPT-5.5,gpt-5.5-high=GPT-5.5",
+        ), patch.object(openai_routes_module, "_client", None):
+            response = asyncio.run(openai_routes_module.list_models())
+            self.assertEqual([model.id for model in response.data],
+                             ["mimicgate-browser", "catgpt-browser", "gpt-5.5"])
+            request = ChatCompletionRequest(
+                model="gpt-5.5-high", messages=[ChatMessage(role="user", content="hello")],
+            )
+            _validate_chat_request(request)
+
+    def test_chat_reasoning_field_is_forwarded_and_partitions_cache(self) -> None:
+        requests = [
+            ChatCompletionRequest(model="gpt-5.5", reasoning_effort=effort,
+                                  messages=[ChatMessage(role="user", content="hello")])
+            for effort in ("medium", "high")
+        ]
+        self.assertEqual([openai_routes_module._chat_reasoning_effort(req) for req in requests],
+                         ["medium", "high"])
+        keys = [openai_routes_module._cache_key_for_request_with_app(req, "") for req in requests]
+        self.assertNotEqual(keys[0], keys[1])
+
     def test_fresh_thread_header_validation(self) -> None:
         for header in ("x-mimicgate-thread-mode", "x-catgpt-thread-mode"):
             with self.subTest(header=header):
