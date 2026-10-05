@@ -120,6 +120,47 @@ class BearerTokenMiddlewareTests(unittest.TestCase):
         )
         self.assertEqual(events[0]["status"], 401)
 
+    def test_rejects_non_ascii_authorization_with_401(self) -> None:
+        events = asyncio.run(
+            _call_middleware(
+                "/v1/chat/completions",
+                {"Authorization": "Bearer secrët"},
+            )
+        )
+        self.assertEqual(events[0]["status"], 401)
+
+    def test_rejects_non_ascii_x_api_key_with_401(self) -> None:
+        events = asyncio.run(
+            _call_middleware("/v1/chat/completions", {"x-api-key": "secrët"})
+        )
+        self.assertEqual(events[0]["status"], 401)
+
+    def test_rejects_non_ascii_anthropic_api_key_with_401(self) -> None:
+        events = asyncio.run(
+            _call_middleware("/v1/messages", {"anthropic-api-key": "secrët"})
+        )
+        self.assertEqual(events[0]["status"], 401)
+
+    def test_accepts_matching_non_ascii_configured_token(self) -> None:
+        Config.API_TOKEN = "tokën-ñ"
+        events = asyncio.run(
+            _call_middleware(
+                "/v1/chat/completions",
+                {"Authorization": "Bearer tokën-ñ"},
+            )
+        )
+        self.assertEqual(events[0]["status"], 204)
+
+    def test_rejects_mismatched_non_ascii_configured_token(self) -> None:
+        Config.API_TOKEN = "tokën-ñ"
+        events = asyncio.run(
+            _call_middleware(
+                "/v1/chat/completions",
+                {"Authorization": "Bearer wrong-tokën"},
+            )
+        )
+        self.assertEqual(events[0]["status"], 401)
+
     def test_cors_origins_are_trimmed_and_empty_values_removed(self) -> None:
         original = Config.API_CORS_ORIGINS
         try:
