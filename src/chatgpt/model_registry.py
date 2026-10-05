@@ -342,6 +342,11 @@ def _split_reasoning_suffix(model: str) -> tuple[str, str | None]:
     return value, None
 
 
+def has_reasoning_suffix(model: str) -> bool:
+    """Identify explicit effort aliases without changing their resolution."""
+    return _split_reasoning_suffix(model)[1] is not None
+
+
 def resolve_model_request(
     model: str,
     reasoning_effort: str | None = None,

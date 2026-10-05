@@ -43,6 +43,7 @@ services:
       # ChatGPT
       CHATGPT_URL: "https://chatgpt.com"
       CHATGPT_PROJECT_URL: ${CHATGPT_PROJECT_URL:-}
+      CHATGPT_APP_REASONING_EFFORTS: ${CHATGPT_APP_REASONING_EFFORTS:-}
       # Claude
       CLAUDE_URL: ${CLAUDE_URL:-https://claude.ai}
       # Gemini
