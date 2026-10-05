@@ -1,0 +1,58 @@
+name: Question & Support
+description: Ask a question about configuration, deployment, provider quirks, or API usage
+title: "[Question]: "
+labels: ["Question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Need help or have questions about using MimicGate? Please check the documentation first, then describe your question below.
+  - type: dropdown
+    id: topic
+    attributes:
+      label: Question Topic
+      description: What topic is your question related to?
+      options:
+        - "Environment Variables & Configuration"
+        - "Docker Compose & Deployment"
+        - "Reverse Proxy & Ingress (Traefik, Nginx, Authelia, Cloudflare)"
+        - "Provider Setup & Persistent Browser Login Sessions"
+        - "API Client Integration (OpenAI SDK, LibreChat, OpenWebUI, LangChain)"
+        - "noVNC Console & Display Resolution"
+        - "Other"
+    validations:
+      required: true
+  - type: textarea
+    id: question
+    attributes:
+      label: Your Question
+      description: What would you like to know or clarify?
+      placeholder: Describe what you are trying to accomplish and where you have questions...
+    validations:
+      required: true
+  - type: textarea
+    id: configuration
+    attributes:
+      label: Relevant Configuration / Setup Details
+      description: Share your docker-compose service definition or relevant environment variables (omit secrets, passwords, or tokens).
+      render: yaml
+      placeholder: |
+        services:
+          mimicgate:
+            image: ghcr.io/thebadfella/mimicgate:latest
+            ...
+  - type: textarea
+    id: docs_checked
+    attributes:
+      label: Documentation Checked
+      description: Which documentation pages or files have you already consulted?
+      placeholder: e.g., README.md, docs/ENVIRONMENT_VARIABLES.md, docs/MODEL_AND_REASONING_SELECTION.md
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-Submission Checklist
+      options:
+        - label: I searched existing issues, discussions, and docs for this topic.
+          required: true
+        - label: I have removed all passwords, API keys, and sensitive tokens from the configuration.
+          required: true

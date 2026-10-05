@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation Reference
+    url: https://github.com/TheBadFella/MimicGate/tree/main/docs
+    about: Review setup guides, environment variable references, and architecture docs.
+  - name: Release Notes & Changelog
+    url: https://github.com/TheBadFella/MimicGate/releases
+    about: Read release notes and compatibility changes across versions.
