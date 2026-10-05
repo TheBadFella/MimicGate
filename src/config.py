@@ -5,6 +5,7 @@ Centralized configuration — loads from .env with sensible defaults.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -83,6 +84,7 @@ class Config:
     MINIMAX_MODEL_IDS: tuple[str, ...] = ("MiniMax-M2.7",)
     MINIMAX_MODEL: str = os.getenv("MINIMAX_MODEL", MINIMAX_MODEL_IDS[0]).strip()
     CHATGPT_DEFAULT_MODEL: str = os.getenv("CHATGPT_DEFAULT_MODEL", "")
+    CHATGPT_APP_REASONING_EFFORTS: str = os.getenv("CHATGPT_APP_REASONING_EFFORTS", "")
     CHATGPT_MODEL_ALIASES: str = os.getenv(
         "CHATGPT_MODEL_ALIASES",
         "gpt-5.6-sol=GPT-5.6 Sol|5.6 Sol|Instant,gpt-5.6-sol-medium=GPT-5.6 Sol|5.6 Sol,gpt-5.6-sol-high=GPT-5.6 Sol|5.6 Sol,gpt-5.6-sol-extra-high=GPT-5.6 Sol|5.6 Sol,gpt-5.6-sol-pro=GPT-5.6 Sol|5.6 Sol|Pro,gpt-5.5=GPT-5.5|5.5,gpt-5.5-medium=GPT-5.5|5.5,gpt-5.5-high=GPT-5.5|5.5,gpt-5.5-thinking=GPT-5.5|5.5|Thinking|5.5 Thinking,gpt-5.5-extra-high=GPT-5.5|5.5,gpt-5.5-pro=GPT-5.5|5.5|5.5 Pro",
@@ -158,6 +160,8 @@ class Config:
             raise ValueError(
                 f"Unsupported provider '{cls.PROVIDER}'. Choose one of: {supported}"
             )
+        if cls.PROVIDER == "chatgpt":
+            cls.chatgpt_app_reasoning_efforts()
         if cls.PROVIDER == "minimax":
             base_url_override = os.getenv("MINIMAX_BASE_URL", "").strip()
             if (
@@ -175,6 +179,23 @@ class Config:
                     f"Unsupported MiniMax model '{cls.MINIMAX_MODEL}'. "
                     f"Choose one of: {supported}"
                 )
+
+    @classmethod
+    def chatgpt_app_reasoning_efforts(cls) -> dict[str, str]:
+        """Read URL-app defaults, rejecting malformed or ambiguous entries."""
+        from src.chatgpt.model_registry import canonical_reasoning_effort
+
+        efforts: dict[str, str] = {}
+        for entry in cls.CHATGPT_APP_REASONING_EFFORTS.split(","):
+            if not entry.strip():
+                continue
+            app, separator, value = entry.partition("=")
+            app = app.strip().lower()
+            effort = canonical_reasoning_effort(value)
+            if not separator or not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{0,199}", app) or not effort or app in efforts:
+                raise ValueError("Invalid CHATGPT_APP_REASONING_EFFORTS: use unique app=effort entries")
+            efforts[app] = effort
+        return efforts
 
     @classmethod
     def uses_browser(cls) -> bool:

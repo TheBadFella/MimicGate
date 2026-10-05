@@ -21,7 +21,7 @@ import re
 import time
 import uuid
 from urllib.parse import urlparse
-from typing import Any
+from typing import Any, TypeVar
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -49,6 +49,7 @@ from src.api.openai_schemas import (
     ResponsesRequest,
     ResponsesResponse,
     ResponsesUsageInfo,
+    ReasoningOptions,
     ToolCall,
     ToolDefinition,
     UsageInfo,)
@@ -71,8 +72,11 @@ from src.gemini.client import GeminiClient
 from src.minimax.client import MiniMaxClient
 from src.chatgpt.model_registry import (
     PUBLIC_BROWSER_MODEL_ID,
+    canonical_reasoning_effort,
+    has_reasoning_suffix,
     is_supported_chat_model,
     list_public_chat_models,
+    resolve_model_request,
 )
 from src.config import Config
 from src.log import setup_logging
@@ -228,11 +232,38 @@ def _latest_turn_messages(messages: list[ChatMessage]) -> list[ChatMessage]:
     return systems + latest
 
 
-def _chat_reasoning_effort(request: ChatCompletionRequest) -> str | None:
-    """Read the official Chat field, with nested reasoning as a convenience."""
-    if request.reasoning_effort:
-        return request.reasoning_effort
-    return request.reasoning.effort if request.reasoning else None
+def _chat_reasoning_effort(request: ChatCompletionRequest | ResponsesRequest, app_key: str = "") -> str | None:
+    """Use explicit effort first, then a ChatGPT default for the URL app."""
+    if explicit := getattr(request, "reasoning_effort", None):
+        return explicit
+    if request.reasoning and request.reasoning.effort:
+        return request.reasoning.effort
+    if Config.PROVIDER != "chatgpt" or not app_key.startswith("endpoint:"):
+        return None
+    if canonical_reasoning_effort(request.model):
+        return None
+    resolved = resolve_model_request(request.model)
+    model_id = resolved.model.public_id if resolved.model else request.model
+    if resolved.reasoning_from_model_id or has_reasoning_suffix(model_id) or model_id.lower().endswith("-pro"):
+        return None
+    return Config.chatgpt_app_reasoning_efforts().get(app_key.removeprefix("endpoint:"))
+
+
+_ReasoningRequest = TypeVar("_ReasoningRequest", bound=ChatCompletionRequest | ResponsesRequest)
+
+
+def _with_app_reasoning_default(request: _ReasoningRequest, app_name: str) -> _ReasoningRequest:
+    """Apply URL defaults independently of conversation-routing settings."""
+    effort = _chat_reasoning_effort(request, f"endpoint:{_normalize_key_part(app_name)}")
+    if not effort:
+        return request
+    if isinstance(request, ResponsesRequest):
+        reasoning = (
+            _model_copy_compat(request.reasoning, update={"effort": effort})
+            if request.reasoning else ReasoningOptions(effort=effort)
+        )
+        return _model_copy_compat(request, update={"reasoning": reasoning})
+    return _model_copy_compat(request, update={"reasoning_effort": effort})
 
 
 # -- Helpers -----------------------------------------------------
@@ -2252,6 +2283,7 @@ async def create_responses_scoped(
     """App-scoped alias for Responses API (maps app name from URL path)."""
     fresh_thread = _fresh_thread_from_header(http_request)
     _validate_responses_request(request, fresh_thread=fresh_thread)
+    request = _with_app_reasoning_default(request, app_name)
     app_key = _resolve_app_key(request, http_request, endpoint_app_name=app_name)
     if request.stream:
         return await _stream_responses(
@@ -2276,6 +2308,7 @@ async def create_chat_completion_scoped(
     """App-scoped alias for chat completions (maps app name from URL path)."""
     fresh_thread = _fresh_thread_from_header(http_request)
     _validate_chat_request(request, fresh_thread=fresh_thread)
+    request = _with_app_reasoning_default(request, app_name)
     app_key = _resolve_app_key(request, http_request, endpoint_app_name=app_name)
     if request.stream:
         return await _stream_chat_completion(
@@ -3493,6 +3526,8 @@ async def _submit_async_chat_job(
     """Shared async chat submit logic for generic and app-scoped routes."""
     fresh_thread = _fresh_thread_from_header(http_request)
     _validate_chat_request(request, fresh_thread=fresh_thread)
+    if endpoint_app_name:
+        request = _with_app_reasoning_default(request, endpoint_app_name)
     _get_client()
 
     app_key = _resolve_app_key(request, http_request, endpoint_app_name=endpoint_app_name)
