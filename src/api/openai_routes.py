@@ -886,9 +886,16 @@ def _remote_attachment_addresses(hostname: str) -> list[str]:
     return [str(addr) for addr in resolved]
 
 
+class RemoteAttachmentError(ValueError):
+    """Raised when a caller-supplied remote attachment cannot be used safely."""
+
+
 def _validate_remote_attachment_url(url: str) -> tuple[bool, str, list[str]]:
     """Validate a remote attachment URL and pin the DNS result for the download."""
-    parsed = urlparse(url)
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False, "remote attachment URL is malformed", []
     scheme = parsed.scheme.lower()
     if scheme not in {"http", "https"}:
         return False, "remote attachments must use http or https", []
@@ -1001,71 +1008,96 @@ def _open_pinned_remote(
     raise OSError("remote attachment host has no usable address")
 
 
-def _download_remote_attachment(url: str, filepath_base: str) -> str | None:
-    """Download a remote attachment with DNS pinning, timeout, and size guards."""
+def _cleanup_partial_attachment(filepath: str | None) -> None:
+    if not filepath:
+        return
+    try:
+        os.remove(filepath)
+    except OSError:
+        pass
+
+
+def _download_remote_attachment(url: str, filepath_base: str) -> str:
+    """Download a remote attachment with DNS pinning, deadline, and size guards.
+
+    Raises RemoteAttachmentError for policy rejections and incomplete downloads so
+    callers can return a client-visible error instead of dropping the attachment.
+    """
     ok, reason, addresses = _validate_remote_attachment_url(url)
     if not ok:
-        log.warning(f"Rejected remote attachment URL: {reason}")
-        return None
+        log.warning("Rejected remote attachment URL: %s", reason)
+        raise RemoteAttachmentError(reason)
 
     max_bytes = max(1, Config.REMOTE_ATTACHMENT_MAX_BYTES)
     timeout = max(1, Config.REMOTE_ATTACHMENT_TIMEOUT_SECONDS)
+    deadline = time.monotonic() + timeout
     connection: http.client.HTTPConnection | None = None
     response: http.client.HTTPResponse | None = None
     filepath: str | None = None
     try:
-        connection, response = _open_pinned_remote(url, addresses, timeout)
+        remaining = max(0.1, deadline - time.monotonic())
+        connection, response = _open_pinned_remote(url, addresses, max(1, int(remaining)))
         if 300 <= response.status < 400:
-            log.warning("Rejected remote attachment redirect with HTTP %d", response.status)
-            return None
+            raise RemoteAttachmentError(
+                f"remote attachment redirects are not allowed (HTTP {response.status})"
+            )
         if not 200 <= response.status < 300:
-            log.warning("Remote attachment returned HTTP %d", response.status)
-            return None
+            raise RemoteAttachmentError(
+                f"remote attachment returned HTTP {response.status}"
+            )
 
+        declared_length: int | None = None
         content_length = response.getheader("Content-Length")
         if content_length:
             try:
-                if int(content_length) > max_bytes:
-                    log.warning(
-                        "Rejected remote attachment larger than limit: %s bytes",
-                        content_length,
-                    )
-                    return None
-            except ValueError:
-                pass
+                declared_length = int(content_length)
+            except ValueError as exc:
+                raise RemoteAttachmentError(
+                    "remote attachment Content-Length is invalid"
+                ) from exc
+            if declared_length < 0:
+                raise RemoteAttachmentError(
+                    "remote attachment Content-Length is invalid"
+                )
+            if declared_length > max_bytes:
+                raise RemoteAttachmentError(
+                    f"remote attachment exceeds size limit ({declared_length} bytes)"
+                )
 
         ext = _extension_from_remote_response(url, response.getheader("Content-Type"))
         filepath = f"{filepath_base}.{ext}"
         total = 0
         with open(filepath, "wb") as output:
             while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RemoteAttachmentError("remote attachment download timed out")
                 chunk = response.read(64 * 1024)
                 if not chunk:
                     break
                 total += len(chunk)
                 if total > max_bytes:
-                    output.close()
-                    try:
-                        os.remove(filepath)
-                    except OSError:
-                        pass
-                    log.warning(
-                        "Rejected remote attachment exceeding %d bytes",
-                        max_bytes,
+                    raise RemoteAttachmentError(
+                        f"remote attachment exceeds size limit ({max_bytes} bytes)"
                     )
-                    return None
                 output.write(chunk)
 
-        log.info(f"Downloaded file: {filepath}")
+        if declared_length is not None and total != declared_length:
+            raise RemoteAttachmentError(
+                f"remote attachment truncated ({total} of {declared_length} bytes)"
+            )
+
+        log.info("Downloaded file: %s", filepath)
         return filepath
+    except RemoteAttachmentError:
+        _cleanup_partial_attachment(filepath)
+        raise
     except Exception as exc:
-        if filepath:
-            try:
-                os.remove(filepath)
-            except OSError:
-                pass
-        log.error(f"Failed to download file from {url}: {exc}")
-        return None
+        _cleanup_partial_attachment(filepath)
+        log.error("Failed to download file from %s: %s", url, exc)
+        raise RemoteAttachmentError(
+            f"failed to download remote attachment: {exc}"
+        ) from exc
     finally:
         if response is not None:
             response.close()
@@ -1186,7 +1218,8 @@ async def _download_file(url_or_data: str | dict, download_dir: str = "/tmp/mimi
     elif url.startswith(("http://", "https://")):
         filename_base = f"file_{hashlib.md5(url.encode()).hexdigest()[:12]}"
         filepath_base = os.path.join(download_dir, filename_base)
-        return _download_remote_attachment(url, filepath_base)
+        # Blocking DNS/socket/TLS work must not stall the API event loop.
+        return await asyncio.to_thread(_download_remote_attachment, url, filepath_base)
     elif os.path.isfile(url):
         # Local file path
         return url
@@ -3240,13 +3273,19 @@ async def _execute_chat_completion(
                 if msg.role == "user" and isinstance(msg.content, list):
                     image_urls = _extract_image_urls(msg.content)
                     for url in image_urls:
-                        local_path = await _download_file(url)
+                        try:
+                            local_path = await _download_file(url)
+                        except RemoteAttachmentError as exc:
+                            raise HTTPException(status_code=400, detail=str(exc)) from exc
                         if local_path:
                             image_paths.append(local_path)
 
                     file_attachments = _extract_file_attachments(msg.content)
                     for fa in file_attachments:
-                        local_path = await _download_file(fa)
+                        try:
+                            local_path = await _download_file(fa)
+                        except RemoteAttachmentError as exc:
+                            raise HTTPException(status_code=400, detail=str(exc)) from exc
                         if local_path:
                             file_paths.append(local_path)
 
