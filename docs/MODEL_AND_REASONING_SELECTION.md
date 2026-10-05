@@ -19,10 +19,15 @@ curl http://localhost:8000/v1/chat/completions \
   -H "Authorization: Bearer dummy123" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gpt-5.6-sol-high",
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "high",
     "messages": [{"role": "user", "content": "Say which mode you are using."}]
   }'
 ```
+
+For `/v1/responses`, use the same base model with `"reasoning": {"effort": "high"}`.
+Clients normally send these fields from their saved model and reasoning settings;
+users do not need to edit JSON for each request.
 
 Native request:
 
@@ -33,11 +38,33 @@ curl http://localhost:8000/chat \
   -d '{"model": "gpt-5.5", "message": "Hello from a selected model."}'
 ```
 
-List configured model ids:
+List configured and discovered model ids:
 
 ```bash
 curl http://localhost:8000/v1/models -H "Authorization: Bearer dummy123"
 ```
+
+The model list advertises base models rather than a separate entry for each
+reasoning effort. For example, select `gpt-5.5` and send `reasoning_effort` instead
+of choosing `gpt-5.5-high` from the list. Distinct Pro entries remain listed.
+
+Existing effort-suffixed ids still work, including configured aliases such as
+`gpt-5.5-thinking`. Clients without a reasoning setting can continue sending
+these ids, although they no longer appear in `/v1/models` when their base model
+is also listed. A standalone configured model remains listed even if its name
+ends in an effort label.
+Ollama's model list and effort profiles remain unchanged.
+
+An explicit `reasoning_effort` overrides the configured effort for a base model.
+Without it, configured models use `CHATGPT_MODEL_SETTINGS`; `mimicgate-browser`
+preserves the browser selection unless a default model is configured. Keep
+legacy suffixed requests free of a conflicting effort field: configured aliases
+use the explicit field when supplied, while dynamically resolved suffixes take
+precedence over that field. This compatibility behavior is unchanged.
+
+Requested effort is mapped to the available browser controls, using the nearest
+available level when necessary. The API field does not create effort levels
+that the account's picker does not offer.
 
 ## Configuration
 

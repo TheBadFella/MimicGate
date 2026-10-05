@@ -282,31 +282,30 @@ def _family_aliases(options: list[BrowserModelOption]) -> dict[str, BrowserModel
     return {family: matches[0] for family, matches in families.items() if len(matches) == 1}
 
 
-def list_public_chat_models() -> list[str]:
-    """Return base ids plus live-discovered reasoning variants."""
+def list_public_chat_models(*, include_reasoning_aliases: bool = False) -> list[str]:
+    """Advertise models without duplicating their reasoning-effort aliases."""
     options = list_switchable_models()
     aliases = _family_aliases(options)
+    known_ids = {normalize_model_token(option.public_id) for option in options}
     model_ids = [PUBLIC_BROWSER_MODEL_ID, LEGACY_BROWSER_MODEL_ID]
     for option in options:
+        base, effort = _split_reasoning_suffix(option.public_id)
+        if not include_reasoning_aliases and effort and normalize_model_token(base) in known_ids:
+            continue
         model_ids.append(option.public_id)
-        model_ids.extend(
-            f"{option.public_id}-{effort}"
-            for effort in dict.fromkeys(
-                canonical_reasoning_effort(label, substring=True) or model_label_to_public_id(label)
-                for label in list_reasoning_labels(option.public_id)
+    model_ids.extend(aliases)
+    if include_reasoning_aliases:
+        alias_options = [(option.public_id, option) for option in options]
+        alias_options.extend(aliases.items())
+        for public_id, option in alias_options:
+            model_ids.extend(
+                f"{public_id}-{effort}"
+                for effort in dict.fromkeys(
+                    canonical_reasoning_effort(label, substring=True) or model_label_to_public_id(label)
+                    for label in list_reasoning_labels(option.public_id)
+                )
+                if effort
             )
-            if effort
-        )
-    for alias, option in aliases.items():
-        model_ids.append(alias)
-        model_ids.extend(
-            f"{alias}-{effort}"
-            for effort in dict.fromkeys(
-                canonical_reasoning_effort(label, substring=True) or model_label_to_public_id(label)
-                for label in list_reasoning_labels(option.public_id)
-            )
-            if effort
-        )
     return list(dict.fromkeys(model_ids))
 
 
