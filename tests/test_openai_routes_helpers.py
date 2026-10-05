@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import os
 import sys
 import types
 import unittest
@@ -135,6 +136,160 @@ class OpenAIRoutesHelpersTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("private or non-routable", reason)
         self.assertEqual(addresses, [])
+
+    def test_remote_attachment_rejects_malformed_ipv6_url(self) -> None:
+        ok, reason, addresses = openai_routes_module._validate_remote_attachment_url(
+            "https://[invalid/file"
+        )
+        self.assertFalse(ok)
+        self.assertIn("malformed", reason)
+        self.assertEqual(addresses, [])
+
+    def test_download_remote_attachment_enforces_overall_deadline(self) -> None:
+        class FakeResponse:
+            status = 200
+
+            def getheader(self, name: str, default=None):
+                if name == "Content-Type":
+                    return "application/octet-stream"
+                return default
+
+            def read(self, _size: int = -1) -> bytes:
+                time.sleep(0.05)
+                return b"x"
+
+            def close(self) -> None:
+                return None
+
+        class FakeConnection:
+            def close(self) -> None:
+                return None
+
+        import tempfile
+        import time
+
+        original_timeout = openai_routes_module.Config.REMOTE_ATTACHMENT_TIMEOUT_SECONDS
+        try:
+            openai_routes_module.Config.REMOTE_ATTACHMENT_TIMEOUT_SECONDS = 1
+            with tempfile.TemporaryDirectory() as tmp:
+                filepath_base = f"{tmp}/slow"
+                with patch.object(
+                    openai_routes_module,
+                    "_validate_remote_attachment_url",
+                    return_value=(True, "", ["93.184.216.34"]),
+                ), patch.object(
+                    openai_routes_module,
+                    "_open_pinned_remote",
+                    return_value=(FakeConnection(), FakeResponse()),
+                ), patch.object(openai_routes_module.time, "monotonic", side_effect=[0.0, 0.0, 2.0]):
+                    with self.assertRaises(openai_routes_module.RemoteAttachmentError) as ctx:
+                        openai_routes_module._download_remote_attachment(
+                            "https://example.test/slow.bin",
+                            filepath_base,
+                        )
+                self.assertIn("timed out", str(ctx.exception))
+        finally:
+            openai_routes_module.Config.REMOTE_ATTACHMENT_TIMEOUT_SECONDS = original_timeout
+
+    def test_download_remote_attachment_rejects_truncated_body(self) -> None:
+        class FakeResponse:
+            status = 200
+
+            def __init__(self) -> None:
+                self._chunks = [b"abc", b""]
+
+            def getheader(self, name: str, default=None):
+                if name == "Content-Length":
+                    return "100"
+                if name == "Content-Type":
+                    return "application/octet-stream"
+                return default
+
+            def read(self, _size: int = -1) -> bytes:
+                return self._chunks.pop(0) if self._chunks else b""
+
+            def close(self) -> None:
+                return None
+
+        class FakeConnection:
+            def close(self) -> None:
+                return None
+
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            filepath_base = f"{tmp}/truncated"
+            with patch.object(
+                openai_routes_module,
+                "_validate_remote_attachment_url",
+                return_value=(True, "", ["93.184.216.34"]),
+            ), patch.object(
+                openai_routes_module,
+                "_open_pinned_remote",
+                return_value=(FakeConnection(), FakeResponse()),
+            ):
+                with self.assertRaises(openai_routes_module.RemoteAttachmentError) as ctx:
+                    openai_routes_module._download_remote_attachment(
+                        "https://example.test/file.bin",
+                        filepath_base,
+                    )
+            self.assertIn("truncated", str(ctx.exception))
+            self.assertFalse(os.path.exists(f"{filepath_base}.bin"))
+
+    def test_download_remote_attachment_raises_for_policy_rejection(self) -> None:
+        with patch.object(
+            openai_routes_module,
+            "_validate_remote_attachment_url",
+            return_value=(False, "plain-http remote attachments are disabled", []),
+        ):
+            with self.assertRaises(openai_routes_module.RemoteAttachmentError) as ctx:
+                openai_routes_module._download_remote_attachment(
+                    "http://example.test/a.png",
+                    "/tmp/mimicgate_policy",
+                )
+        self.assertIn("plain-http", str(ctx.exception))
+
+    def test_download_file_propagates_remote_attachment_error(self) -> None:
+        async def _run() -> None:
+            with patch.object(
+                openai_routes_module,
+                "_download_remote_attachment",
+                side_effect=openai_routes_module.RemoteAttachmentError(
+                    "plain-http remote attachments are disabled"
+                ),
+            ):
+                with self.assertRaises(openai_routes_module.RemoteAttachmentError):
+                    await openai_routes_module._download_file("http://example.test/a.png")
+
+        asyncio.run(_run())
+
+    def test_download_file_offloads_remote_work_to_thread(self) -> None:
+        async def _run() -> None:
+            calls: list[tuple] = []
+
+            async def fake_to_thread(fn, *args):
+                calls.append((fn, args))
+                return fn(*args)
+
+            with patch.object(
+                openai_routes_module.asyncio,
+                "to_thread",
+                fake_to_thread,
+            ), patch.object(
+                openai_routes_module,
+                "_download_remote_attachment",
+                return_value="/tmp/ok.bin",
+            ) as download:
+                path = await openai_routes_module._download_file(
+                    "https://example.test/ok.bin"
+                )
+
+            self.assertEqual(path, "/tmp/ok.bin")
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0][0], download)
+            download.assert_called_once()
+
+        asyncio.run(_run())
 
     def test_remote_attachment_rejects_plain_http_by_default(self) -> None:
         original = openai_routes_module.Config.REMOTE_ATTACHMENT_ALLOW_HTTP
