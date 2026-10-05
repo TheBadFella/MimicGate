@@ -114,6 +114,64 @@ class BearerTokenMiddlewareTests(unittest.TestCase):
         events = asyncio.run(_call_middleware("/cline/v1/chat/completions"))
         self.assertEqual(events[0]["status"], 204)
 
+    def test_rejects_mismatched_token(self) -> None:
+        events = asyncio.run(
+            _call_middleware("/v1/chat/completions", {"Authorization": "Bearer not-secret"})
+        )
+        self.assertEqual(events[0]["status"], 401)
+
+    def test_rejects_non_ascii_authorization_with_401(self) -> None:
+        events = asyncio.run(
+            _call_middleware(
+                "/v1/chat/completions",
+                {"Authorization": "Bearer secrët"},
+            )
+        )
+        self.assertEqual(events[0]["status"], 401)
+
+    def test_rejects_non_ascii_x_api_key_with_401(self) -> None:
+        events = asyncio.run(
+            _call_middleware("/v1/chat/completions", {"x-api-key": "secrët"})
+        )
+        self.assertEqual(events[0]["status"], 401)
+
+    def test_rejects_non_ascii_anthropic_api_key_with_401(self) -> None:
+        events = asyncio.run(
+            _call_middleware("/v1/messages", {"anthropic-api-key": "secrët"})
+        )
+        self.assertEqual(events[0]["status"], 401)
+
+    def test_accepts_matching_non_ascii_configured_token(self) -> None:
+        Config.API_TOKEN = "tokën-ñ"
+        events = asyncio.run(
+            _call_middleware(
+                "/v1/chat/completions",
+                {"Authorization": "Bearer tokën-ñ"},
+            )
+        )
+        self.assertEqual(events[0]["status"], 204)
+
+    def test_rejects_mismatched_non_ascii_configured_token(self) -> None:
+        Config.API_TOKEN = "tokën-ñ"
+        events = asyncio.run(
+            _call_middleware(
+                "/v1/chat/completions",
+                {"Authorization": "Bearer wrong-tokën"},
+            )
+        )
+        self.assertEqual(events[0]["status"], 401)
+
+    def test_cors_origins_are_trimmed_and_empty_values_removed(self) -> None:
+        original = Config.API_CORS_ORIGINS
+        try:
+            Config.API_CORS_ORIGINS = "https://one.example, https://two.example, ,"
+            self.assertEqual(
+                Config.api_cors_origins(),
+                ["https://one.example", "https://two.example"],
+            )
+        finally:
+            Config.API_CORS_ORIGINS = original
+
 
 if __name__ == "__main__":
     unittest.main()

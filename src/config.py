@@ -254,6 +254,8 @@ class Config:
     API_PORT: int = int(os.getenv("API_PORT", "8000"))
     # If true, requests without Bearer token are allowed even when API_TOKEN is set
     API_TOKEN_OPTIONAL: bool = os.getenv("API_TOKEN_OPTIONAL", "false").lower() == "true"
+    API_CORS_ORIGINS: str = os.getenv("API_CORS_ORIGINS", "")
+    API_CORS_ALLOW_CREDENTIALS: bool = os.getenv("API_CORS_ALLOW_CREDENTIALS", "false").lower() == "true"
     # If true, cache large system instructions once per thread and send compact reminders after priming
     API_THREAD_CONTRACT_MODE: bool = os.getenv("API_THREAD_CONTRACT_MODE", "false").lower() == "true"
     API_THREAD_CONTRACT_TTL_SECONDS: int = int(os.getenv("API_THREAD_CONTRACT_TTL_SECONDS", "3600"))
@@ -290,6 +292,11 @@ class Config:
         or os.getenv("CATGPT_VNC_URL")
         or os.getenv("VNC_URL", "")
     ).strip().rstrip("/")
+
+    @classmethod
+    def api_cors_origins(cls) -> list[str]:
+        """Return configured CORS origins as a trimmed allowlist."""
+        return [origin.strip() for origin in cls.API_CORS_ORIGINS.split(",") if origin.strip()]
 
     @classmethod
     def get_vnc_url(cls, host: str | None = None) -> str:
