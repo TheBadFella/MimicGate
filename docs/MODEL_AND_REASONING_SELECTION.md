@@ -113,6 +113,41 @@ CHATGPT_MODEL_SWITCH_TIMEOUT=10000  # 10 seconds
 
 Do not set `CHATGPT_MODEL_SWITCH_TIMEOUT=1` expecting one second; that is 1 ms.
 
+## Per-app reasoning defaults
+
+Apps that do not send reasoning effort can use a default configured in MimicGate:
+
+```env
+CHATGPT_APP_REASONING_EFFORTS=karakeep=medium,paperlessgpt=high,linkwarden=low,mealie=medium
+```
+
+The app name comes from the URL path. For example, requests to
+`http://mimicgate:8000/paperlessgpt/v1/chat/completions` use `high`, while requests
+to `/karakeep/v1/chat/completions` use `medium`. Each app can keep sending a base
+model such as `gpt-5.6-sol`; model selection remains separate from effort.
+
+Set this variable on the MimicGate container and recreate it after changing the
+value. The supplied Compose file passes it through from the host environment.
+Other Compose files must include it under the MimicGate service's `environment`.
+The apps themselves do not need a reasoning setting.
+
+Defaults apply to app-scoped Chat Completions and Responses, including streamed
+and asynchronous chat requests. They also apply to image attachments sent in
+those requests. They do not apply to image-generation, native `/chat`, or Ollama
+routes, or to other providers.
+
+Explicit request effort (`reasoning_effort` for Chat Completions or
+`reasoning.effort` for Responses) takes precedence. Legacy effort-suffixed model
+IDs and Pro selections retain their existing behavior. A legacy effort-suffixed
+`CHATGPT_DEFAULT_MODEL` also retains its behavior when a browser alias is used.
+Avoid sending contradictory model suffixes and explicit effort fields.
+
+Plain `/v1/...` requests and unknown app names keep the existing effort defaults.
+An empty variable leaves behavior unchanged. Matching is case-insensitive;
+app names use letters, digits, dots, underscores, or hyphens. Malformed entries,
+unknown effort values, and duplicate app names fail validation at startup.
+Effort is mapped to the account's available browser controls as usual.
+
 ## Notes
 
 - Model availability depends on the logged-in ChatGPT account and plan. Free/Go
