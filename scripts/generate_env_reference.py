@@ -44,6 +44,7 @@ SECTIONS: tuple[tuple[str, tuple[tuple[str, str, str], ...]], ...] = (
     )),
     ("ChatGPT models and prompts", (
         ("CHATGPT_DEFAULT_MODEL", "empty", "Model selected when a request does not specify one."),
+        ("CHATGPT_APP_REASONING_EFFORTS", "empty", "Comma-separated URL-app effort defaults, for example `karakeep=medium,paperlessgpt=high`. Explicit request effort and legacy model choices take precedence."),
         ("CHATGPT_MODEL_ALIASES", "built-in alias map", "Comma-separated API-model to UI-label mappings."),
         ("CHATGPT_MODEL_SETTINGS", "built-in settings map", "Comma-separated API-model to reasoning-setting mappings."),
         ("CHATGPT_MODEL_SWITCH_TIMEOUT", "10000", "Model-switch timeout in milliseconds."),
