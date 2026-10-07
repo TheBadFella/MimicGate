@@ -12,7 +12,8 @@ import json
 import os
 import platform
 import random
-import re
+import shlex
+import signal
 import socket
 import subprocess
 import time
@@ -346,47 +347,88 @@ def _pid_running(pid: int) -> bool:
         return False
 
 
-def _parse_remote_debugging_port(command_line: str) -> int | None:
-    """Extract ``--remote-debugging-port`` from a browser command line."""
-    match = re.search(
-        r"--remote-debugging-port(?:=|\s+)(\d+)\b",
-        command_line,
-        flags=re.IGNORECASE,
-    )
-    if not match:
-        return None
+def _windows_command_line_argv(command_line: str) -> list[str]:
+    """Parse a native Windows command line with CommandLineToArgvW."""
+    if platform.system() != "Windows":
+        # This fallback keeps Windows-format unit fixtures meaningful on POSIX CI.
+        try:
+            return shlex.split(command_line, posix=True)
+        except ValueError:
+            return []
+
     try:
-        return int(match.group(1))
-    except ValueError:
-        return None
+        import ctypes
+
+        argc = ctypes.c_int()
+        command_line_to_argv = ctypes.windll.shell32.CommandLineToArgvW
+        command_line_to_argv.argtypes = [
+            ctypes.c_wchar_p,
+            ctypes.POINTER(ctypes.c_int),
+        ]
+        command_line_to_argv.restype = ctypes.POINTER(ctypes.c_wchar_p)
+        local_free = ctypes.windll.kernel32.LocalFree
+        local_free.argtypes = [ctypes.c_void_p]
+        local_free.restype = ctypes.c_void_p
+        argv_ptr = command_line_to_argv(command_line, ctypes.byref(argc))
+        if not argv_ptr:
+            return []
+        try:
+            return [argv_ptr[index] for index in range(argc.value)]
+        finally:
+            local_free(ctypes.cast(argv_ptr, ctypes.c_void_p))
+    except Exception:
+        try:
+            return shlex.split(command_line, posix=True)
+        except ValueError:
+            return []
 
 
-def _parse_user_data_dir(command_line: str) -> str | None:
-    """Extract ``--user-data-dir`` from a browser command line."""
-    match = re.search(
-        r'--user-data-dir(?:=|\s+)(?:"([^"]+)"|(\S+))',
-        command_line,
-        flags=re.IGNORECASE,
-    )
-    if not match:
-        return None
-    return match.group(1) or match.group(2)
+def _argv_option(argv: list[str], name: str) -> str | None:
+    """Read a browser CLI option from preserved argv boundaries."""
+    prefix = f"{name}="
+    for index, argument in enumerate(argv):
+        if argument == name:
+            if index + 1 < len(argv):
+                return argv[index + 1]
+            return None
+        if argument.startswith(prefix):
+            return argument[len(prefix):]
+    return None
 
 
-def _command_line_owns_profile(command_line: str, data_dir: Path, port: int) -> bool:
-    """Return whether a process command line owns the exact CDP port and profile."""
-    if "--type=" in command_line:
+def _argv_owns_profile(argv: list[str], data_dir: Path, port: int) -> bool:
+    """Return whether argv owns the exact CDP port and profile."""
+    if any(arg == "--type" or arg.startswith("--type=") for arg in argv):
         return False
-    cmd_port = _parse_remote_debugging_port(command_line)
+
+    port_value = _argv_option(argv, "--remote-debugging-port")
+    try:
+        cmd_port = int(port_value) if port_value is not None else None
+    except ValueError:
+        return False
     if cmd_port != port:
         return False
-    cmd_dir = _parse_user_data_dir(command_line)
+
+    cmd_dir = _argv_option(argv, "--user-data-dir")
     if not cmd_dir:
         return False
     try:
         return Path(cmd_dir).resolve() == data_dir.resolve()
     except OSError:
         return False
+
+
+def _command_line_owns_profile(command_line: str, data_dir: Path, port: int) -> bool:
+    """Return whether a browser command line owns the exact CDP port and profile."""
+    try:
+        argv = (
+            _windows_command_line_argv(command_line)
+            if platform.system() == "Windows"
+            else shlex.split(command_line, posix=True)
+        )
+    except ValueError:
+        return False
+    return _argv_owns_profile(argv, data_dir, port)
 
 
 def _windows_browser_process_rows() -> list[tuple[str, str, str]]:
@@ -418,18 +460,23 @@ def _windows_browser_process_rows() -> list[tuple[str, str, str]]:
     return rows
 
 
-def _posix_cmdline(pid: int) -> str | None:
-    """Read a process command line on Linux/macOS."""
+def _posix_argv(pid: int) -> list[str] | None:
+    """Read process argv without discarding argument boundaries where possible."""
     if platform.system() == "Linux":
         try:
             raw = Path(f"/proc/{pid}/cmdline").read_bytes()
         except OSError:
             return None
-        return raw.replace(b"\x00", b" ").decode("utf-8", errors="replace").strip()
+        parts = [
+            part.decode("utf-8", errors="replace")
+            for part in raw.split(b"\x00")
+            if part
+        ]
+        return parts or None
 
     try:
         result = subprocess.run(
-            ["ps", "-p", str(pid), "-o", "command="],
+            ["ps", "-ww", "-p", str(pid), "-o", "command="],
             capture_output=True,
             text=True,
             timeout=3,
@@ -438,7 +485,12 @@ def _posix_cmdline(pid: int) -> str | None:
     except Exception:
         return None
     command = result.stdout.strip()
-    return command or None
+    if not command:
+        return None
+    try:
+        return shlex.split(command, posix=True)
+    except ValueError:
+        return None
 
 
 def _posix_browser_process_rows() -> list[tuple[str, str, str]]:
@@ -480,17 +532,23 @@ def _posix_browser_process_rows() -> list[tuple[str, str, str]]:
 
 def _profile_owner_pid(data_dir: Path, port: int) -> int | None:
     """Find the root browser process that owns this CDP port and user-data-dir."""
-    rows = (
-        _windows_browser_process_rows()
-        if platform.system() == "Windows"
-        else _posix_browser_process_rows()
-    )
-    for pid_text, _name, command_line in rows:
-        if _command_line_owns_profile(command_line, data_dir, port):
-            try:
-                return int(pid_text)
-            except ValueError:
-                return None
+    if platform.system() == "Windows":
+        for pid_text, _name, command_line in _windows_browser_process_rows():
+            if _command_line_owns_profile(command_line, data_dir, port):
+                try:
+                    return int(pid_text)
+                except ValueError:
+                    return None
+        return None
+
+    for pid_text, _name, _command_line in _posix_browser_process_rows():
+        try:
+            pid = int(pid_text)
+        except ValueError:
+            continue
+        argv = _posix_argv(pid)
+        if argv and _argv_owns_profile(argv, data_dir, port):
+            return pid
     return None
 
 
@@ -504,10 +562,43 @@ def _pid_owns_profile(pid: int, data_dir: Path, port: int) -> bool:
                 return _command_line_owns_profile(command_line, data_dir, port)
         return False
 
-    command_line = _posix_cmdline(pid)
-    if not command_line:
+    argv = _posix_argv(pid)
+    return bool(argv and _argv_owns_profile(argv, data_dir, port))
+
+
+def _terminate_owned_browser_pid(pid: int, data_dir: Path, port: int) -> bool:
+    """Terminate a browser PID only after re-verifying profile and CDP ownership."""
+    if not _pid_owns_profile(pid, data_dir, port):
         return False
-    return _command_line_owns_profile(command_line, data_dir, port)
+
+    if platform.system() == "Windows":
+        try:
+            result = subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            return result.returncode == 0 or not _pid_running(pid)
+        except Exception:
+            return False
+
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        return not _pid_running(pid)
+
+    for _ in range(30):
+        if not _pid_running(pid):
+            return True
+        time.sleep(0.1)
+
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except (AttributeError, OSError):
+        return not _pid_running(pid)
+    return not _pid_running(pid)
 
 
 def _read_cdp_metadata(data_dir: Path) -> tuple[int, int] | None:
@@ -687,6 +778,7 @@ class BrowserManager:
         self._context: BrowserContext | None = None
         self._page: Page | None = None
         self._chrome_process: subprocess.Popen[bytes] | None = None
+        self._cdp_owner_pid: int | None = None
         self._cdp_port: int | None = None
         self._cdp_attached = False
         self._cdp_reused = False
@@ -702,6 +794,13 @@ class BrowserManager:
         self._chrome_process = process
         self._cdp_port = port
         self._cdp_reused = reused
+        self._cdp_owner_pid = None
+        if not reused:
+            metadata = _read_cdp_metadata(Config.BROWSER_DATA_DIR)
+            if metadata and metadata[1] == port:
+                owner_pid = metadata[0]
+                if _pid_owns_profile(owner_pid, Config.BROWSER_DATA_DIR, port):
+                    self._cdp_owner_pid = owner_pid
         try:
             self._browser = await self._playwright.chromium.connect_over_cdp(
                 f"http://127.0.0.1:{port}"
@@ -737,7 +836,6 @@ class BrowserManager:
                 self._cdp_attached = False
             return
 
-        _clear_cdp_metadata(Config.BROWSER_DATA_DIR)
         process = self._chrome_process
         if process is not None and process.poll() is None:
             try:
@@ -748,7 +846,28 @@ class BrowserManager:
                     process.kill()
                 except Exception:
                     pass
+
+        owner_pid = self._cdp_owner_pid
+        if (
+            owner_pid is not None
+            and self._cdp_port is not None
+            and (process is None or owner_pid != process.pid)
+            and _pid_running(owner_pid)
+        ):
+            if not _terminate_owned_browser_pid(
+                owner_pid,
+                Config.BROWSER_DATA_DIR,
+                self._cdp_port,
+            ):
+                log.warning(
+                    "Could not terminate launched browser owner pid=%d on CDP port %d",
+                    owner_pid,
+                    self._cdp_port,
+                )
+
+        _clear_cdp_metadata(Config.BROWSER_DATA_DIR)
         self._chrome_process = None
+        self._cdp_owner_pid = None
         self._browser = None
         self._context = None
         self._page = None
@@ -1119,7 +1238,14 @@ class BrowserManager:
     async def close(self) -> None:
         """Gracefully close the browser and release any CDP profile ownership."""
         log.info("Closing browser...")
-        launched_cdp = self._chrome_process is not None and not self._cdp_reused
+        launched_cdp = (
+            not self._cdp_reused
+            and (
+                self._chrome_process is not None
+                or self._cdp_owner_pid is not None
+                or self._cdp_attached
+            )
+        )
         try:
             if self._cdp_attached and self._browser and not self._cdp_reused:
                 await self._browser.close()
@@ -1130,21 +1256,37 @@ class BrowserManager:
         except Exception as e:
             log.error(f"Error closing browser: {e}")
         finally:
-            if launched_cdp or (self._cdp_attached and not self._cdp_reused):
-                _clear_cdp_metadata(Config.BROWSER_DATA_DIR)
-                if self._chrome_process and self._chrome_process.poll() is None:
+            if launched_cdp:
+                process = self._chrome_process
+                if process is not None and process.poll() is None:
                     try:
-                        self._chrome_process.wait(timeout=3)
+                        process.wait(timeout=3)
                     except Exception:
                         try:
-                            self._chrome_process.terminate()
+                            process.terminate()
                         except Exception:
                             pass
+
+                owner_pid = self._cdp_owner_pid
+                if (
+                    owner_pid is not None
+                    and self._cdp_port is not None
+                    and (process is None or owner_pid != process.pid)
+                    and _pid_running(owner_pid)
+                ):
+                    _terminate_owned_browser_pid(
+                        owner_pid,
+                        Config.BROWSER_DATA_DIR,
+                        self._cdp_port,
+                    )
+                _clear_cdp_metadata(Config.BROWSER_DATA_DIR)
+
             self._browser = None
             self._context = None
             self._page = None
             self._playwright = None
             self._chrome_process = None
+            self._cdp_owner_pid = None
             self._cdp_port = None
             self._cdp_attached = False
             self._cdp_reused = False

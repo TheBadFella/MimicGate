@@ -59,6 +59,42 @@ class BrowserCdpHelperTests(unittest.TestCase):
             )
             self.assertTrue(manager._command_line_owns_profile(command, profile, 9223))
 
+    def test_windows_whole_quoted_user_data_arg_preserves_spaces(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            profile = Path(tmp) / "profile with spaces"
+            profile.mkdir()
+            command = (
+                f'chrome.exe "--remote-debugging-port=9223" '
+                f'"--user-data-dir={profile}"'
+            )
+            with patch.object(manager.platform, "system", return_value="Windows"):
+                self.assertTrue(
+                    manager._command_line_owns_profile(command, profile, 9223)
+                )
+
+    def test_linux_proc_cmdline_preserves_spaced_profile_argument(self) -> None:
+        profile = Path("/tmp/mimicgate profile")
+        raw = (
+            b"/usr/bin/google-chrome\x00"
+            b"--remote-debugging-port=9223\x00"
+            b"--user-data-dir=/tmp/mimicgate profile\x00"
+        )
+        with (
+            patch.object(manager.platform, "system", return_value="Linux"),
+            patch.object(Path, "read_bytes", return_value=raw),
+        ):
+            argv = manager._posix_argv(1234)
+
+        self.assertEqual(
+            argv,
+            [
+                "/usr/bin/google-chrome",
+                "--remote-debugging-port=9223",
+                "--user-data-dir=/tmp/mimicgate profile",
+            ],
+        )
+        self.assertTrue(manager._argv_owns_profile(argv or [], profile, 9223))
+
     def test_reuse_requires_exact_owner_on_all_platforms(self) -> None:
         profile = Path(r"C:\Users\test\.mimicgate\browser_profile")
 
@@ -186,6 +222,65 @@ class BrowserCdpLifecycleTests(unittest.IsolatedAsyncioTestCase):
         process.terminate.assert_called_once()
         self.assertIsNone(instance._chrome_process)
         self.assertFalse(instance._cdp_attached)
+
+    async def test_failed_attach_terminates_handed_off_owner_pid(self) -> None:
+        playwright = AsyncMock()
+        playwright.chromium.connect_over_cdp = AsyncMock(
+            side_effect=RuntimeError("connect failed")
+        )
+        profile = Path("/tmp/profile with spaces")
+        instance = manager.BrowserManager()
+        instance._playwright = playwright
+
+        with (
+            patch.object(
+                manager,
+                "_launch_or_reuse_cdp_chrome",
+                return_value=(None, 9223, False),
+            ),
+            patch.object(manager, "_read_cdp_metadata", return_value=(444, 9223)),
+            patch.object(manager, "_pid_owns_profile", return_value=True),
+            patch.object(manager, "_pid_running", return_value=True),
+            patch.object(
+                manager,
+                "_terminate_owned_browser_pid",
+                return_value=True,
+            ) as terminate_owner,
+            patch.object(manager, "_clear_cdp_metadata") as clear_metadata,
+            patch.object(manager.Config, "BROWSER_DATA_DIR", profile),
+            patch.object(manager.Config, "BROWSER_CDP_PORT", 9223),
+            patch.object(manager.Config, "BROWSER_CHANNEL", "chrome"),
+            patch.object(manager.Config, "HEADLESS", False),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "connect failed"):
+                await instance._start_cdp_browser()
+
+        terminate_owner.assert_called_once_with(444, profile, 9223)
+        clear_metadata.assert_called_once()
+        self.assertIsNone(instance._cdp_owner_pid)
+
+    async def test_close_cleans_handed_off_owner_even_without_process_handle(self) -> None:
+        profile = Path("/tmp/profile with spaces")
+        instance = manager.BrowserManager()
+        instance._playwright = AsyncMock()
+        instance._cdp_owner_pid = 555
+        instance._cdp_port = 9223
+        instance._cdp_reused = False
+
+        with (
+            patch.object(manager, "_pid_running", return_value=True),
+            patch.object(
+                manager,
+                "_terminate_owned_browser_pid",
+                return_value=True,
+            ) as terminate_owner,
+            patch.object(manager, "_clear_cdp_metadata") as clear_metadata,
+            patch.object(manager.Config, "BROWSER_DATA_DIR", profile),
+        ):
+            await instance.close()
+
+        terminate_owner.assert_called_once_with(555, profile, 9223)
+        clear_metadata.assert_called_once()
 
     async def test_close_cleans_launched_process_even_without_attach(self) -> None:
         playwright = AsyncMock()
