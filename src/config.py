@@ -52,6 +52,8 @@ class Config:
     MAX_CONCURRENT_REQUESTS: int = max(1, int(os.getenv("MAX_CONCURRENT_REQUESTS", "3")))
     MAX_ACTIVE_TABS: int = max(1, int(os.getenv("MAX_ACTIVE_TABS", "4")))
     BROWSER_CHANNEL: str = os.getenv("BROWSER_CHANNEL", "chrome").strip().lower()
+    BROWSER_LAUNCH_MODE: str = os.getenv("BROWSER_LAUNCH_MODE", "playwright").strip().lower()
+    BROWSER_CDP_PORT: int = int(os.getenv("BROWSER_CDP_PORT", "9223"))
     CHATGPT_URL: str = os.getenv("CHATGPT_URL", "https://chatgpt.com")
     CHATGPT_PROJECT_URL: str = os.getenv("CHATGPT_PROJECT_URL", "").strip()
     CLAUDE_URL: str = os.getenv("CLAUDE_URL", "https://claude.ai")

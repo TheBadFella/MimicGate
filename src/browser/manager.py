@@ -8,12 +8,18 @@ Session data (cookies, localStorage, IndexedDB) survives restarts.
 from __future__ import annotations
 
 import datetime
+import json
 import os
 import platform
 import random
+import shlex
+import signal
 import socket
+import subprocess
+import time
+import urllib.request
 from pathlib import Path
-from patchright.async_api import async_playwright, BrowserContext, Page, Playwright
+from patchright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
 
 from src.config import Config
 from src.browser.stealth import apply_stealth
@@ -232,13 +238,642 @@ def _env_int(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
+def _cdp_metadata_path(data_dir: Path) -> Path:
+    return data_dir / ".mimicgate-cdp.json"
+
+
+def _chrome_executable(channel: str) -> Path | None:
+    """Resolve the system Chrome/Edge executable used for CDP launch."""
+    system = platform.system()
+    channel = channel.strip().lower()
+
+    if system == "Windows":
+        home_drive = Path.home().drive or "C:"
+        roots = [
+            str(Path(home_drive + "/Program Files")),
+            str(Path(home_drive + "/Program Files (x86)")),
+            os.environ.get("LOCAL" + "APPDATA"),
+        ]
+        relative = (
+            Path("Microsoft/Edge/Application/msedge.exe")
+            if channel in {"msedge", "edge"}
+            else Path("Google/Chrome/Application/chrome.exe")
+        )
+        for root in roots:
+            if not root:
+                continue
+            candidate = Path(root) / relative
+            if candidate.exists():
+                return candidate
+        return None
+
+    if system == "Darwin":
+        candidate = (
+            Path("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge")
+            if channel in {"msedge", "edge"}
+            else Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+        )
+        return candidate if candidate.exists() else None
+
+    import shutil
+
+    names = (
+        ("microsoft-edge", "microsoft-edge-stable")
+        if channel in {"msedge", "edge"}
+        else ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser")
+    )
+    for name in names:
+        found = shutil.which(name)
+        if found:
+            return Path(found)
+    return None
+
+
+def _build_cdp_chrome_args(
+    chrome_path: Path,
+    data_dir: Path,
+    port: int,
+    *,
+    headless: bool,
+) -> list[str]:
+    """Build a normal Chrome command line suitable for later CDP attachment."""
+    args = [
+        str(chrome_path),
+        f"--remote-debugging-port={port}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-extensions",
+        f"--user-data-dir={data_dir}",
+        f"--remote-allow-origins=http://127.0.0.1:{port}",
+    ]
+    if platform.system() == "Windows":
+        args.append("--disable-features=msEdgeStartupBoost")
+    if headless:
+        args.append("--headless=new")
+    return args
+
+
+def _cdp_ready(port: int, timeout: float = 0.5) -> bool:
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/json/version",
+            timeout=timeout,
+        ) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        return bool(payload.get("webSocketDebuggerUrl"))
+    except Exception:
+        return False
+
+
+def _pid_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if platform.system() == "Windows":
+        try:
+            result = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=False,
+            )
+            return result.returncode == 0 and f'"{pid}"' in result.stdout
+        except Exception:
+            return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _windows_command_line_argv(command_line: str) -> list[str]:
+    """Parse a native Windows command line with CommandLineToArgvW."""
+    if platform.system() != "Windows":
+        # This fallback keeps Windows-format unit fixtures meaningful on POSIX CI.
+        try:
+            return shlex.split(command_line, posix=True)
+        except ValueError:
+            return []
+
+    try:
+        import ctypes
+
+        argc = ctypes.c_int()
+        command_line_to_argv = ctypes.windll.shell32.CommandLineToArgvW
+        command_line_to_argv.argtypes = [
+            ctypes.c_wchar_p,
+            ctypes.POINTER(ctypes.c_int),
+        ]
+        command_line_to_argv.restype = ctypes.POINTER(ctypes.c_wchar_p)
+        local_free = ctypes.windll.kernel32.LocalFree
+        local_free.argtypes = [ctypes.c_void_p]
+        local_free.restype = ctypes.c_void_p
+        argv_ptr = command_line_to_argv(command_line, ctypes.byref(argc))
+        if not argv_ptr:
+            return []
+        try:
+            return [argv_ptr[index] for index in range(argc.value)]
+        finally:
+            local_free(ctypes.cast(argv_ptr, ctypes.c_void_p))
+    except Exception:
+        try:
+            return shlex.split(command_line, posix=True)
+        except ValueError:
+            return []
+
+
+def _argv_option(argv: list[str], name: str) -> str | None:
+    """Read a browser CLI option from preserved argv boundaries."""
+    prefix = f"{name}="
+    for index, argument in enumerate(argv):
+        if argument == name:
+            if index + 1 < len(argv):
+                return argv[index + 1]
+            return None
+        if argument.startswith(prefix):
+            return argument[len(prefix):]
+    return None
+
+
+def _argv_owns_profile(argv: list[str], data_dir: Path, port: int) -> bool:
+    """Return whether argv owns the exact CDP port and profile."""
+    if any(arg == "--type" or arg.startswith("--type=") for arg in argv):
+        return False
+
+    port_value = _argv_option(argv, "--remote-debugging-port")
+    try:
+        cmd_port = int(port_value) if port_value is not None else None
+    except ValueError:
+        return False
+    if cmd_port != port:
+        return False
+
+    cmd_dir = _argv_option(argv, "--user-data-dir")
+    if not cmd_dir:
+        return False
+    try:
+        return Path(cmd_dir).resolve() == data_dir.resolve()
+    except OSError:
+        return False
+
+
+def _command_line_owns_profile(command_line: str, data_dir: Path, port: int) -> bool:
+    """Return whether a browser command line owns the exact CDP port and profile."""
+    try:
+        argv = (
+            _windows_command_line_argv(command_line)
+            if platform.system() == "Windows"
+            else shlex.split(command_line, posix=True)
+        )
+    except ValueError:
+        return False
+    return _argv_owns_profile(argv, data_dir, port)
+
+
+def _windows_browser_process_rows() -> list[tuple[str, str, str]]:
+    """Return (pid, name, command_line) rows for Chrome/Edge root candidates."""
+    script = (
+        "$names=@('chrome.exe','msedge.exe','chromium.exe'); "
+        "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | "
+        "Where-Object { $names -contains $_.Name -and $_.CommandLine } | "
+        "ForEach-Object { "
+        "[Console]::WriteLine(('{0}{1}{2}{1}{3}' -f $_.ProcessId, [char]9, $_.Name, $_.CommandLine)) "
+        "}"
+    )
+    try:
+        result = subprocess.run(
+            ["pwsh.exe", "-NoLogo", "-NoProfile", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except Exception:
+        return []
+
+    rows: list[tuple[str, str, str]] = []
+    for line in result.stdout.splitlines():
+        parts = line.split("\t", 2)
+        if len(parts) == 3 and parts[0].isdigit():
+            rows.append((parts[0], parts[1], parts[2]))
+    return rows
+
+
+def _posix_argv(pid: int) -> list[str] | None:
+    """Read process argv without discarding argument boundaries where possible."""
+    if platform.system() == "Linux":
+        try:
+            raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+        except OSError:
+            return None
+        parts = [
+            part.decode("utf-8", errors="replace")
+            for part in raw.split(b"\x00")
+            if part
+        ]
+        return parts or None
+
+    try:
+        result = subprocess.run(
+            ["ps", "-ww", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except Exception:
+        return None
+    command = result.stdout.strip()
+    if not command:
+        return None
+    try:
+        return shlex.split(command, posix=True)
+    except ValueError:
+        return None
+
+
+def _posix_browser_process_rows() -> list[tuple[str, str, str]]:
+    """Return (pid, name, command_line) rows for Chrome/Edge/Chromium processes."""
+    try:
+        result = subprocess.run(
+            ["ps", "-ax", "-o", "pid=,comm=,command="],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except Exception:
+        return []
+
+    names = {
+        "chrome",
+        "google-chrome",
+        "google chrome",
+        "chromium",
+        "chromium-browser",
+        "msedge",
+        "microsoft edge",
+        "microsoft-edge",
+    }
+    rows: list[tuple[str, str, str]] = []
+    for line in result.stdout.splitlines():
+        parts = line.strip().split(None, 2)
+        if len(parts) < 3 or not parts[0].isdigit():
+            continue
+        pid, comm, command = parts[0], parts[1], parts[2]
+        if Path(comm).name.lower() not in names and not any(
+            token in command.lower() for token in ("chrome", "chromium", "msedge", "microsoft edge")
+        ):
+            continue
+        rows.append((pid, comm, command))
+    return rows
+
+
+def _profile_owner_pid(data_dir: Path, port: int) -> int | None:
+    """Find the root browser process that owns this CDP port and user-data-dir."""
+    if platform.system() == "Windows":
+        for pid_text, _name, command_line in _windows_browser_process_rows():
+            if _command_line_owns_profile(command_line, data_dir, port):
+                try:
+                    return int(pid_text)
+                except ValueError:
+                    return None
+        return None
+
+    for pid_text, _name, _command_line in _posix_browser_process_rows():
+        try:
+            pid = int(pid_text)
+        except ValueError:
+            continue
+        argv = _posix_argv(pid)
+        if argv and _argv_owns_profile(argv, data_dir, port):
+            return pid
+    return None
+
+
+def _pid_owns_profile(pid: int, data_dir: Path, port: int) -> bool:
+    """Verify a specific PID owns the configured CDP endpoint and profile."""
+    if not _pid_running(pid):
+        return False
+    if platform.system() == "Windows":
+        for pid_text, _name, command_line in _windows_browser_process_rows():
+            if pid_text == str(pid):
+                return _command_line_owns_profile(command_line, data_dir, port)
+        return False
+
+    argv = _posix_argv(pid)
+    return bool(argv and _argv_owns_profile(argv, data_dir, port))
+
+
+def _terminate_owned_browser_pid(pid: int, data_dir: Path, port: int) -> bool:
+    """Terminate a browser PID only after re-verifying profile and CDP ownership."""
+    if not _pid_owns_profile(pid, data_dir, port):
+        return False
+
+    if platform.system() == "Windows":
+        try:
+            result = subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            return result.returncode == 0 or not _pid_running(pid)
+        except Exception:
+            return False
+
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        return not _pid_running(pid)
+
+    for _ in range(30):
+        if not _pid_running(pid):
+            return True
+        time.sleep(0.1)
+
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except (AttributeError, OSError):
+        return not _pid_running(pid)
+    return not _pid_running(pid)
+
+
+def _read_cdp_metadata(data_dir: Path) -> tuple[int, int] | None:
+    path = _cdp_metadata_path(data_dir)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        pid = int(payload["pid"])
+        port = int(payload["port"])
+        if Path(payload["data_dir"]).resolve() != data_dir.resolve():
+            return None
+        return pid, port
+    except Exception:
+        return None
+
+
+def _adopt_live_profile_cdp(data_dir: Path, port: int) -> int | None:
+    """Adopt a live CDP browser only when it owns the configured profile."""
+    if not _cdp_ready(port):
+        return None
+    pid = _profile_owner_pid(data_dir, port)
+    if pid and _pid_running(pid):
+        _write_cdp_metadata(data_dir, pid, port)
+        log.info("Adopted existing Chrome CDP browser on port %d (pid=%d)", port, pid)
+        return pid
+    return None
+
+
+def _write_cdp_metadata(data_dir: Path, pid: int, port: int) -> None:
+    data_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "pid": pid,
+        "port": port,
+        "data_dir": str(data_dir.resolve()),
+    }
+    _cdp_metadata_path(data_dir).write_text(
+        json.dumps(payload, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _clear_cdp_metadata(data_dir: Path) -> None:
+    try:
+        _cdp_metadata_path(data_dir).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _available_cdp_port(preferred: int) -> int:
+    """Use the preferred loopback port when free, otherwise ask the OS."""
+    for port in (preferred, 0):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            try:
+                sock.bind(("127.0.0.1", port))
+            except OSError:
+                if port == preferred:
+                    continue
+                raise
+            return int(sock.getsockname()[1])
+    raise RuntimeError("Could not allocate a Chrome DevTools port")
+
+
+def _launch_or_reuse_cdp_chrome(
+    data_dir: Path,
+    configured_port: int,
+    *,
+    channel: str,
+    headless: bool,
+) -> tuple[subprocess.Popen[bytes] | None, int, bool]:
+    """Launch normal Chrome or reuse the profile-owned process from metadata."""
+    existing = _read_cdp_metadata(data_dir)
+    if existing:
+        pid, port = existing
+        if _pid_running(pid) and _cdp_ready(port) and _pid_owns_profile(pid, data_dir, port):
+            log.info("Reusing Chrome CDP browser on port %d (pid=%d)", port, pid)
+            return None, port, True
+        # Metadata may point at a helper/child PID; fall back to an exact owner scan.
+        owner_pid = _profile_owner_pid(data_dir, port)
+        if owner_pid and _cdp_ready(port):
+            if owner_pid != pid:
+                _write_cdp_metadata(data_dir, owner_pid, port)
+            log.info("Reusing Chrome CDP browser on port %d (pid=%d)", port, owner_pid)
+            return None, port, True
+        _clear_cdp_metadata(data_dir)
+
+    # Adopt a live profile-owned Chrome even when our metadata file is missing
+    # (for example, when the API process exited while the interactive browser
+    # stayed open). Never clear profile locks while a verified browser owns
+    # the configured user-data-dir.
+    if _cdp_ready(configured_port):
+        owner_pid = _adopt_live_profile_cdp(data_dir, configured_port)
+        if owner_pid:
+            return None, configured_port, True
+        raise RuntimeError(
+            f"Chrome DevTools port {configured_port} is already in use by a browser "
+            "that does not own the configured MimicGate profile."
+        )
+
+    _cleanup_stale_locks(data_dir)
+
+    chrome_path = _chrome_executable(channel)
+    if chrome_path is None:
+        raise RuntimeError(
+            f"Could not find a system browser for BROWSER_CHANNEL={channel!r}"
+        )
+
+    port = _available_cdp_port(configured_port)
+    args = _build_cdp_chrome_args(
+        chrome_path,
+        data_dir,
+        port,
+        headless=headless,
+    )
+    kwargs: dict[str, object] = {
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if platform.system() == "Windows":
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+
+    process = subprocess.Popen(args, **kwargs)
+    launcher_exit_at: int | None = None
+    for attempt in range(150):
+        if _cdp_ready(port):
+            owner_pid = _profile_owner_pid(data_dir, port)
+            if owner_pid:
+                _write_cdp_metadata(data_dir, owner_pid, port)
+                log.info(
+                    "Launched normal Chrome for CDP attachment on port %d (pid=%d)",
+                    port,
+                    owner_pid,
+                )
+                return (process if process.poll() is None and owner_pid == process.pid else None), port, False
+            if process.poll() is None:
+                # Owner scan can lag briefly after launch; keep waiting while the
+                # launcher is alive rather than trusting an unrelated CDP listener.
+                pass
+
+        if process.poll() is not None:
+            if launcher_exit_at is None:
+                launcher_exit_at = attempt
+            # On Windows Chrome may hand off to an existing process and exit.
+            if owner_pid := _profile_owner_pid(data_dir, port):
+                if _cdp_ready(port):
+                    _write_cdp_metadata(data_dir, owner_pid, port)
+                    log.info(
+                        "Adopted handed-off Chrome CDP browser on port %d (pid=%d)",
+                        port,
+                        owner_pid,
+                    )
+                    return None, port, False
+            if platform.system() != "Windows" or attempt - launcher_exit_at >= 50:
+                break
+        time.sleep(0.1)
+
+    _clear_cdp_metadata(data_dir)
+    if process.poll() is None:
+        try:
+            process.terminate()
+            process.wait(timeout=3)
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                pass
+    raise RuntimeError(
+        "Chrome exited before a profile-owned DevTools endpoint became available. "
+        "Close any browser already using the MimicGate profile and retry."
+    )
+
+
 class BrowserManager:
     """Manages a single persistent Chromium browser context."""
 
     def __init__(self) -> None:
         self._playwright: Playwright | None = None
+        self._browser: Browser | None = None
         self._context: BrowserContext | None = None
         self._page: Page | None = None
+        self._chrome_process: subprocess.Popen[bytes] | None = None
+        self._cdp_owner_pid: int | None = None
+        self._cdp_port: int | None = None
+        self._cdp_attached = False
+        self._cdp_reused = False
+
+    async def _start_cdp_browser(self) -> Page:
+        """Launch normal Chrome and attach Patchright over CDP."""
+        process, port, reused = _launch_or_reuse_cdp_chrome(
+            Config.BROWSER_DATA_DIR,
+            Config.BROWSER_CDP_PORT,
+            channel=Config.BROWSER_CHANNEL,
+            headless=Config.HEADLESS,
+        )
+        self._chrome_process = process
+        self._cdp_port = port
+        self._cdp_reused = reused
+        self._cdp_owner_pid = None
+        if not reused:
+            metadata = _read_cdp_metadata(Config.BROWSER_DATA_DIR)
+            if metadata and metadata[1] == port:
+                owner_pid = metadata[0]
+                if _pid_owns_profile(owner_pid, Config.BROWSER_DATA_DIR, port):
+                    self._cdp_owner_pid = owner_pid
+        try:
+            self._browser = await self._playwright.chromium.connect_over_cdp(
+                f"http://127.0.0.1:{port}"
+            )
+            contexts = self._browser.contexts
+            if not contexts:
+                raise RuntimeError("Chrome CDP connection exposed no browser context")
+            self._context = contexts[0]
+            self._cdp_attached = True
+
+            if self._context.pages:
+                self._page = self._context.pages[0]
+            else:
+                self._page = await self._context.new_page()
+        except Exception:
+            await self._cleanup_cdp_launch(success=False)
+            raise
+
+        log.info(
+            "%s normal Chrome via CDP on port %d",
+            "Reused" if reused else "Attached to",
+            port,
+        )
+        return self._page
+
+    async def _cleanup_cdp_launch(self, *, success: bool) -> None:
+        """Release a CDP browser we launched, including failed attach attempts."""
+        if self._cdp_reused:
+            if not success:
+                self._browser = None
+                self._context = None
+                self._page = None
+                self._cdp_attached = False
+            return
+
+        process = self._chrome_process
+        if process is not None and process.poll() is None:
+            try:
+                process.terminate()
+                process.wait(timeout=3)
+            except Exception:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+
+        owner_pid = self._cdp_owner_pid
+        if (
+            owner_pid is not None
+            and self._cdp_port is not None
+            and (process is None or owner_pid != process.pid)
+            and _pid_running(owner_pid)
+        ):
+            if not _terminate_owned_browser_pid(
+                owner_pid,
+                Config.BROWSER_DATA_DIR,
+                self._cdp_port,
+            ):
+                log.warning(
+                    "Could not terminate launched browser owner pid=%d on CDP port %d",
+                    owner_pid,
+                    self._cdp_port,
+                )
+
+        _clear_cdp_metadata(Config.BROWSER_DATA_DIR)
+        self._chrome_process = None
+        self._cdp_owner_pid = None
+        self._browser = None
+        self._context = None
+        self._page = None
+        self._cdp_port = None
+        self._cdp_attached = False
+        self._cdp_reused = False
 
     async def start(self) -> Page:
         """
@@ -249,13 +884,28 @@ class BrowserManager:
         """
         Config.ensure_dirs()
 
-        # Clean up stale locks from previous sessions
-        _cleanup_stale_locks(Config.BROWSER_DATA_DIR)
-
         log.info("Launching browser...")
         self._playwright = await async_playwright().start()
 
         in_docker = _is_docker_runtime()
+        launch_mode = Config.BROWSER_LAUNCH_MODE
+        if launch_mode not in {"playwright", "cdp"}:
+            log.warning(
+                "Unknown BROWSER_LAUNCH_MODE=%r; falling back to playwright",
+                launch_mode,
+            )
+            launch_mode = "playwright"
+
+        if launch_mode == "cdp" and not in_docker:
+            return await self._start_cdp_browser()
+        if launch_mode == "cdp" and in_docker:
+            log.warning("CDP launch mode is not used in Docker; falling back to playwright")
+
+        # Direct persistent-context launch owns the profile, so stale browser
+        # locks are safe to clear before starting it. CDP mode performs its own
+        # ownership check first and only cleans a profile with no live owner.
+        _cleanup_stale_locks(Config.BROWSER_DATA_DIR)
+
         display_width = _env_int("DISPLAY_WIDTH", Config.VIEWPORT_WIDTH)
         display_height = _env_int("DISPLAY_HEIGHT", Config.VIEWPORT_HEIGHT)
 
@@ -586,17 +1236,58 @@ class BrowserManager:
             return False
 
     async def close(self) -> None:
-        """Gracefully close the browser context and playwright instance."""
+        """Gracefully close the browser and release any CDP profile ownership."""
         log.info("Closing browser...")
+        launched_cdp = (
+            not self._cdp_reused
+            and (
+                self._chrome_process is not None
+                or self._cdp_owner_pid is not None
+                or self._cdp_attached
+            )
+        )
         try:
-            if self._context:
+            if self._cdp_attached and self._browser and not self._cdp_reused:
+                await self._browser.close()
+            elif self._context and not self._cdp_attached:
                 await self._context.close()
             if self._playwright:
                 await self._playwright.stop()
         except Exception as e:
             log.error(f"Error closing browser: {e}")
         finally:
+            if launched_cdp:
+                process = self._chrome_process
+                if process is not None and process.poll() is None:
+                    try:
+                        process.wait(timeout=3)
+                    except Exception:
+                        try:
+                            process.terminate()
+                        except Exception:
+                            pass
+
+                owner_pid = self._cdp_owner_pid
+                if (
+                    owner_pid is not None
+                    and self._cdp_port is not None
+                    and (process is None or owner_pid != process.pid)
+                    and _pid_running(owner_pid)
+                ):
+                    _terminate_owned_browser_pid(
+                        owner_pid,
+                        Config.BROWSER_DATA_DIR,
+                        self._cdp_port,
+                    )
+                _clear_cdp_metadata(Config.BROWSER_DATA_DIR)
+
+            self._browser = None
             self._context = None
             self._page = None
             self._playwright = None
+            self._chrome_process = None
+            self._cdp_owner_pid = None
+            self._cdp_port = None
+            self._cdp_attached = False
+            self._cdp_reused = False
             log.info("Browser closed")
