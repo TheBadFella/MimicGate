@@ -1,0 +1,61 @@
+name: Enhancement / Feature Request
+description: Suggest an enhancement, new feature, or architectural improvement
+title: "[Feature]: "
+labels: ["Enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have an idea to make MimicGate better? Share your proposal below!
+  - type: dropdown
+    id: category
+    attributes:
+      label: Enhancement Category
+      description: What domain does this feature fall under?
+      options:
+        - "New Provider Integration"
+        - "API & Protocol Compatibility (OpenAI / Anthropic / Ollama)"
+        - "Preview Dashboard & Monitoring (/preview)"
+        - "Browser Pool & Concurrency Management"
+        - "Docker Image, Deployment & Packaging"
+        - "Authentication & Security"
+        - "Developer Experience & Tooling"
+        - "Other"
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement or Motivation
+      description: Is your feature request related to a specific limitation or pain point?
+      placeholder: I am always frustrated when... / It would simplify my workflow if...
+    validations:
+      required: true
+  - type: textarea
+    id: proposed_solution
+    attributes:
+      label: Proposed Solution or Behavior
+      description: Describe what you would like to happen and how it should work.
+      placeholder: Provide a clear description of the proposed feature, configuration options, or API changes...
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Describe any alternative solutions or workarounds you considered.
+      placeholder: A clear description of any alternative designs, libraries, or workarounds...
+  - type: textarea
+    id: additional_context
+    attributes:
+      label: Additional Context
+      description: Add any other context, API schemas, screenshots, or mockups.
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-Submission Checklist
+      options:
+        - label: I searched existing issues and feature requests to confirm this is not already proposed.
+          required: true
+        - label: I am willing to submit a pull request or help test this feature if accepted.
+          required: false
