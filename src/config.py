@@ -277,6 +277,10 @@ class Config:
     API_PORT: int = int(os.getenv("API_PORT", "8000"))
     # If true, requests without Bearer token are allowed even when API_TOKEN is set
     API_TOKEN_OPTIONAL: bool = os.getenv("API_TOKEN_OPTIONAL", "false").lower() == "true"
+    REMOTE_ATTACHMENT_ALLOW_HTTP: bool = os.getenv("REMOTE_ATTACHMENT_ALLOW_HTTP", "false").lower() == "true"
+    REMOTE_ATTACHMENT_ALLOW_PRIVATE_NETS: bool = os.getenv("REMOTE_ATTACHMENT_ALLOW_PRIVATE_NETS", "false").lower() == "true"
+    REMOTE_ATTACHMENT_MAX_BYTES: int = int(os.getenv("REMOTE_ATTACHMENT_MAX_BYTES", str(10 * 1024 * 1024)))
+    REMOTE_ATTACHMENT_TIMEOUT_SECONDS: int = int(os.getenv("REMOTE_ATTACHMENT_TIMEOUT_SECONDS", "15"))
     API_CORS_ORIGINS: str = os.getenv("API_CORS_ORIGINS", "")
     API_CORS_ALLOW_CREDENTIALS: bool = os.getenv("API_CORS_ALLOW_CREDENTIALS", "false").lower() == "true"
     # If true, cache large system instructions once per thread and send compact reminders after priming

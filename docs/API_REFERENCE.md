@@ -344,6 +344,20 @@ HTTP URLs also work:
 
 ### File Attachments
 
+Remote attachments require HTTPS and a publicly routable destination by default.
+Trusted deployments can explicitly enable HTTP or private destinations with
+`REMOTE_ATTACHMENT_ALLOW_HTTP` and `REMOTE_ATTACHMENT_ALLOW_PRIVATE_NETS`.
+`REMOTE_ATTACHMENT_MAX_BYTES` limits the download size. The total
+`REMOTE_ATTACHMENT_TIMEOUT_SECONDS` budget includes DNS resolution, connection,
+TLS, response headers, and body reads. Timeout or cancellation stops the transfer
+and removes partial files. Redirects and truncated responses are rejected.
+
+Rejected remote attachments return HTTP 400 on non-streaming requests. Streaming
+Chat Completions returns a `data:` event with an `error` object; streaming Responses
+returns an `event: error` event. Both end with `data: [DONE]` and do not send the
+prompt to the provider. A stream that has already started retains HTTP 200, so
+clients must inspect its error events.
+
 Send PDFs, DOCX, TXT, CSV, and other files via a custom `file` content type.
 
 ```python

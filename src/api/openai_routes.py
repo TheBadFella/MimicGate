@@ -16,8 +16,17 @@ import asyncio
 import copy
 from dataclasses import dataclass
 import hashlib
+import http.client
+import ipaddress
 import json
+import mimetypes
+import os
 import re
+import socket
+import ssl
+import subprocess
+import sys
+import threading
 import time
 import uuid
 from urllib.parse import urlparse
@@ -868,6 +877,377 @@ def _extract_image_urls(content) -> list[str]:
     return urls
 
 
+class RemoteAttachmentError(ValueError):
+    """Raised when a caller-supplied remote attachment cannot be used safely."""
+
+
+class _RemoteAttachmentBudget:
+    """Interrupt DNS and socket work when the total budget expires or is cancelled."""
+
+    def __init__(self) -> None:
+        timeout = max(1, Config.REMOTE_ATTACHMENT_TIMEOUT_SECONDS)
+        self.deadline = time.monotonic() + timeout
+        self.stopped = threading.Event()
+        self._lock = threading.Lock()
+        self._socket: socket.socket | None = None
+        self._resolver: subprocess.Popen | None = None
+        self._timer = threading.Timer(timeout, self.abort)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def remaining(self) -> float:
+        remaining = self.deadline - time.monotonic()
+        if self.stopped.is_set() or remaining <= 0:
+            self.abort()
+            raise RemoteAttachmentError("remote attachment download timed out or was cancelled")
+        return remaining
+
+    def track_socket(self, sock: socket.socket) -> None:
+        with self._lock:
+            self._socket = sock
+        if self.stopped.is_set():
+            self.abort()
+        self.remaining()
+
+    def track_resolver(self, process: subprocess.Popen | None) -> None:
+        with self._lock:
+            self._resolver = process
+        if self.stopped.is_set():
+            self.abort()
+
+    def abort(self) -> None:
+        self.stopped.set()
+        with self._lock:
+            sock, resolver = self._socket, self._resolver
+        if resolver is not None:
+            try:
+                resolver.kill()
+            except OSError:
+                pass
+        if sock is not None:
+            try:
+                # close() alone does not interrupt a read held by HTTPResponse.
+                # Keep SSLSocket's TLS state intact until its blocked operation unwinds.
+                socket.socket.shutdown(sock, socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+    def finish(self) -> None:
+        self._timer.cancel()
+        self._timer.join()
+
+
+_REMOTE_DNS_SCRIPT = (
+    "import json,socket,sys; "
+    "print(json.dumps([info[4][0] for info in "
+    "socket.getaddrinfo(sys.argv[1],None,type=socket.SOCK_STREAM)]))"
+)
+
+
+def _resolve_remote_host(hostname: str, budget: _RemoteAttachmentBudget) -> list[str]:
+    """Run the OS resolver in a killable child; a DNS thread cannot be interrupted."""
+    budget.remaining()
+    kwargs = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+    process = subprocess.Popen(
+        [sys.executable, "-c", _REMOTE_DNS_SCRIPT, hostname],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, **kwargs,
+    )
+    try:
+        budget.track_resolver(process)
+        output, _ = process.communicate(timeout=budget.remaining())
+        budget.remaining()
+        return json.loads(output) if process.returncode == 0 else []
+    except subprocess.TimeoutExpired as exc:
+        budget.abort()
+        raise RemoteAttachmentError("remote attachment DNS lookup timed out") from exc
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.communicate()
+        budget.track_resolver(None)
+
+
+def _remote_attachment_addresses(
+    hostname: str, budget: _RemoteAttachmentBudget | None = None,
+) -> list[str]:
+    """Resolve a remote attachment host once and return its validated addresses."""
+    if not hostname:
+        return []
+    if hostname.lower() in {"localhost", "localhost.localdomain"}:
+        return []
+
+    try:
+        resolved = [ipaddress.ip_address(hostname)]
+    except ValueError:
+        try:
+            raw_addresses = (
+                _resolve_remote_host(hostname, budget) if budget is not None else
+                [info[4][0] for info in socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)]
+            )
+        except OSError:
+            return []
+        resolved = []
+        seen: set[str] = set()
+        for raw_addr in raw_addresses:
+            if not raw_addr or raw_addr in seen:
+                continue
+            seen.add(raw_addr)
+            try:
+                resolved.append(ipaddress.ip_address(raw_addr))
+            except ValueError:
+                return []
+
+    if not resolved:
+        return []
+
+    def allowed(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+        if addr.is_unspecified or addr.is_multicast:
+            return False
+        if Config.REMOTE_ATTACHMENT_ALLOW_PRIVATE_NETS:
+            return True
+        return addr.is_global
+
+    # Reject the hostname entirely if DNS returns any disallowed address. This
+    # avoids selecting a public answer while a private answer is also present.
+    if not all(allowed(addr) for addr in resolved):
+        return []
+    return [str(addr) for addr in resolved]
+
+
+def _validate_remote_attachment_url(
+    url: str, budget: _RemoteAttachmentBudget | None = None,
+) -> tuple[bool, str, list[str]]:
+    """Validate a remote attachment URL and pin the DNS result for the download."""
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False, "remote attachment URL is malformed", []
+    scheme = parsed.scheme.lower()
+    if scheme not in {"http", "https"}:
+        return False, "remote attachments must use http or https", []
+    if scheme == "http" and not Config.REMOTE_ATTACHMENT_ALLOW_HTTP:
+        return False, "plain-http remote attachments are disabled", []
+    if parsed.username or parsed.password:
+        return False, "remote attachment URLs must not contain credentials", []
+    if not parsed.hostname:
+        return False, "remote attachment URL is missing a host", []
+    try:
+        port = parsed.port
+    except ValueError:
+        return False, "remote attachment URL has an invalid port", []
+    if port is not None and not 1 <= port <= 65535:
+        return False, "remote attachment URL has an invalid port", []
+
+    addresses = _remote_attachment_addresses(parsed.hostname, budget)
+    if not addresses:
+        return False, "remote attachment host resolves to a private or non-routable address", []
+    return True, "", addresses
+
+
+def _extension_from_remote_response(url: str, content_type: str | None) -> str:
+    """Infer a safe file extension from Content-Type first, then URL path."""
+    if content_type:
+        mime = content_type.split(";", 1)[0].strip().lower()
+        ext = mimetypes.guess_extension(mime)
+        if ext:
+            return ext.lstrip(".")
+    suffix = urlparse(url).path.rsplit("/", 1)[-1].rsplit(".", 1)
+    if len(suffix) == 2 and re.fullmatch(r"[A-Za-z0-9]{1,8}", suffix[1]):
+        return suffix[1].lower()
+    return "bin"
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    """HTTPConnection that connects to a pre-resolved IP while preserving Host."""
+
+    def __init__(self, host: str, connect_ip: str, port: int, timeout: float,
+                 budget: _RemoteAttachmentBudget | None = None) -> None:
+        self._connect_ip = connect_ip
+        self._budget = budget
+        super().__init__(host, port=port, timeout=timeout)
+
+    def connect(self) -> None:
+        self.sock = socket.create_connection(
+            (self._connect_ip, self.port),
+            self.timeout,
+            self.source_address,
+        )
+        if self._budget is not None:
+            self._budget.track_socket(self.sock)
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPSConnection pinned to a validated IP with TLS SNI for the hostname."""
+
+    def __init__(self, host: str, connect_ip: str, port: int, timeout: float,
+                 budget: _RemoteAttachmentBudget | None = None) -> None:
+        self._connect_ip = connect_ip
+        self._budget = budget
+        super().__init__(
+            host,
+            port=port,
+            timeout=timeout,
+            context=ssl.create_default_context(),
+        )
+
+    def connect(self) -> None:
+        raw_sock = socket.create_connection(
+            (self._connect_ip, self.port),
+            self.timeout,
+            self.source_address,
+        )
+        self.sock = raw_sock
+        if self._budget is not None:
+            self._budget.track_socket(raw_sock)
+        self.sock = self._context.wrap_socket(
+            raw_sock, server_hostname=self.host, do_handshake_on_connect=False,
+        )
+        if self._budget is not None:
+            self._budget.track_socket(self.sock)
+        self.sock.do_handshake()
+
+
+def _open_pinned_remote(
+    url: str,
+    addresses: list[str],
+    timeout: float,
+    budget: _RemoteAttachmentBudget | None = None,
+) -> tuple[http.client.HTTPConnection, http.client.HTTPResponse]:
+    """Open a URL by connecting only to the previously validated DNS addresses."""
+    parsed = urlparse(url)
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("remote attachment URL is missing a host")
+    port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
+    target = parsed.path or "/"
+    if parsed.query:
+        target = f"{target}?{parsed.query}"
+
+    last_error: Exception | None = None
+    for connect_ip in addresses:
+        if budget is not None:
+            timeout = budget.remaining()
+        connection: http.client.HTTPConnection
+        if parsed.scheme.lower() == "https":
+            connection = _PinnedHTTPSConnection(hostname, connect_ip, port, timeout, budget)
+        else:
+            connection = _PinnedHTTPConnection(hostname, connect_ip, port, timeout, budget)
+        try:
+            connection.request(
+                "GET",
+                target,
+                headers={
+                    "Accept": "*/*",
+                    "User-Agent": "MimicGate/1.0",
+                },
+            )
+            return connection, connection.getresponse()
+        except (OSError, http.client.HTTPException, RemoteAttachmentError) as exc:
+            last_error = exc
+            connection.close()
+
+    if last_error:
+        raise last_error
+    raise OSError("remote attachment host has no usable address")
+
+
+def _cleanup_partial_attachment(filepath: str | None) -> None:
+    if not filepath:
+        return
+    try:
+        os.remove(filepath)
+    except OSError:
+        pass
+
+
+def _download_remote_attachment(
+    url: str, filepath_base: str, budget: _RemoteAttachmentBudget | None = None,
+) -> str:
+    """Download a remote attachment with DNS pinning, deadline, and size guards.
+
+    Raises RemoteAttachmentError for policy rejections and incomplete downloads so
+    callers can return a client-visible error instead of dropping the attachment.
+    """
+    budget = budget or _RemoteAttachmentBudget()
+    max_bytes = max(1, Config.REMOTE_ATTACHMENT_MAX_BYTES)
+    connection: http.client.HTTPConnection | None = None
+    response: http.client.HTTPResponse | None = None
+    filepath: str | None = None
+    try:
+        ok, reason, addresses = _validate_remote_attachment_url(url, budget)
+        if not ok:
+            raise RemoteAttachmentError(reason)
+        connection, response = _open_pinned_remote(url, addresses, budget.remaining(), budget)
+        budget.remaining()
+        if 300 <= response.status < 400:
+            raise RemoteAttachmentError(
+                f"remote attachment redirects are not allowed (HTTP {response.status})"
+            )
+        if not 200 <= response.status < 300:
+            raise RemoteAttachmentError(
+                f"remote attachment returned HTTP {response.status}"
+            )
+
+        declared_length: int | None = None
+        content_length = response.getheader("Content-Length")
+        if content_length:
+            try:
+                declared_length = int(content_length)
+            except ValueError as exc:
+                raise RemoteAttachmentError(
+                    "remote attachment Content-Length is invalid"
+                ) from exc
+            if declared_length < 0:
+                raise RemoteAttachmentError(
+                    "remote attachment Content-Length is invalid"
+                )
+            if declared_length > max_bytes:
+                raise RemoteAttachmentError(
+                    f"remote attachment exceeds size limit ({declared_length} bytes)"
+                )
+
+        ext = _extension_from_remote_response(url, response.getheader("Content-Type"))
+        filepath = f"{filepath_base}.{ext}"
+        total = 0
+        with open(filepath, "wb") as output:
+            while True:
+                budget.remaining()
+                chunk = response.read(64 * 1024)
+                budget.remaining()
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_bytes:
+                    raise RemoteAttachmentError(
+                        f"remote attachment exceeds size limit ({max_bytes} bytes)"
+                    )
+                output.write(chunk)
+
+        if declared_length is not None and total != declared_length:
+            raise RemoteAttachmentError(
+                f"remote attachment truncated ({total} of {declared_length} bytes)"
+            )
+
+        budget.remaining()
+        log.info("Downloaded file: %s", filepath)
+        return filepath
+    except RemoteAttachmentError:
+        _cleanup_partial_attachment(filepath)
+        raise
+    except Exception as exc:
+        _cleanup_partial_attachment(filepath)
+        log.error("Failed to download file from %s: %s", url, exc)
+        raise RemoteAttachmentError(
+            f"failed to download remote attachment: {exc}"
+        ) from exc
+    finally:
+        budget.finish()
+        if response is not None:
+            response.close()
+        if connection is not None:
+            connection.close()
+
+
 def _extract_file_attachments(content) -> list[dict]:
     """
     Extract file attachments from message content.
@@ -979,22 +1359,26 @@ async def _download_file(url_or_data: str | dict, download_dir: str = "/tmp/mimi
             log.error(f"Failed to decode base64 data URL: {e}")
             return None
     elif url.startswith(("http://", "https://")):
-        # HTTP URL - download it
+        # Concurrent downloads/cancellations must not overwrite another request's file.
+        filename_base = f"file_{uuid.uuid4().hex}"
+        filepath_base = os.path.join(download_dir, filename_base)
+        # Blocking DNS/socket/TLS work must not stall the API event loop.
+        budget = _RemoteAttachmentBudget()
+        worker = asyncio.create_task(asyncio.to_thread(_download_remote_attachment, url, filepath_base, budget))
         try:
-            import urllib.request
-            ext = "bin"
-            for e in ["jpg", "jpeg", "webp", "gif", "png", "tif", "tiff", "pdf", "txt", "csv", "docx", "xlsx"]:
-                if e in url.lower():
-                    ext = e
-                    break
-            filename = f"file_{hashlib.md5(url.encode()).hexdigest()[:12]}.{ext}"
-            filepath = os.path.join(download_dir, filename)
-            urllib.request.urlretrieve(url, filepath)
-            log.info(f"Downloaded file: {filepath}")
-            return filepath
-        except Exception as e:
-            log.error(f"Failed to download file from {url}: {e}")
-            return None
+            # wait() leaves the worker available for cleanup if this request is cancelled.
+            await asyncio.wait({worker})
+            return worker.result()
+        except asyncio.CancelledError:
+            budget.abort()
+            try:
+                completed_path = await worker
+                _cleanup_partial_attachment(completed_path)
+            except RemoteAttachmentError:
+                pass
+            raise
+        finally:
+            budget.finish()
     elif os.path.isfile(url):
         # Local file path
         return url
@@ -2625,12 +3009,22 @@ async def _stream_chat_completion(
 
     async def _events():
         non_stream_request = request.model_copy(update={"stream": False})
-        response = await _execute_chat_completion(
-            non_stream_request,
-            app_key_override=app_key_override,
-            http_request=http_request,
-            fresh_thread=fresh_thread,
-        )
+        try:
+            response = await _execute_chat_completion(
+                non_stream_request,
+                app_key_override=app_key_override,
+                http_request=http_request,
+                fresh_thread=fresh_thread,
+            )
+        except HTTPException as exc:
+            error = {
+                "message": str(exc.detail),
+                "type": "invalid_request_error" if exc.status_code < 500 else "server_error",
+                "code": str(exc.status_code),
+            }
+            yield f"data: {json.dumps({'error': error}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
         choice = response.choices[0]
         message = choice.message
 
@@ -2690,12 +3084,25 @@ async def _stream_responses(
     """
 
     async def _events():
-        response = await _execute_responses(
-            request,
-            app_key_override=app_key_override,
-            http_request=http_request,
-            fresh_thread=fresh_thread,
-        )
+        try:
+            response = await _execute_responses(
+                request,
+                app_key_override=app_key_override,
+                http_request=http_request,
+                fresh_thread=fresh_thread,
+            )
+        except HTTPException as exc:
+            yield _responses_sse_event(
+                "error",
+                {
+                    "type": "error",
+                    "code": "invalid_request_error" if exc.status_code < 500 else "server_error",
+                    "message": str(exc.detail),
+                    "param": None,
+                },
+            )
+            yield "data: [DONE]\n\n"
+            return
         response_dict = _model_dump_compat(response, mode="json")
         text = ""
         for item in response.output:
@@ -3050,13 +3457,19 @@ async def _execute_chat_completion(
                 if msg.role == "user" and isinstance(msg.content, list):
                     image_urls = _extract_image_urls(msg.content)
                     for url in image_urls:
-                        local_path = await _download_file(url)
+                        try:
+                            local_path = await _download_file(url)
+                        except RemoteAttachmentError as exc:
+                            raise HTTPException(status_code=400, detail=str(exc)) from exc
                         if local_path:
                             image_paths.append(local_path)
 
                     file_attachments = _extract_file_attachments(msg.content)
                     for fa in file_attachments:
-                        local_path = await _download_file(fa)
+                        try:
+                            local_path = await _download_file(fa)
+                        except RemoteAttachmentError as exc:
+                            raise HTTPException(status_code=400, detail=str(exc)) from exc
                         if local_path:
                             file_paths.append(local_path)
 
