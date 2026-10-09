@@ -250,6 +250,15 @@ class _CurrentPickerClient(ChatGPTClient):
 
 
 class ChatGPTClientModelSwitchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_base_model_accepts_effort_changes_on_reused_client(self) -> None:
+        client = _SettingClient(_FakePage())
+        with patch.object(Config, "CHATGPT_MODEL_ALIASES", "gpt-5.5=GPT-5.5"), patch.object(
+            Config, "CHATGPT_MODEL_SETTINGS", "gpt-5.5=Instant",
+        ), patch("src.chatgpt.client.asyncio.sleep", _noop_sleep):
+            await client.ensure_model("gpt-5.5", reasoning_effort="high")
+            await client.ensure_model("gpt-5.5", reasoning_effort="medium")
+        self.assertEqual(client.setting_calls, [("gpt-5.5", "High"), ("gpt-5.5", "Medium")])
+
     async def test_current_picker_confirms_model_and_sets_power(self) -> None:
         page = _CurrentPickerPage()
         client = _CurrentPickerClient(page)  # type: ignore[arg-type]

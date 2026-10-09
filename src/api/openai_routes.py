@@ -24,10 +24,13 @@ import os
 import re
 import socket
 import ssl
+import subprocess
+import sys
+import threading
 import time
 import uuid
 from urllib.parse import urlparse
-from typing import Any
+from typing import Any, TypeVar
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -55,6 +58,7 @@ from src.api.openai_schemas import (
     ResponsesRequest,
     ResponsesResponse,
     ResponsesUsageInfo,
+    ReasoningOptions,
     ToolCall,
     ToolDefinition,
     UsageInfo,)
@@ -77,8 +81,11 @@ from src.gemini.client import GeminiClient
 from src.minimax.client import MiniMaxClient
 from src.chatgpt.model_registry import (
     PUBLIC_BROWSER_MODEL_ID,
+    canonical_reasoning_effort,
+    has_reasoning_suffix,
     is_supported_chat_model,
     list_public_chat_models,
+    resolve_model_request,
 )
 from src.config import Config
 from src.log import setup_logging
@@ -234,11 +241,38 @@ def _latest_turn_messages(messages: list[ChatMessage]) -> list[ChatMessage]:
     return systems + latest
 
 
-def _chat_reasoning_effort(request: ChatCompletionRequest) -> str | None:
-    """Read the official Chat field, with nested reasoning as a convenience."""
-    if request.reasoning_effort:
-        return request.reasoning_effort
-    return request.reasoning.effort if request.reasoning else None
+def _chat_reasoning_effort(request: ChatCompletionRequest | ResponsesRequest, app_key: str = "") -> str | None:
+    """Use explicit effort first, then a ChatGPT default for the URL app."""
+    if explicit := getattr(request, "reasoning_effort", None):
+        return explicit
+    if request.reasoning and request.reasoning.effort:
+        return request.reasoning.effort
+    if Config.PROVIDER != "chatgpt" or not app_key.startswith("endpoint:"):
+        return None
+    if canonical_reasoning_effort(request.model):
+        return None
+    resolved = resolve_model_request(request.model)
+    model_id = resolved.model.public_id if resolved.model else request.model
+    if resolved.reasoning_from_model_id or has_reasoning_suffix(model_id) or model_id.lower().endswith("-pro"):
+        return None
+    return Config.chatgpt_app_reasoning_efforts().get(app_key.removeprefix("endpoint:"))
+
+
+_ReasoningRequest = TypeVar("_ReasoningRequest", bound=ChatCompletionRequest | ResponsesRequest)
+
+
+def _with_app_reasoning_default(request: _ReasoningRequest, app_name: str) -> _ReasoningRequest:
+    """Apply URL defaults independently of conversation-routing settings."""
+    effort = _chat_reasoning_effort(request, f"endpoint:{_normalize_key_part(app_name)}")
+    if not effort:
+        return request
+    if isinstance(request, ResponsesRequest):
+        reasoning = (
+            _model_copy_compat(request.reasoning, update={"effort": effort})
+            if request.reasoning else ReasoningOptions(effort=effort)
+        )
+        return _model_copy_compat(request, update={"reasoning": reasoning})
+    return _model_copy_compat(request, update={"reasoning_effort": effort})
 
 
 # -- Helpers -----------------------------------------------------
@@ -843,7 +877,99 @@ def _extract_image_urls(content) -> list[str]:
     return urls
 
 
-def _remote_attachment_addresses(hostname: str) -> list[str]:
+class RemoteAttachmentError(ValueError):
+    """Raised when a caller-supplied remote attachment cannot be used safely."""
+
+
+class _RemoteAttachmentBudget:
+    """Interrupt DNS and socket work when the total budget expires or is cancelled."""
+
+    def __init__(self) -> None:
+        timeout = max(1, Config.REMOTE_ATTACHMENT_TIMEOUT_SECONDS)
+        self.deadline = time.monotonic() + timeout
+        self.stopped = threading.Event()
+        self._lock = threading.Lock()
+        self._socket: socket.socket | None = None
+        self._resolver: subprocess.Popen | None = None
+        self._timer = threading.Timer(timeout, self.abort)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def remaining(self) -> float:
+        remaining = self.deadline - time.monotonic()
+        if self.stopped.is_set() or remaining <= 0:
+            self.abort()
+            raise RemoteAttachmentError("remote attachment download timed out or was cancelled")
+        return remaining
+
+    def track_socket(self, sock: socket.socket) -> None:
+        with self._lock:
+            self._socket = sock
+        if self.stopped.is_set():
+            self.abort()
+        self.remaining()
+
+    def track_resolver(self, process: subprocess.Popen | None) -> None:
+        with self._lock:
+            self._resolver = process
+        if self.stopped.is_set():
+            self.abort()
+
+    def abort(self) -> None:
+        self.stopped.set()
+        with self._lock:
+            sock, resolver = self._socket, self._resolver
+        if resolver is not None:
+            try:
+                resolver.kill()
+            except OSError:
+                pass
+        if sock is not None:
+            try:
+                # close() alone does not interrupt a read held by HTTPResponse.
+                # Keep SSLSocket's TLS state intact until its blocked operation unwinds.
+                socket.socket.shutdown(sock, socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+    def finish(self) -> None:
+        self._timer.cancel()
+        self._timer.join()
+
+
+_REMOTE_DNS_SCRIPT = (
+    "import json,socket,sys; "
+    "print(json.dumps([info[4][0] for info in "
+    "socket.getaddrinfo(sys.argv[1],None,type=socket.SOCK_STREAM)]))"
+)
+
+
+def _resolve_remote_host(hostname: str, budget: _RemoteAttachmentBudget) -> list[str]:
+    """Run the OS resolver in a killable child; a DNS thread cannot be interrupted."""
+    budget.remaining()
+    kwargs = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+    process = subprocess.Popen(
+        [sys.executable, "-c", _REMOTE_DNS_SCRIPT, hostname],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, **kwargs,
+    )
+    try:
+        budget.track_resolver(process)
+        output, _ = process.communicate(timeout=budget.remaining())
+        budget.remaining()
+        return json.loads(output) if process.returncode == 0 else []
+    except subprocess.TimeoutExpired as exc:
+        budget.abort()
+        raise RemoteAttachmentError("remote attachment DNS lookup timed out") from exc
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.communicate()
+        budget.track_resolver(None)
+
+
+def _remote_attachment_addresses(
+    hostname: str, budget: _RemoteAttachmentBudget | None = None,
+) -> list[str]:
     """Resolve a remote attachment host once and return its validated addresses."""
     if not hostname:
         return []
@@ -854,13 +980,15 @@ def _remote_attachment_addresses(hostname: str) -> list[str]:
         resolved = [ipaddress.ip_address(hostname)]
     except ValueError:
         try:
-            infos = socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
+            raw_addresses = (
+                _resolve_remote_host(hostname, budget) if budget is not None else
+                [info[4][0] for info in socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)]
+            )
         except OSError:
             return []
         resolved = []
         seen: set[str] = set()
-        for info in infos:
-            raw_addr = info[4][0]
+        for raw_addr in raw_addresses:
             if not raw_addr or raw_addr in seen:
                 continue
             seen.add(raw_addr)
@@ -886,11 +1014,9 @@ def _remote_attachment_addresses(hostname: str) -> list[str]:
     return [str(addr) for addr in resolved]
 
 
-class RemoteAttachmentError(ValueError):
-    """Raised when a caller-supplied remote attachment cannot be used safely."""
-
-
-def _validate_remote_attachment_url(url: str) -> tuple[bool, str, list[str]]:
+def _validate_remote_attachment_url(
+    url: str, budget: _RemoteAttachmentBudget | None = None,
+) -> tuple[bool, str, list[str]]:
     """Validate a remote attachment URL and pin the DNS result for the download."""
     try:
         parsed = urlparse(url)
@@ -912,7 +1038,7 @@ def _validate_remote_attachment_url(url: str) -> tuple[bool, str, list[str]]:
     if port is not None and not 1 <= port <= 65535:
         return False, "remote attachment URL has an invalid port", []
 
-    addresses = _remote_attachment_addresses(parsed.hostname)
+    addresses = _remote_attachment_addresses(parsed.hostname, budget)
     if not addresses:
         return False, "remote attachment host resolves to a private or non-routable address", []
     return True, "", addresses
@@ -934,8 +1060,10 @@ def _extension_from_remote_response(url: str, content_type: str | None) -> str:
 class _PinnedHTTPConnection(http.client.HTTPConnection):
     """HTTPConnection that connects to a pre-resolved IP while preserving Host."""
 
-    def __init__(self, host: str, connect_ip: str, port: int, timeout: int) -> None:
+    def __init__(self, host: str, connect_ip: str, port: int, timeout: float,
+                 budget: _RemoteAttachmentBudget | None = None) -> None:
         self._connect_ip = connect_ip
+        self._budget = budget
         super().__init__(host, port=port, timeout=timeout)
 
     def connect(self) -> None:
@@ -944,13 +1072,17 @@ class _PinnedHTTPConnection(http.client.HTTPConnection):
             self.timeout,
             self.source_address,
         )
+        if self._budget is not None:
+            self._budget.track_socket(self.sock)
 
 
 class _PinnedHTTPSConnection(http.client.HTTPSConnection):
     """HTTPSConnection pinned to a validated IP with TLS SNI for the hostname."""
 
-    def __init__(self, host: str, connect_ip: str, port: int, timeout: int) -> None:
+    def __init__(self, host: str, connect_ip: str, port: int, timeout: float,
+                 budget: _RemoteAttachmentBudget | None = None) -> None:
         self._connect_ip = connect_ip
+        self._budget = budget
         super().__init__(
             host,
             port=port,
@@ -964,13 +1096,22 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
             self.timeout,
             self.source_address,
         )
-        self.sock = self._context.wrap_socket(raw_sock, server_hostname=self.host)
+        self.sock = raw_sock
+        if self._budget is not None:
+            self._budget.track_socket(raw_sock)
+        self.sock = self._context.wrap_socket(
+            raw_sock, server_hostname=self.host, do_handshake_on_connect=False,
+        )
+        if self._budget is not None:
+            self._budget.track_socket(self.sock)
+        self.sock.do_handshake()
 
 
 def _open_pinned_remote(
     url: str,
     addresses: list[str],
-    timeout: int,
+    timeout: float,
+    budget: _RemoteAttachmentBudget | None = None,
 ) -> tuple[http.client.HTTPConnection, http.client.HTTPResponse]:
     """Open a URL by connecting only to the previously validated DNS addresses."""
     parsed = urlparse(url)
@@ -984,11 +1125,13 @@ def _open_pinned_remote(
 
     last_error: Exception | None = None
     for connect_ip in addresses:
+        if budget is not None:
+            timeout = budget.remaining()
         connection: http.client.HTTPConnection
         if parsed.scheme.lower() == "https":
-            connection = _PinnedHTTPSConnection(hostname, connect_ip, port, timeout)
+            connection = _PinnedHTTPSConnection(hostname, connect_ip, port, timeout, budget)
         else:
-            connection = _PinnedHTTPConnection(hostname, connect_ip, port, timeout)
+            connection = _PinnedHTTPConnection(hostname, connect_ip, port, timeout, budget)
         try:
             connection.request(
                 "GET",
@@ -999,7 +1142,7 @@ def _open_pinned_remote(
                 },
             )
             return connection, connection.getresponse()
-        except (OSError, http.client.HTTPException) as exc:
+        except (OSError, http.client.HTTPException, RemoteAttachmentError) as exc:
             last_error = exc
             connection.close()
 
@@ -1017,26 +1160,25 @@ def _cleanup_partial_attachment(filepath: str | None) -> None:
         pass
 
 
-def _download_remote_attachment(url: str, filepath_base: str) -> str:
+def _download_remote_attachment(
+    url: str, filepath_base: str, budget: _RemoteAttachmentBudget | None = None,
+) -> str:
     """Download a remote attachment with DNS pinning, deadline, and size guards.
 
     Raises RemoteAttachmentError for policy rejections and incomplete downloads so
     callers can return a client-visible error instead of dropping the attachment.
     """
-    ok, reason, addresses = _validate_remote_attachment_url(url)
-    if not ok:
-        log.warning("Rejected remote attachment URL: %s", reason)
-        raise RemoteAttachmentError(reason)
-
+    budget = budget or _RemoteAttachmentBudget()
     max_bytes = max(1, Config.REMOTE_ATTACHMENT_MAX_BYTES)
-    timeout = max(1, Config.REMOTE_ATTACHMENT_TIMEOUT_SECONDS)
-    deadline = time.monotonic() + timeout
     connection: http.client.HTTPConnection | None = None
     response: http.client.HTTPResponse | None = None
     filepath: str | None = None
     try:
-        remaining = max(0.1, deadline - time.monotonic())
-        connection, response = _open_pinned_remote(url, addresses, max(1, int(remaining)))
+        ok, reason, addresses = _validate_remote_attachment_url(url, budget)
+        if not ok:
+            raise RemoteAttachmentError(reason)
+        connection, response = _open_pinned_remote(url, addresses, budget.remaining(), budget)
+        budget.remaining()
         if 300 <= response.status < 400:
             raise RemoteAttachmentError(
                 f"remote attachment redirects are not allowed (HTTP {response.status})"
@@ -1069,10 +1211,9 @@ def _download_remote_attachment(url: str, filepath_base: str) -> str:
         total = 0
         with open(filepath, "wb") as output:
             while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise RemoteAttachmentError("remote attachment download timed out")
+                budget.remaining()
                 chunk = response.read(64 * 1024)
+                budget.remaining()
                 if not chunk:
                     break
                 total += len(chunk)
@@ -1087,6 +1228,7 @@ def _download_remote_attachment(url: str, filepath_base: str) -> str:
                 f"remote attachment truncated ({total} of {declared_length} bytes)"
             )
 
+        budget.remaining()
         log.info("Downloaded file: %s", filepath)
         return filepath
     except RemoteAttachmentError:
@@ -1099,6 +1241,7 @@ def _download_remote_attachment(url: str, filepath_base: str) -> str:
             f"failed to download remote attachment: {exc}"
         ) from exc
     finally:
+        budget.finish()
         if response is not None:
             response.close()
         if connection is not None:
@@ -1216,10 +1359,26 @@ async def _download_file(url_or_data: str | dict, download_dir: str = "/tmp/mimi
             log.error(f"Failed to decode base64 data URL: {e}")
             return None
     elif url.startswith(("http://", "https://")):
-        filename_base = f"file_{hashlib.md5(url.encode()).hexdigest()[:12]}"
+        # Concurrent downloads/cancellations must not overwrite another request's file.
+        filename_base = f"file_{uuid.uuid4().hex}"
         filepath_base = os.path.join(download_dir, filename_base)
         # Blocking DNS/socket/TLS work must not stall the API event loop.
-        return await asyncio.to_thread(_download_remote_attachment, url, filepath_base)
+        budget = _RemoteAttachmentBudget()
+        worker = asyncio.create_task(asyncio.to_thread(_download_remote_attachment, url, filepath_base, budget))
+        try:
+            # wait() leaves the worker available for cleanup if this request is cancelled.
+            await asyncio.wait({worker})
+            return worker.result()
+        except asyncio.CancelledError:
+            budget.abort()
+            try:
+                completed_path = await worker
+                _cleanup_partial_attachment(completed_path)
+            except RemoteAttachmentError:
+                pass
+            raise
+        finally:
+            budget.finish()
     elif os.path.isfile(url):
         # Local file path
         return url
@@ -2508,6 +2667,7 @@ async def create_responses_scoped(
     """App-scoped alias for Responses API (maps app name from URL path)."""
     fresh_thread = _fresh_thread_from_header(http_request)
     _validate_responses_request(request, fresh_thread=fresh_thread)
+    request = _with_app_reasoning_default(request, app_name)
     app_key = _resolve_app_key(request, http_request, endpoint_app_name=app_name)
     if request.stream:
         return await _stream_responses(
@@ -2532,6 +2692,7 @@ async def create_chat_completion_scoped(
     """App-scoped alias for chat completions (maps app name from URL path)."""
     fresh_thread = _fresh_thread_from_header(http_request)
     _validate_chat_request(request, fresh_thread=fresh_thread)
+    request = _with_app_reasoning_default(request, app_name)
     app_key = _resolve_app_key(request, http_request, endpoint_app_name=app_name)
     if request.stream:
         return await _stream_chat_completion(
@@ -2848,12 +3009,22 @@ async def _stream_chat_completion(
 
     async def _events():
         non_stream_request = request.model_copy(update={"stream": False})
-        response = await _execute_chat_completion(
-            non_stream_request,
-            app_key_override=app_key_override,
-            http_request=http_request,
-            fresh_thread=fresh_thread,
-        )
+        try:
+            response = await _execute_chat_completion(
+                non_stream_request,
+                app_key_override=app_key_override,
+                http_request=http_request,
+                fresh_thread=fresh_thread,
+            )
+        except HTTPException as exc:
+            error = {
+                "message": str(exc.detail),
+                "type": "invalid_request_error" if exc.status_code < 500 else "server_error",
+                "code": str(exc.status_code),
+            }
+            yield f"data: {json.dumps({'error': error}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
         choice = response.choices[0]
         message = choice.message
 
@@ -2913,12 +3084,25 @@ async def _stream_responses(
     """
 
     async def _events():
-        response = await _execute_responses(
-            request,
-            app_key_override=app_key_override,
-            http_request=http_request,
-            fresh_thread=fresh_thread,
-        )
+        try:
+            response = await _execute_responses(
+                request,
+                app_key_override=app_key_override,
+                http_request=http_request,
+                fresh_thread=fresh_thread,
+            )
+        except HTTPException as exc:
+            yield _responses_sse_event(
+                "error",
+                {
+                    "type": "error",
+                    "code": "invalid_request_error" if exc.status_code < 500 else "server_error",
+                    "message": str(exc.detail),
+                    "param": None,
+                },
+            )
+            yield "data: [DONE]\n\n"
+            return
         response_dict = _model_dump_compat(response, mode="json")
         text = ""
         for item in response.output:
@@ -3755,6 +3939,8 @@ async def _submit_async_chat_job(
     """Shared async chat submit logic for generic and app-scoped routes."""
     fresh_thread = _fresh_thread_from_header(http_request)
     _validate_chat_request(request, fresh_thread=fresh_thread)
+    if endpoint_app_name:
+        request = _with_app_reasoning_default(request, endpoint_app_name)
     _get_client()
 
     app_key = _resolve_app_key(request, http_request, endpoint_app_name=endpoint_app_name)

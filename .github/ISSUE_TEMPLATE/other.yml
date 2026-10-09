@@ -1,0 +1,58 @@
+name: Out of the Ordinary / Other
+description: For unique proposals, edge cases, benchmarks, security inquiries, or uncategorized topics
+title: "[Other]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for topics that fall outside traditional bugs, enhancements, or basic questions (such as architecture proposals, edge cases, provider protocol shifts, or benchmarks).
+  - type: dropdown
+    id: category
+    attributes:
+      label: Topic Classification
+      description: What best characterizes this item?
+      options:
+        - "Architecture or Design Proposal"
+        - "Performance Benchmark or Load Test Report"
+        - "Upstream Provider Protocol or Layout Shift"
+        - "Security or Privacy Inquiry"
+        - "Tooling, CI/CD, or Infrastructure"
+        - "Uncategorized / Out of the Ordinary"
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: A high-level overview of the topic.
+      placeholder: Briefly summarize the context, observation, or proposal...
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Detailed Description & Findings
+      description: Provide in-depth context, observations, rationale, or steps taken.
+      placeholder: Detailed description, methodology, code excerpts, or findings...
+    validations:
+      required: true
+  - type: textarea
+    id: impact_or_goals
+    attributes:
+      label: Expected Impact or Goals
+      description: What outcome or action are you seeking?
+      placeholder: Suggested roadmap, potential architectural changes, or requested maintainer review...
+  - type: textarea
+    id: artifacts
+    attributes:
+      label: Artifacts, References & Links
+      description: Links to relevant PRs, specs, logs, upstream documentation, or files.
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-Submission Checklist
+      options:
+        - label: I confirmed this topic does not belong in the Bug Report, Feature Request, or Question templates.
+          required: true
+        - label: I have redacted any personal credentials, session tokens, or private data.
+          required: true

@@ -96,7 +96,7 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 | `max_tokens` | int | no | Ignored |
 | `stream` | bool | no | SSE is accepted for IDE clients such as Cline. The browser finishes first, then MimicGate emits the completed message as event-stream chunks. |
 | `read_aloud` | bool | no | Supported on ChatGPT and Gemini. Downloads the browser-generated audio and returns it at `choices[0].message.audio`. |
-| `reasoning_effort` | string | no | Reasoning level for ChatGPT and Gemini. Unsupported values are clamped to the nearest available level or map to thinking models. |
+| `reasoning_effort` | string | no | Reasoning level for ChatGPT and Gemini, sent separately from the base model ID. Unsupported values are clamped to the nearest available level or map to thinking models. |
 | `conversation_id` | string | no | Durable logical conversation ID. MimicGate verifies history before reusing the mapped browser thread. |
 
 `conversation_id` may instead be supplied as `X-MimicGate-Conversation-Id`. Send either full history or only the next turn. If full history is a verified prefix of the stored transcript, MimicGate sends only the delta; divergent history starts a clean browser thread. Use `X-MimicGate-Thread-Mode: fresh` to force a new ephemeral thread. Fresh mode cannot be combined with `thread_id` or `conversation_id`. The legacy `X-CatGPT-Conversation-Id`, `X-CatGPT-Thread-Mode`, and `X-CatGPT-App-Key` headers remain supported; the `X-MimicGate-*` names take precedence when both are present.
@@ -343,6 +343,20 @@ HTTP URLs also work:
 ---
 
 ### File Attachments
+
+Remote attachments require HTTPS and a publicly routable destination by default.
+Trusted deployments can explicitly enable HTTP or private destinations with
+`REMOTE_ATTACHMENT_ALLOW_HTTP` and `REMOTE_ATTACHMENT_ALLOW_PRIVATE_NETS`.
+`REMOTE_ATTACHMENT_MAX_BYTES` limits the download size. The total
+`REMOTE_ATTACHMENT_TIMEOUT_SECONDS` budget includes DNS resolution, connection,
+TLS, response headers, and body reads. Timeout or cancellation stops the transfer
+and removes partial files. Redirects and truncated responses are rejected.
+
+Rejected remote attachments return HTTP 400 on non-streaming requests. Streaming
+Chat Completions returns a `data:` event with an `error` object; streaming Responses
+returns an `event: error` event. Both end with `data: [DONE]` and do not send the
+prompt to the provider. A stream that has already started retains HTTP 200, so
+clients must inspect its error events.
 
 Send PDFs, DOCX, TXT, CSV, and other files via a custom `file` content type.
 

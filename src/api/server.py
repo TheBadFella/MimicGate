@@ -12,6 +12,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 import os
 import time
@@ -329,7 +330,7 @@ class BearerTokenMiddleware:
             provided = anthropic_api_key
 
         expected = token.strip()
-        if provided != expected:
+        if not _tokens_match(provided, expected):
             client = scope.get("client")
             client_host = client[0] if isinstance(client, tuple) and client else "unknown"
             log.warning(f"Auth failed from {client_host}: invalid token")
@@ -346,6 +347,16 @@ class BearerTokenMiddleware:
             return
 
         await self.app(scope, receive, send)
+
+
+def _tokens_match(provided: str, expected: str) -> bool:
+    """Constant-time token compare that accepts non-ASCII header/config values.
+
+    Headers are decoded as Latin-1 and API tokens may contain non-ASCII bytes.
+    ``hmac.compare_digest`` rejects non-ASCII *str* inputs with TypeError, which
+    would surface as HTTP 500; comparing UTF-8 bytes keeps mismatches as 401.
+    """
+    return hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8"))
 
 
 class TelemetryMiddleware:
@@ -433,10 +444,16 @@ class TelemetryMiddleware:
 app.add_middleware(TelemetryMiddleware)
 app.add_middleware(BearerTokenMiddleware)
 
+cors_origins = Config.api_cors_origins()
+cors_allow_credentials = Config.API_CORS_ALLOW_CREDENTIALS
+if "*" in cors_origins and cors_allow_credentials:
+    log.warning("API_CORS_ALLOW_CREDENTIALS=true is incompatible with API_CORS_ORIGINS='*'; disabling credentials for CORS")
+    cors_allow_credentials = False
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=cors_origins,
+    allow_credentials=cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )

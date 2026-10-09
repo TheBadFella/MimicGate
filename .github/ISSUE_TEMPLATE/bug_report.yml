@@ -1,0 +1,84 @@
+name: Bug Report
+description: Report a defect, unexpected behavior, or error in MimicGate
+title: "[Bug]: "
+labels: ["Bug", "Needs Investigation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an issue! Please provide sufficient detail so we can reproduce and diagnose the problem.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected Component or Provider
+      description: Which part of MimicGate is experiencing the issue?
+      options:
+        - "ChatGPT Automation"
+        - "Claude Automation"
+        - "Gemini Automation"
+        - "MiniMax Integration"
+        - "Live Multi-Tab Preview Dashboard (/preview, /dashboard)"
+        - "Docker Container, Compose & Permissions"
+        - "OpenAI / Ollama / Anthropic API Compatibility"
+        - "Browser Engine (Patchright, Chromium, Stealth)"
+        - "Authentication & Bearer Token"
+        - "Other"
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of the bug.
+      placeholder: Describe what happened and what went wrong...
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: How can someone reproduce this behavior step-by-step?
+      placeholder: |
+        1. Deploy container using image...
+        2. Send POST request to /v1/chat/completions with payload...
+        3. Observe response / error...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen instead?
+      placeholder: The response should return valid JSON tool calls and 200 OK...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment & Version Details
+      description: Details about your environment and deployment configuration.
+      value: |
+        - MimicGate Version / Image Tag: (e.g., v9.0.0 or ghcr.io/thebadfella/mimicgate:latest)
+        - Host OS / Platform: (e.g., Debian 12, Ubuntu 24.04, Unraid, Windows)
+        - Deployment Mode: (Docker Compose, Native Python, Kubernetes)
+        - Configured Provider: (chatgpt / claude / gemini / minimax)
+        - Browser Mode: (Headless = true / false)
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs & Error Output
+      description: Paste relevant container or application logs. Redact API keys, cookies, or personal tokens.
+      render: shell
+  - type: checkboxes
+    id: checklists
+    attributes:
+      label: Pre-Submission Checklist
+      options:
+        - label: I have searched existing issues and confirmed this is not a duplicate.
+          required: true
+        - label: I have redacted credentials, API keys, passwords, and browser cookies from all pasted logs.
+          required: true
+        - label: I checked that I am running the latest release or image version.
+          required: false
