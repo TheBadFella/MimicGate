@@ -127,6 +127,10 @@ When running Python directly, set these in the shell or root `.env`. In Docker, 
 | `API_PORT` | `8000` | API listen port. |
 | `API_TOKEN` | _empty_ | Bearer token; an empty value disables token authentication. |
 | `API_TOKEN_OPTIONAL` | `false` | Allow unauthenticated requests even when a token is configured. |
+| `REMOTE_ATTACHMENT_ALLOW_HTTP` | `false` | Allow plain-HTTP remote attachment URLs. |
+| `REMOTE_ATTACHMENT_ALLOW_PRIVATE_NETS` | `false` | Allow remote attachments to resolve to private, loopback, link-local, or reserved networks. |
+| `REMOTE_ATTACHMENT_MAX_BYTES` | `10485760` | Maximum remote attachment download size in bytes. |
+| `REMOTE_ATTACHMENT_TIMEOUT_SECONDS` | `15` | Total remote attachment budget in seconds, including DNS, connection, TLS, headers, and body reads. Expiry interrupts the transfer and removes partial files. |
 | `API_CORS_ORIGINS` | _empty_ | Comma-separated CORS origin allowlist; empty disables cross-origin browser access. |
 | `API_CORS_ALLOW_CREDENTIALS` | `false` | Allow credentials on configured CORS origins; disabled automatically for wildcard origins. |
 | `API_THREAD_CONTRACT_MODE` | `false` | Cache large system instructions once per thread and send compact reminders. |
